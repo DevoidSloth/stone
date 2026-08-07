@@ -1,0 +1,350 @@
+/* ============================================================ page tree */
+
+.treerow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 27px;
+  padding: 3px 6px;
+  border-radius: var(--r-sm);
+  text-align: left;
+  color: var(--text-muted);
+  transition: background var(--dur-base) var(--ease-out);
+}
+
+.treerow:hover {
+  background: var(--bg-hover);
+}
+
+.treerow[aria-current='true'] {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+  font-weight: 500;
+}
+
+.treerow--folder {
+  color: var(--text-faint);
+  font-weight: 500;
+}
+
+/* Reserved even on leaf rows, so labels line up under their folder. */
+.treerow__twist {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--text-ghost);
+  border-radius: var(--r-xs);
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+
+.treerow__twist--open {
+  transform: rotate(90deg);
+}
+
+.treerow__icon {
+  width: 17px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--text-ghost);
+}
+
+.treerow__emoji {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.treerow__label {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--t-base);
+  letter-spacing: var(--track-snug);
+}
+
+.treerow__count {
+  flex: none;
+  font-size: var(--t-xs);
+  color: var(--text-ghost);
+  font-variant-numeric: tabular-nums;
+  padding-right: 2px;
+}
+
+.sidebar__foot--stats {
+  padding-top: 0;
+  color: var(--text-ghost);
+}
+
+/* ========================================================= page dressing */
+
+.cover {
+  height: 190px;
+  width: 100%;
+  flex: none;
+  position: relative;
+}
+
+.cover__actions {
+  position: absolute;
+  right: var(--sp-4);
+  bottom: var(--sp-3);
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity var(--dur-slow) var(--ease-out);
+}
+
+.cover:hover .cover__actions,
+.cover__actions:focus-within {
+  opacity: 1;
+}
+
+/*
+ * Gradient covers rather than image files: nothing to sync, nothing to go
+ * missing, and they stay legible in both themes.
+ */
+.cover--sand {
+  background: linear-gradient(120deg, #f7d9a0, #e8a87c 55%, #cf7d5c);
+}
+.cover--moss {
+  background: linear-gradient(120deg, #cfe3c4, #86b17f 55%, #4e7c5c);
+}
+.cover--sky {
+  background: linear-gradient(120deg, #cfe6f7, #8bbde8 55%, #5b8fc7);
+}
+.cover--dusk {
+  background: linear-gradient(120deg, #f4c7d5, #b48ac4 50%, #6a6ab0);
+}
+.cover--ember {
+  background: linear-gradient(120deg, #f9c98b, #ef7f6b 55%, #c2444f);
+}
+.cover--plum {
+  background: linear-gradient(120deg, #d9c2e8, #9b6fc0 55%, #5e3d80);
+}
+.cover--slate {
+  background: linear-gradient(120deg, #d5dae2, #8f9bad 55%, #56617a);
+}
+.cover--sea {
+  background: linear-gradient(120deg, #bfe8e0, #6fbfb4 55%, #2f7f79);
+}
+.cover--clay {
+  background: linear-gradient(120deg, #eddcd0, #c9a08a 55%, #8f6552);
+}
+.cover--ink {
+  background: linear-gradient(120deg, #9aa4b8, #4d566d 55%, #232a3a);
+}
+
+/* A covered page starts right under the band instead of the usual deep gutter. */
+.note__scroll:has(.cover) .note__wrap {
+  padding-top: var(--sp-4);
+}
+
+.page__dressing {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding-bottom: var(--sp-2);
+}
+
+/* Lift the icon so it straddles the cover's lower edge, as Notion's does. */
+.page__dressing--overlap {
+  margin-top: -74px;
+}
+
+.page__icon {
+  font-size: 66px;
+  line-height: 1;
+  height: 74px;
+  width: 78px;
+  display: flex;
+  align-items: flex-end;
+  border-radius: var(--r-sm);
+  padding: 2px;
+  transition: background var(--dur-base) var(--ease-out);
+}
+
+.page__icon:hover {
+  background: var(--bg-hover);
+}
+
+.page__addrow {
+  display: flex;
+  gap: 2px;
+  min-height: 26px;
+  opacity: 0;
+  transition: opacity var(--dur-slow) var(--ease-out);
+}
+
+/* Notion only reveals these on hover; a permanent toolbar would be noise. */
+.note:hover .page__addrow,
+.page__addrow:focus-within {
+  opacity: 1;
+}
+
+.page__addrow .btn {
+  color: var(--text-ghost);
+}
+
+/* --------------------------------------------------------------- pickers */
+
+.picker {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: var(--z-popover);
+  width: 328px;
+  padding: var(--sp-2);
+  background: var(--bg-page);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  animation: rise var(--dur-slow) var(--ease-out);
+}
+
+.picker__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 8px;
+}
+
+.picker__grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 1px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.picker__emoji {
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  border-radius: var(--r-sm);
+  transition: background var(--dur-base) var(--ease-out);
+}
+
+.picker__emoji:hover {
+  background: var(--bg-hover);
+}
+
+.picker__covers {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+
+.picker__cover {
+  height: 42px;
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 8%);
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.picker__cover:hover {
+  transform: scale(1.05);
+}
+
+.picker__cover[aria-pressed='true'] {
+  box-shadow:
+    inset 0 0 0 1px rgb(0 0 0 / 8%),
+    0 0 0 2px var(--accent);
+}
+
+/* ============================================================== callouts */
+
+.cm-line.tok-line-callout {
+  background: var(--callout-bg, var(--bg-surface));
+  border-left: none;
+  padding-left: var(--sp-5);
+  padding-right: var(--sp-4);
+  position: relative;
+}
+
+.cm-line.tok-line-callout-first {
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  padding-top: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+
+.cm-line.tok-line-callout-last {
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  padding-bottom: var(--sp-3);
+  margin-bottom: var(--sp-2);
+}
+
+/* The glyph sits in the padding gutter the callout reserves on the left. */
+.cm-line.tok-line-callout-first::before {
+  content: 'ℹ';
+  position: absolute;
+  left: 12px;
+  color: var(--callout-ink, var(--text-faint));
+  font-size: 14px;
+}
+
+.tok-callout-note,
+.tok-callout-info {
+  --callout-bg: var(--blue-soft);
+  --callout-ink: var(--accent);
+}
+
+.tok-callout-tip,
+.tok-callout-success,
+.tok-callout-done {
+  --callout-bg: var(--green-soft);
+  --callout-ink: var(--green);
+}
+
+.tok-callout-warning,
+.tok-callout-caution {
+  --callout-bg: var(--yellow-soft);
+  --callout-ink: var(--yellow);
+}
+
+.tok-callout-danger,
+.tok-callout-error,
+.tok-callout-bug {
+  --callout-bg: var(--red-soft);
+  --callout-ink: var(--red);
+}
+
+.tok-callout-quote,
+.tok-callout-example {
+  --callout-bg: var(--purple-soft);
+  --callout-ink: var(--purple);
+}
+
+.cm-line.tok-line-callout-first.tok-callout-tip::before,
+.cm-line.tok-line-callout-first.tok-callout-success::before,
+.cm-line.tok-line-callout-first.tok-callout-done::before {
+  content: '✓';
+}
+
+.cm-line.tok-line-callout-first.tok-callout-warning::before,
+.cm-line.tok-line-callout-first.tok-callout-caution::before {
+  content: '!';
+  font-weight: 700;
+}
+
+.cm-line.tok-line-callout-first.tok-callout-danger::before,
+.cm-line.tok-line-callout-first.tok-callout-error::before,
+.cm-line.tok-line-callout-first.tok-callout-bug::before {
+  content: '×';
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.cm-line.tok-line-callout-first.tok-callout-quote::before,
+.cm-line.tok-line-callout-first.tok-callout-example::before {
+  content: '”';
+  font-size: 18px;
+}
+
+/* The `[!note]` marker itself recedes; the colour and glyph carry the meaning. */
+.tok-callout-label {
+  font-weight: 600;
+  color: var(--callout-ink, var(--text-faint));
+}

@@ -1,0 +1,186 @@
+/*
+ * Stone design tokens — Notion-style.
+ *
+ * The governing idea is that the interface should disappear. No panels, no
+ * shadows, no lit edges: a page of content on a plain ground, with the only
+ * separation coming from a slightly different tone on the sidebar. Chrome
+ * appears on hover and is otherwise invisible.
+ *
+ * The greys are warm — built on Notion's #37352F ink rather than a cool blue —
+ * because warm neutrals are most of why Notion reads as calm paper rather than
+ * as software. Radii are small (3-6px), never pill-like.
+ *
+ * Blue is the only accent, used for links, selection, and the single primary
+ * action on a screen. Task and tag colours come from the muted pastel set.
+ */
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('/fonts/GeistMono-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
+:root {
+  --font-ui:
+    'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial,
+    sans-serif;
+  --font-prose: var(--font-ui);
+  --font-serif: 'Newsreader Variable', 'Newsreader', Lyon, Georgia, serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --t-2xs: 11px;
+  --t-xs: 12px;
+  --t-sm: 13px;
+  --t-base: 14px;
+  --t-md: 15px;
+  --t-lg: 16px;
+  --t-xl: 20px;
+  --t-2xl: 24px;
+  --t-3xl: 30px;
+  --t-4xl: 40px;
+
+  --track-tight: -0.02em;
+  --track-snug: -0.008em;
+  --track-normal: 0;
+  --track-wide: 0.04em;
+  --track-caps: 0.06em;
+
+  /* Notion's corners are barely there. */
+  --r-xs: 3px;
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 10px;
+  --r-2xl: 12px;
+  --r-full: 999px;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+  --sp-8: 64px;
+  --sp-9: 96px;
+
+  --titlebar-h: 45px;
+  --sidebar-w: 240px;
+  --agenda-w: 300px;
+  --page-measure: 708px;
+
+  --ease-out: cubic-bezier(0.2, 0.8, 0.4, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast: 20ms;
+  --dur-base: 120ms;
+  --dur-slow: 240ms;
+
+  --z-titlebar: 30;
+  --z-popover: 60;
+  --z-modal: 80;
+  --z-toast: 100;
+}
+
+/* ------------------------------------------------------------ light: paper */
+
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg-page: #ffffff;
+  --bg-app: #ffffff;
+  --bg-sidebar: #f7f7f5;
+  --bg-panel: #ffffff;
+  --bg-surface: #f7f7f5;
+  --bg-raised: #efefee;
+  --bg-input: #f7f7f5;
+
+  /* Notion's hover greys are ink at low alpha, never a separate colour. */
+  --bg-hover: rgb(55 53 47 / 8%);
+  --bg-active: rgb(55 53 47 / 16%);
+  --bg-selected: rgb(35 131 226 / 7%);
+  --bg-scrim: rgb(15 15 15 / 32%);
+
+  --border-hair: rgb(55 53 47 / 9%);
+  --border: rgb(55 53 47 / 16%);
+  --border-strong: rgb(55 53 47 / 26%);
+
+  --text: #37352f;
+  --text-strong: #37352f;
+  --text-muted: rgb(55 53 47 / 65%);
+  --text-faint: rgb(55 53 47 / 50%);
+  --text-ghost: rgb(55 53 47 / 36%);
+
+  --accent: #2383e2;
+  --accent-hover: #0b6bcb;
+  --accent-soft: rgb(35 131 226 / 10%);
+  --accent-ink: #ffffff;
+  --link: #337ea9;
+
+  --green: #448361;
+  --green-soft: #dbeddb;
+  --red: #d44c47;
+  --red-soft: #ffe2dd;
+  --yellow: #cb912f;
+  --yellow-soft: #fdecc8;
+  --purple: #9065b0;
+  --purple-soft: #e8deee;
+  --blue-soft: #d3e5ef;
+  --gray-soft: #e3e2e0;
+
+  --shadow-sm: 0 1px 2px rgb(15 15 15 / 10%);
+  --shadow-md: rgb(15 15 15 / 5%) 0 0 0 1px, rgb(15 15 15 / 10%) 0 3px 6px, rgb(15 15 15 / 20%) 0 9px 24px;
+  --shadow-lg: rgb(15 15 15 / 5%) 0 0 0 1px, rgb(15 15 15 / 10%) 0 5px 10px, rgb(15 15 15 / 20%) 0 15px 40px;
+}
+
+/* ------------------------------------------------------------- dark: slate */
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg-page: #191919;
+  --bg-app: #191919;
+  --bg-sidebar: #202020;
+  --bg-panel: #191919;
+  --bg-surface: #202020;
+  --bg-raised: #2f2f2f;
+  --bg-input: #262626;
+
+  --bg-hover: rgb(255 255 255 / 5.5%);
+  --bg-active: rgb(255 255 255 / 10%);
+  --bg-selected: rgb(35 131 226 / 16%);
+  --bg-scrim: rgb(15 15 15 / 60%);
+
+  --border-hair: rgb(255 255 255 / 9.4%);
+  --border: rgb(255 255 255 / 14%);
+  --border-strong: rgb(255 255 255 / 22%);
+
+  --text: rgb(255 255 255 / 81%);
+  --text-strong: rgb(255 255 255 / 93%);
+  --text-muted: rgb(255 255 255 / 60%);
+  --text-faint: rgb(255 255 255 / 46%);
+  --text-ghost: rgb(255 255 255 / 32%);
+
+  --accent: #2383e2;
+  --accent-hover: #4a9bea;
+  --accent-soft: rgb(35 131 226 / 18%);
+  --accent-ink: #ffffff;
+  --link: #5ba3d0;
+
+  --green: #4dab7a;
+  --green-soft: rgb(77 171 122 / 20%);
+  --red: #ff7369;
+  --red-soft: rgb(255 115 105 / 18%);
+  --yellow: #ffdc49;
+  --yellow-soft: rgb(255 220 73 / 16%);
+  --purple: #9a6dd7;
+  --purple-soft: rgb(154 109 215 / 20%);
+  --blue-soft: rgb(82 156 202 / 20%);
+  --gray-soft: rgb(255 255 255 / 9%);
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-md: rgb(15 15 15 / 20%) 0 0 0 1px, rgb(15 15 15 / 40%) 0 3px 6px, rgb(15 15 15 / 60%) 0 9px 24px;
+  --shadow-lg: rgb(15 15 15 / 20%) 0 0 0 1px, rgb(15 15 15 / 40%) 0 5px 10px, rgb(15 15 15 / 60%) 0 15px 40px;
+}

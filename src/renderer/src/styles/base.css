@@ -1,0 +1,302 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg-app);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--t-base);
+  line-height: 1.5;
+  letter-spacing: var(--track-snug);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+figure {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  user-select: text;
+}
+
+a {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--border);
+}
+
+::selection {
+  background: rgb(35 131 226 / 24%);
+}
+
+/* --------------------------------------------------------------- scrollbars */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border: 3.5px solid transparent;
+  border-radius: var(--r-full);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--border-strong);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* -------------------------------------------------------------------- focus */
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--r-xs);
+}
+
+/* ------------------------------------------------------------------ helpers */
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--track-normal);
+}
+
+/*
+ * Notion's section labels: small, semibold, muted, and only lightly tracked.
+ * Not the wide-tracked all-caps eyebrow of a marketing page.
+ */
+.eyebrow {
+  font-size: var(--t-xs);
+  font-weight: 600;
+  letter-spacing: var(--track-normal);
+  color: var(--text-faint);
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ buttons */
+
+/*
+ * The default button is almost invisible: text in muted ink that picks up a
+ * grey wash on hover. Only `.btn--primary` carries colour, and a screen should
+ * have at most one of them.
+ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-sm);
+  font-size: var(--t-base);
+  font-weight: 500;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  white-space: nowrap;
+  transition:
+    background var(--dur-base) var(--ease-out),
+    color var(--dur-base) var(--ease-out);
+}
+
+.btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.btn:active {
+  background: var(--bg-active);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: transparent;
+}
+
+.btn--outline {
+  border: 1px solid var(--border);
+  background: var(--bg-page);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn--outline:hover {
+  background: var(--bg-hover);
+}
+
+.btn--ghost {
+  color: var(--text-faint);
+}
+
+.btn--primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 500;
+  box-shadow: var(--shadow-sm);
+}
+
+.btn--primary:hover {
+  background: var(--accent-hover);
+  color: var(--accent-ink);
+}
+
+.btn--primary:active {
+  background: var(--accent-hover);
+}
+
+.btn--danger {
+  color: var(--red);
+}
+
+.btn--danger:hover {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.btn--sm {
+  height: 24px;
+  padding: 0 6px;
+  font-size: var(--t-sm);
+}
+
+.btn--icon {
+  width: 28px;
+  padding: 0;
+}
+
+.btn--sm.btn--icon {
+  width: 24px;
+}
+
+/* ------------------------------------------------------------------- inputs */
+
+.field {
+  width: 100%;
+  height: 30px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-input);
+  border: 1px solid transparent;
+  box-shadow: inset 0 0 0 1px var(--border-hair);
+  color: var(--text);
+  transition: box-shadow var(--dur-base) var(--ease-out);
+}
+
+.field::placeholder {
+  color: var(--text-ghost);
+}
+
+.field:focus {
+  box-shadow:
+    inset 0 0 0 1px var(--accent),
+    0 0 0 2px var(--accent-soft);
+  outline: none;
+}
+
+textarea.field {
+  height: auto;
+  padding: var(--sp-2);
+  resize: vertical;
+  line-height: 1.55;
+}
+
+/* ------------------------------------------------------------------ motion */
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.99);
+  }
+}
+
+@keyframes lift {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

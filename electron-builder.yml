@@ -1,0 +1,54 @@
+appId: com.stone.app
+productName: Stone
+copyright: Stone
+
+directories:
+  buildResources: build
+  output: release
+
+files:
+  - out/**
+  - package.json
+  # Shipped so the running window can set its own icon; electron-builder also
+  # derives the .ico and .icns from this same file at package time.
+  - build/icon.png
+  - '!**/*.map'
+
+asarUnpack:
+  - resources/**
+
+win:
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  shortcutName: Stone
+
+mac:
+  target:
+    - target: dmg
+      arch: [universal]
+  category: public.app-category.productivity
+  darkModeSupport: true
+  # EventKit access is refused without a usage string, which is how Stone reads
+  # and writes Apple Calendar.
+  extendInfo:
+    NSCalendarsUsageDescription: Stone shows your Apple Calendar events alongside your notes and tasks, and writes events you create in Stone back to Calendar.
+    NSCalendarsFullAccessUsageDescription: Stone shows your Apple Calendar events alongside your notes and tasks, and writes events you create in Stone back to Calendar.
+    NSRemindersUsageDescription: Stone can mirror tasks into Reminders.
+    NSAppleEventsUsageDescription: Stone uses Apple Events to read your calendars through EventKit.
+  entitlementsInherit: build/entitlements.mac.plist
+
+dmg:
+  artifactName: ${productName}-${version}.${ext}
+
+linux:
+  target:
+    - AppImage
+  category: Office

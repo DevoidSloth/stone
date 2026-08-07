@@ -1,0 +1,655 @@
+/* ------------------------------------------------------------------ layout */
+
+/*
+ * Flush columns, no gaps, no cards. The sidebar is a slightly warmer grey than
+ * the page and that single tonal step is the only separation in the whole
+ * window — everything else is defined by whitespace and hairline rules.
+ */
+.app {
+  display: flex;
+  height: 100%;
+  background: var(--bg-app);
+}
+
+.app__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.app__panes {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-page);
+  overflow: hidden;
+}
+
+/* --------------------------------------------------------------- titlebar */
+
+.titlebar {
+  height: var(--titlebar-h);
+  flex: 0 0 var(--titlebar-h);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  background: var(--bg-page);
+  -webkit-app-region: drag;
+  position: relative;
+}
+
+.is-mac .titlebar {
+  padding-left: 80px;
+}
+
+.is-win .titlebar {
+  padding-right: 148px;
+}
+
+.titlebar > * {
+  -webkit-app-region: no-drag;
+}
+
+.titlebar__mark {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 6px;
+  height: 26px;
+  border-radius: var(--r-sm);
+}
+
+.titlebar__vault {
+  font-size: var(--t-base);
+  font-weight: 500;
+  color: var(--text);
+  max-width: 190px;
+}
+
+.titlebar__spacer {
+  flex: 1;
+  -webkit-app-region: drag;
+  align-self: stretch;
+}
+
+/* Notion's view switcher is plain text tabs, not a pill segmented control. */
+.segmented {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.segmented__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 27px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-sm);
+  font-size: var(--t-base);
+  font-weight: 500;
+  color: var(--text-faint);
+  transition:
+    color var(--dur-base) var(--ease-out),
+    background var(--dur-base) var(--ease-out);
+}
+
+.segmented__btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.segmented__btn[aria-selected='true'] {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.omni {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 27px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-sm);
+  background: transparent;
+  border: none;
+  color: var(--text-faint);
+  font-size: var(--t-base);
+  transition:
+    background var(--dur-base) var(--ease-out),
+    color var(--dur-base) var(--ease-out);
+}
+
+.omni:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.omni__hint {
+  margin-left: 6px;
+  font-size: var(--t-xs);
+  color: var(--text-ghost);
+}
+
+/* --------------------------------------------------------------- sidebar */
+
+.sidebar {
+  width: var(--sidebar-w);
+  flex: 0 0 var(--sidebar-w);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-sidebar);
+}
+
+.sidebar__inner {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.sidebar__head {
+  padding: var(--sp-2) var(--sp-2) 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sidebar__filter {
+  height: 28px;
+  background: var(--bg-page);
+  font-size: var(--t-sm);
+}
+
+:root[data-theme='dark'] .sidebar__filter {
+  background: var(--bg-input);
+}
+
+.tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.tabs__btn {
+  flex: 1;
+  height: 24px;
+  border-radius: var(--r-sm);
+  font-size: var(--t-sm);
+  font-weight: 500;
+  color: var(--text-faint);
+  transition:
+    color var(--dur-base) var(--ease-out),
+    background var(--dur-base) var(--ease-out);
+}
+
+.tabs__btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.tabs__btn[aria-selected='true'] {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.sidebar__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-1) var(--sp-2) var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/*
+ * Sidebar rows are compact and single-line, the way Notion's page tree is —
+ * two-line cards with excerpts made the list feel like a search result page.
+ */
+.noteitem {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 27px;
+  padding: 3px 6px;
+  border-radius: var(--r-sm);
+  text-align: left;
+  color: var(--text-muted);
+  transition: background var(--dur-base) var(--ease-out);
+}
+
+.noteitem:hover {
+  background: var(--bg-hover);
+}
+
+.noteitem[aria-current='true'] {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.noteitem__icon {
+  flex: none;
+  color: var(--text-ghost);
+  display: grid;
+  place-items: center;
+}
+
+.noteitem[aria-current='true'] .noteitem__icon {
+  color: var(--text-faint);
+}
+
+.noteitem__title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--t-base);
+  font-weight: 400;
+  letter-spacing: var(--track-snug);
+}
+
+.noteitem[aria-current='true'] .noteitem__title {
+  font-weight: 500;
+}
+
+.noteitem__count {
+  flex: none;
+  font-size: var(--t-xs);
+  color: var(--text-ghost);
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar__section {
+  padding: var(--sp-4) 6px 2px;
+  font-size: var(--t-xs);
+  font-weight: 600;
+  color: var(--text-ghost);
+}
+
+.taglist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  padding: var(--sp-1) 6px;
+}
+
+.tagchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--r-xs);
+  background: var(--gray-soft);
+  border: none;
+  font-size: var(--t-sm);
+  color: var(--text-muted);
+  transition: background var(--dur-base) var(--ease-out);
+}
+
+.tagchip:hover {
+  background: var(--blue-soft);
+  color: var(--text);
+}
+
+.tagchip b {
+  font-size: var(--t-xs);
+  font-weight: 500;
+  color: var(--text-ghost);
+}
+
+.sidebar__foot {
+  padding: 6px var(--sp-3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--t-xs);
+  color: var(--text-ghost);
+}
+
+.sidebar__foot span + span::before {
+  content: '·';
+  margin-right: 6px;
+}
+
+/* ---------------------------------------------------------- agenda column */
+
+.agenda {
+  width: var(--agenda-w);
+  flex: 0 0 var(--agenda-w);
+  display: flex;
+  min-height: 0;
+  border-left: 1px solid var(--border-hair);
+  background: var(--bg-page);
+}
+
+.agenda__inner {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+}
+
+.agenda__head {
+  padding: var(--sp-4) var(--sp-4) var(--sp-3);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.agenda__day {
+  font-size: var(--t-3xl);
+  font-weight: 700;
+  letter-spacing: var(--track-tight);
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.agenda__dow {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.agenda__dow b {
+  font-size: var(--t-base);
+  font-weight: 600;
+  color: var(--text-strong);
+  line-height: 1.2;
+}
+
+.agenda__dow span {
+  font-size: var(--t-xs);
+  color: var(--text-faint);
+}
+
+.agenda__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 var(--sp-3) var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.agenda__section > .eyebrow {
+  margin-bottom: var(--sp-1);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 6px;
+}
+
+/* ----------------------------------------------------------------- toasts */
+
+.toasts {
+  position: fixed;
+  bottom: var(--sp-4);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  align-items: center;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: 520px;
+  padding: 9px var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-md);
+  font-size: var(--t-base);
+  color: var(--text-strong);
+  pointer-events: auto;
+  animation: lift var(--dur-slow) var(--ease-out);
+}
+
+:root[data-theme='light'] .toast {
+  background: #373530;
+  color: rgb(255 255 255 / 90%);
+}
+
+.toast__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  flex: none;
+}
+
+.toast--success .toast__dot {
+  background: var(--green);
+}
+
+.toast--error .toast__dot {
+  background: var(--red);
+}
+
+/* ---------------------------------------------------- overlays and palette */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: var(--bg-scrim);
+  display: flex;
+  justify-content: center;
+  animation: fade-in var(--dur-base) var(--ease-out);
+}
+
+.overlay--top {
+  align-items: flex-start;
+  padding-top: 14vh;
+}
+
+.overlay--center {
+  align-items: center;
+  padding: var(--sp-6);
+}
+
+.palette {
+  width: min(680px, 92vw);
+  max-height: 62vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-page);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: rise var(--dur-slow) var(--ease-out);
+}
+
+.palette__input {
+  height: 52px;
+  padding: 0 var(--sp-4);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border-hair);
+  font-size: var(--t-lg);
+  flex: none;
+}
+
+.palette__input::placeholder {
+  color: var(--text-ghost);
+}
+
+.palette__list {
+  overflow-y: auto;
+  padding: var(--sp-1) var(--sp-2) var(--sp-2);
+}
+
+.palette__group {
+  padding: var(--sp-3) 6px 4px;
+}
+
+.palette__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: 7px var(--sp-2);
+  border-radius: var(--r-sm);
+  text-align: left;
+  color: var(--text-muted);
+}
+
+.palette__row[data-active='true'] {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.palette__icon {
+  flex: none;
+  width: 18px;
+  color: var(--text-faint);
+  display: grid;
+  place-items: center;
+}
+
+.palette__label {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--t-base);
+}
+
+.palette__sub {
+  font-size: var(--t-sm);
+  color: var(--text-ghost);
+  font-weight: 400;
+}
+
+.palette__kbd {
+  font-size: var(--t-xs);
+  color: var(--text-ghost);
+}
+
+.palette__empty {
+  padding: var(--sp-7);
+  text-align: center;
+  color: var(--text-ghost);
+  font-size: var(--t-base);
+}
+
+/* ----------------------------------------------------------------- modals */
+
+.modal {
+  width: min(640px, 94vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-page);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: rise var(--dur-slow) var(--ease-out);
+}
+
+.modal__head {
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border-hair);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex: none;
+}
+
+.modal__title {
+  font-size: var(--t-md);
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.modal__body {
+  padding: var(--sp-4);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.modal__foot {
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border-hair);
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  flex: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+}
+
+.row__label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.row__label b {
+  font-size: var(--t-base);
+  font-weight: 500;
+  color: var(--text-strong);
+}
+
+.row__label span {
+  font-size: var(--t-sm);
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+
+.switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: var(--r-full);
+  background: var(--border);
+  flex: none;
+  transition: background var(--dur-slow) var(--ease-out);
+}
+
+.switch[aria-checked='true'] {
+  background: var(--accent);
+}
+
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-full);
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+
+.switch[aria-checked='true']::after {
+  transform: translateX(14px);
+}
+
+.divider {
+  height: 1px;
+  background: var(--border-hair);
+}

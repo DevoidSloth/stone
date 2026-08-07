@@ -1,0 +1,536 @@
+/* -------------------------------------------------------------- note chrome */
+
+.note {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/*
+ * The page topbar. Breadcrumb on the left, state and actions on the right, and
+ * no bottom border until the page scrolls — Notion keeps this line invisible so
+ * the page reads as one continuous surface.
+ */
+.note__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3) var(--sp-2);
+  flex: none;
+}
+
+.note__crumbs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: var(--t-sm);
+  color: var(--text-faint);
+  padding: 3px 6px;
+  border-radius: var(--r-sm);
+}
+
+.note__crumbs b {
+  font-weight: 400;
+}
+
+.note__status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--t-xs);
+  color: var(--text-ghost);
+}
+
+.note__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--r-full);
+  background: var(--green);
+}
+
+.note__dot--dirty {
+  background: var(--yellow);
+}
+
+.note__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Notion's page measure is 708px, set inside a wide 96px gutter. */
+.note__wrap {
+  max-width: var(--measure, 708px);
+  margin: 0 auto;
+  padding: var(--sp-9) var(--sp-7) 40vh;
+}
+
+.note__title {
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  margin-bottom: var(--sp-2);
+  font-family: var(--font-ui);
+  font-size: var(--t-4xl);
+  font-weight: 700;
+  letter-spacing: var(--track-tight);
+  line-height: 1.2;
+  color: var(--text-strong);
+}
+
+.note__title::placeholder {
+  color: var(--text-ghost);
+}
+
+.note__subline {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding-bottom: var(--sp-4);
+  font-size: var(--t-sm);
+  color: var(--text-ghost);
+  flex-wrap: wrap;
+}
+
+.note__subline .tagchip {
+  padding: 1px 7px;
+  font-size: var(--t-xs);
+}
+
+/* ------------------------------------------------------------ codemirror */
+
+.cm-host {
+  min-height: 40vh;
+}
+
+.cm-editor {
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 16px;
+  line-height: 1.5;
+  letter-spacing: var(--track-snug);
+}
+
+.cm-editor.cm-focused {
+  outline: none;
+}
+
+.cm-scroller {
+  font-family: inherit;
+  line-height: inherit;
+  overflow: visible;
+}
+
+.cm-content {
+  padding: 0;
+  caret-color: var(--text);
+  user-select: text;
+}
+
+.cm-line {
+  padding: 3px 0;
+}
+
+.cm-cursor,
+.cm-dropCursor {
+  border-left: 1.5px solid var(--text);
+}
+
+.cm-selectionBackground,
+.cm-editor .cm-selectionBackground,
+.cm-editor.cm-focused .cm-selectionBackground {
+  background: rgb(35 131 226 / 20%) !important;
+}
+
+.cm-editor .cm-activeLine {
+  background: transparent;
+}
+
+.cm-placeholder {
+  color: var(--text-ghost);
+}
+
+/* Typeface follows the setting. Sans is the default, as in Notion. */
+.note--serif .cm-editor,
+.note--serif .note__title {
+  font-family: var(--font-serif);
+}
+
+.note--serif .cm-editor {
+  font-size: 17px;
+}
+
+.note--mono .cm-editor,
+.note--mono .note__title {
+  font-family: var(--font-mono);
+}
+
+.note--mono .cm-editor {
+  font-size: 14.5px;
+}
+
+/* --------------------------------------------------- live preview markup */
+
+.tok-h1,
+.tok-h2,
+.tok-h3,
+.tok-h4,
+.tok-h5,
+.tok-h6 {
+  color: var(--text-strong);
+  letter-spacing: var(--track-tight);
+  line-height: 1.3;
+}
+
+.tok-h1 {
+  font-size: 1.875em;
+  font-weight: 700;
+}
+.tok-h2 {
+  font-size: 1.5em;
+  font-weight: 600;
+}
+.tok-h3 {
+  font-size: 1.25em;
+  font-weight: 600;
+}
+.tok-h4,
+.tok-h5,
+.tok-h6 {
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.tok-strong {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.tok-em {
+  font-style: italic;
+}
+
+.tok-strike {
+  text-decoration: line-through;
+  color: var(--text-faint);
+}
+
+/* Notion's inline code: red ink on a warm grey wash, no border. */
+.tok-code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  padding: 0.15em 0.4em;
+  border-radius: var(--r-xs);
+  background: var(--gray-soft);
+  color: var(--red);
+}
+
+.tok-quote {
+  color: var(--text);
+}
+
+.tok-link {
+  color: var(--text);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--border);
+}
+
+.tok-link:hover {
+  text-decoration-color: var(--text-faint);
+}
+
+/* Wikilinks read as underlined page references, the way Notion mentions do. */
+.tok-wikilink {
+  color: var(--text-strong);
+  font-weight: 500;
+  border-radius: var(--r-xs);
+  padding: 0.05em 0.2em;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--border);
+  transition: background var(--dur-base) var(--ease-out);
+}
+
+.tok-wikilink:hover {
+  background: var(--bg-hover);
+}
+
+.tok-tag {
+  color: var(--text-muted);
+  background: var(--gray-soft);
+  border-radius: var(--r-xs);
+  padding: 0.1em 0.42em;
+  font-size: 0.82em;
+}
+
+.tok-due {
+  font-size: 0.82em;
+  color: var(--text-muted);
+  background: var(--blue-soft);
+  border-radius: var(--r-xs);
+  padding: 0.12em 0.4em;
+}
+
+.tok-due--overdue {
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+.tok-pri {
+  font-size: 0.78em;
+  font-weight: 500;
+  color: var(--red);
+  background: var(--red-soft);
+  border-radius: var(--r-xs);
+  padding: 0.14em 0.42em;
+}
+
+.tok-pri--low,
+.tok-pri--medium,
+.tok-pri--med {
+  color: var(--text-muted);
+  background: var(--gray-soft);
+}
+
+.tok-est {
+  font-size: 0.82em;
+  color: var(--text-ghost);
+}
+
+.tok-mark {
+  color: var(--text-ghost);
+}
+
+.tok-hr {
+  display: inline-block;
+  width: 100%;
+  border-top: 1px solid var(--border-hair);
+  vertical-align: middle;
+  color: transparent;
+}
+
+/* The folded stand-in for frontmatter: a quiet row of property names. */
+.cm-props {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 2px 0 6px;
+  cursor: pointer;
+}
+
+.cm-props__key {
+  font-size: var(--t-xs);
+  color: var(--text-ghost);
+  background: var(--gray-soft);
+  border-radius: var(--r-xs);
+  padding: 1px 6px;
+  font-family: var(--font-ui);
+}
+
+.cm-props:hover .cm-props__key {
+  color: var(--text-muted);
+}
+
+/* Frontmatter reads as a compact property block, not as prose. */
+.cm-line.tok-line-fm {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-ghost);
+  padding: 0;
+}
+
+/* Notion's quote: a solid 3px rule and no italics. */
+.cm-line.tok-line-quote {
+  border-left: 3px solid var(--text);
+  padding-left: 14px;
+}
+
+.cm-line.tok-line-code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--bg-surface);
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-4);
+}
+
+.cm-line.tok-line-code-first {
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  padding-top: var(--sp-3);
+}
+
+.cm-line.tok-line-code-last {
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  padding-bottom: var(--sp-3);
+}
+
+/* Checkbox widget rendered in place of `[ ]`. */
+.cm-checkbox {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  vertical-align: -3px;
+  border-radius: var(--r-xs);
+  border: 1.4px solid var(--text-ghost);
+  background: transparent;
+  cursor: pointer;
+  transition: all var(--dur-base) var(--ease-out);
+}
+
+.cm-checkbox:hover {
+  border-color: var(--text-faint);
+}
+
+.cm-checkbox[data-status='done'] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.cm-checkbox[data-status='done']::after {
+  content: '';
+  width: 7px;
+  height: 4px;
+  border-left: 1.6px solid #fff;
+  border-bottom: 1.6px solid #fff;
+  transform: rotate(-45deg) translate(0.5px, -1px);
+}
+
+.cm-checkbox[data-status='doing'] {
+  border-color: var(--accent);
+}
+
+.cm-checkbox[data-status='doing']::after {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.cm-checkbox[data-status='cancelled']::after {
+  content: '';
+  width: 8px;
+  height: 1.4px;
+  background: var(--text-ghost);
+}
+
+.tok-task-done {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.tok-task-cancelled {
+  color: var(--text-ghost);
+  text-decoration: line-through;
+}
+
+/* ------------------------------------------------------- autocomplete pop */
+
+.cm-tooltip.cm-tooltip-autocomplete {
+  background: var(--bg-page);
+  border: none;
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  font-family: var(--font-ui);
+  font-size: var(--t-base);
+  padding: var(--sp-1);
+}
+
+.cm-tooltip.cm-tooltip-autocomplete > ul {
+  max-height: 270px;
+  font-family: inherit;
+}
+
+.cm-tooltip.cm-tooltip-autocomplete > ul > li {
+  padding: 6px var(--sp-2);
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+}
+
+.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.cm-completionLabel {
+  font-family: var(--font-ui);
+}
+
+.cm-completionDetail {
+  font-size: var(--t-xs);
+  color: var(--text-ghost);
+  font-style: normal;
+  margin-left: var(--sp-2);
+}
+
+/* --------------------------------------------------------------- backlinks */
+
+.backlinks {
+  max-width: var(--measure, 708px);
+  margin: 0 auto;
+  padding: var(--sp-4) var(--sp-7) var(--sp-8);
+}
+
+.backlinks__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-faint);
+  padding-bottom: var(--sp-2);
+  border-top: 1px solid var(--border-hair);
+  padding-top: var(--sp-4);
+}
+
+.backlinks__grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.backlink {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  text-align: left;
+  padding: 6px var(--sp-2);
+  border-radius: var(--r-sm);
+  transition: background var(--dur-base) var(--ease-out);
+}
+
+.backlink:hover {
+  background: var(--bg-hover);
+}
+
+.backlink b {
+  font-size: var(--t-base);
+  font-weight: 500;
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--border);
+  flex: none;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backlink span {
+  font-size: var(--t-sm);
+  color: var(--text-ghost);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}

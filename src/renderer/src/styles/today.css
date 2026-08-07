@@ -1,0 +1,259 @@
+/*
+ * Today, as a Notion page. Same 708px measure and 96px gutter as any note, the
+ * same big bold title, and the sections below it behave like blocks on the page
+ * rather than dashboard cards.
+ */
+
+.today {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.today__masthead {
+  max-width: var(--page-measure);
+  margin: 0 auto;
+  padding: var(--sp-9) var(--sp-7) var(--sp-4);
+}
+
+.today__dow {
+  font-size: var(--t-sm);
+  font-weight: 500;
+  color: var(--text-faint);
+  display: block;
+  margin-bottom: 6px;
+}
+
+.today__date {
+  font-size: var(--t-4xl);
+  font-weight: 700;
+  letter-spacing: var(--track-tight);
+  line-height: 1.2;
+  color: var(--text-strong);
+}
+
+.today__date em {
+  font-style: normal;
+  font-weight: 700;
+}
+
+.today__summary {
+  display: block;
+  margin-top: 6px;
+  font-size: var(--t-base);
+  color: var(--text-faint);
+}
+
+/* Stats read as a quiet inline row of counts, not as raised cards. */
+.today__stats {
+  display: flex;
+  gap: var(--sp-5);
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border-hair);
+  flex-wrap: wrap;
+}
+
+.stat {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.stat__icon {
+  display: none;
+}
+
+.stat__value {
+  font-size: var(--t-xl);
+  font-weight: 600;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.stat--jade .stat__value {
+  color: var(--green);
+}
+.stat--rose .stat__value {
+  color: var(--red);
+}
+
+.stat__label {
+  font-size: var(--t-sm);
+  color: var(--text-faint);
+}
+
+/* ------------------------------------------------------------------ columns */
+
+.today__columns {
+  max-width: var(--page-measure);
+  margin: 0 auto;
+  padding: var(--sp-2) var(--sp-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.today__col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.today__colhead {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 30px;
+  margin-bottom: 2px;
+}
+
+.today__colhead .eyebrow {
+  flex: none;
+  order: -1;
+  font-size: var(--t-base);
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.today__colhead::after {
+  content: '';
+  flex: 1;
+  order: 0;
+}
+
+.today__colhead > button {
+  order: 1;
+  opacity: 0;
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+
+/* Section actions stay hidden until the section is hovered, as blocks do. */
+.today__col:hover .today__colhead > button,
+.today__colhead > button:focus-visible {
+  opacity: 1;
+}
+
+.today__blank {
+  padding: 7px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.today__blank p {
+  font-size: var(--t-base);
+  color: var(--text-ghost);
+}
+
+.today__blank span {
+  font-size: var(--t-sm);
+  color: var(--text-ghost);
+  line-height: 1.5;
+}
+
+.today__blank code,
+.empty__body code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  background: var(--gray-soft);
+  color: var(--red);
+}
+
+.today__timeline,
+.today__tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tevent {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 6px;
+  border-radius: var(--r-sm);
+  text-align: left;
+  transition: background var(--dur-base) var(--ease-out);
+}
+
+.tevent:hover {
+  background: var(--bg-hover);
+}
+
+.tevent__time {
+  font-size: var(--t-sm);
+  color: var(--text-faint);
+  flex: none;
+  width: 104px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tevent--next .tevent__time {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.tevent__bar {
+  width: 3px;
+  align-self: stretch;
+  min-height: 18px;
+  border-radius: var(--r-full);
+  background: var(--chip, var(--accent));
+  flex: none;
+}
+
+.tevent__body {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  flex: 1;
+}
+
+.tevent__body b {
+  font-size: var(--t-base);
+  font-weight: 400;
+  color: var(--text);
+}
+
+.tevent__body span {
+  font-size: var(--t-sm);
+  color: var(--text-ghost);
+}
+
+/* ------------------------------------------------------------------ journal */
+
+.today__journal {
+  max-width: var(--page-measure);
+  margin: 0 auto;
+  padding: var(--sp-4) var(--sp-7) 30vh;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.today__editor {
+  margin-left: -2px;
+}
+
+.note--embedded {
+  height: auto;
+}
+
+.note--embedded .note__wrap {
+  padding: 0;
+  max-width: none;
+}
+
+.note--embedded .cm-host {
+  min-height: 180px;
+}
+
+.note__title--static {
+  cursor: default;
+}

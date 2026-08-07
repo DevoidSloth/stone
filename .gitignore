@@ -1,0 +1,15 @@
+node_modules/
+out/
+dist/
+release/
+
+*.tsbuildinfo
+
+.DS_Store
+Thumbs.db
+
+.env
+.env.*
+!.env.example
+
+.claude/settings.local.json

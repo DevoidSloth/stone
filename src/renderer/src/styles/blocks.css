@@ -1,0 +1,293 @@
+/*
+ * Rendered blocks inside the editor: images, tables, embeds, maths, diagrams,
+ * fold twisties, and the drag handle.
+ *
+ * These all replace raw markdown while the caret is elsewhere, so they have to
+ * sit on the same baseline grid as the text they stand in for — a figure that
+ * shifts the page when you click into it undoes the point of live preview.
+ */
+
+@import 'katex/dist/katex.min.css';
+
+/* ---------------------------------------------------------------- embeds */
+
+.cm-embed {
+  display: block;
+  margin: var(--sp-2) 0;
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.cm-embed--image-inline {
+  display: inline-block;
+  vertical-align: middle;
+  margin: 0 2px;
+  max-width: 240px;
+}
+
+.cm-embed--image img,
+.cm-embed--image-inline img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--r-md);
+}
+
+.cm-embed--image-inline img {
+  max-height: 2.2em;
+  border-radius: var(--r-xs);
+}
+
+.cm-embed--missing {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  font-size: var(--t-xs);
+  color: var(--text-faint);
+  background: var(--bg-surface);
+}
+
+.cm-embed__media {
+  display: block;
+  width: 100%;
+  border-radius: var(--r-md);
+  background: #000;
+}
+
+.cm-embed--audio .cm-embed__media {
+  background: none;
+}
+
+.cm-embed__pdf {
+  display: block;
+  width: 100%;
+  height: 460px;
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+}
+
+/* A transcluded note reads as a quotation of another page, not as this one. */
+.cm-embed--note {
+  border: 1px solid var(--border-hair);
+  background: var(--bg-surface);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+}
+
+.cm-embed__title {
+  display: block;
+  width: 100%;
+  padding: 0;
+  margin-bottom: var(--sp-1);
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: var(--t-xs);
+  font-weight: 600;
+  color: var(--link);
+  font-family: var(--font-ui);
+}
+
+.cm-embed__title:hover {
+  text-decoration: underline;
+}
+
+.cm-embed__body {
+  max-height: 320px;
+  overflow: hidden;
+  font-size: 0.92em;
+  color: var(--text-muted);
+  mask-image: linear-gradient(to bottom, #000 78%, transparent);
+}
+
+.cm-embed__body p {
+  margin: 0 0 2px;
+  line-height: 1.5;
+}
+
+.cm-embed__gap {
+  height: 0.5em;
+}
+
+.cm-embed--mermaid {
+  display: flex;
+  justify-content: center;
+  padding: var(--sp-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hair);
+  font-size: var(--t-xs);
+  color: var(--text-faint);
+}
+
+.cm-embed--mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ----------------------------------------------------------------- maths */
+
+.cm-math {
+  font-size: 1em;
+}
+
+.cm-math--block {
+  display: block;
+  margin: var(--sp-3) 0;
+  padding: var(--sp-2);
+  overflow-x: auto;
+  text-align: center;
+}
+
+.cm-math--error {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--red);
+}
+
+/* The KaTeX stylesheet ships its own colour; inherit the page's instead. */
+.katex {
+  color: inherit;
+}
+
+/* ---------------------------------------------------------------- tables */
+
+.cm-table {
+  display: block;
+  margin: var(--sp-3) 0;
+  overflow-x: auto;
+}
+
+.cm-table table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92em;
+  font-family: var(--font-ui);
+}
+
+.cm-table th,
+.cm-table td {
+  padding: 5px 10px;
+  border: 1px solid var(--border-hair);
+  text-align: left;
+  vertical-align: top;
+}
+
+.cm-table th {
+  background: var(--bg-surface);
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.cm-table td {
+  color: var(--text);
+}
+
+/* ----------------------------------------------------------------- folds */
+
+.cm-fold {
+  position: absolute;
+  left: -20px;
+  width: 16px;
+  text-align: center;
+  color: var(--text-ghost);
+  cursor: pointer;
+  opacity: 0;
+  user-select: none;
+  transition:
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
+}
+
+.tok-line-heading:hover .cm-fold,
+.cm-fold--closed {
+  opacity: 1;
+}
+
+.cm-fold:hover {
+  color: var(--text);
+}
+
+.cm-fold--closed {
+  transform: rotate(-90deg);
+}
+
+.cm-collapsed {
+  display: inline-block;
+  margin-left: var(--sp-2);
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  background: var(--bg-active);
+  font-size: var(--t-2xs);
+  font-family: var(--font-ui);
+  color: var(--text-faint);
+  cursor: pointer;
+  user-select: none;
+  vertical-align: middle;
+}
+
+/* --------------------------------------------------------- drag handles */
+
+.cm-handle {
+  position: absolute;
+  left: -40px;
+  width: 18px;
+  text-align: center;
+  color: var(--text-ghost);
+  cursor: grab;
+  opacity: 0;
+  user-select: none;
+  font-size: 13px;
+  line-height: 1.5;
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+
+.cm-line:hover > .cm-handle {
+  opacity: 1;
+}
+
+.cm-handle:hover {
+  color: var(--text);
+}
+
+.cm-handle:active {
+  cursor: grabbing;
+}
+
+.cm-dragging-block .cm-line {
+  transition: none;
+}
+
+.cm-drop-target {
+  box-shadow: inset 0 2px 0 -1px var(--accent);
+}
+
+/* ----------------------------------------------------------- new tokens */
+
+.tok-recur {
+  color: var(--purple);
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+}
+
+.tok-blockid {
+  color: var(--text-ghost);
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+}
+
+.tok-footnote {
+  color: var(--link);
+  font-size: 0.82em;
+  vertical-align: super;
+  cursor: pointer;
+}
+
+.tok-footnote-def {
+  font-size: 0.9em;
+  color: var(--text-muted);
+}
+
+.tok-wikilink--embed {
+  color: var(--purple);
+}
