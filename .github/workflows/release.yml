@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and release'
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Ship whichever platform succeeds rather than losing both to one failure.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows
+            script: dist:win
+          - os: macos-latest
+            name: macOS
+            script: dist:mac
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - name: Build and package
+        run: npm run ${{ matrix.script }}
+        env:
+          # No Apple Developer ID in this repo, so leave the app unsigned rather
+          # than letting electron-builder pick up a stray keychain identity.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            release/*.exe
+            release/*.dmg
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Stone $TAG" \
+            --notes-file - artifacts/* <<'NOTES'
+          ## Downloads
+
+          | Platform | File |
+          | --- | --- |
+          | macOS (Intel + Apple Silicon) | `Stone-*.dmg` |
+          | Windows x64 | `Stone-*-x64.exe` |
+          | Windows ARM64 | `Stone-*-arm64.exe` |
+
+          These builds are **unsigned** — there is no Apple Developer ID or
+          Windows code-signing certificate behind them.
+
+          - **macOS:** Gatekeeper will refuse the first launch. Right-click the
+            app in Applications and choose Open, or run
+            `xattr -dr com.apple.quarantine /Applications/Stone.app`.
+          - **Windows:** SmartScreen shows "Windows protected your PC". Choose
+            More info, then Run anyway.
+          NOTES
