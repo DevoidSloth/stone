@@ -43,6 +43,10 @@ mac:
     NSCalendarsFullAccessUsageDescription: Stone shows your Apple Calendar events alongside your notes and tasks, and writes events you create in Stone back to Calendar.
     NSRemindersUsageDescription: Stone can mirror tasks into Reminders.
     NSAppleEventsUsageDescription: Stone uses Apple Events to read your calendars through EventKit.
+  # Both keys are needed. `entitlementsInherit` only covers the helper processes;
+  # without `entitlements` the app itself is signed with electron-builder's
+  # defaults, which carry no calendar entitlement, and EventKit refuses it.
+  entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
 
 dmg:

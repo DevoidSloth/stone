@@ -192,11 +192,19 @@ export class CalendarService {
     return { accounts, errors }
   }
 
+  /**
+   * Which calendars of a source to query.
+   *
+   * `null` means nothing has been recorded yet, so every calendar counts — that
+   * is the first run, before the account list has been saved. An empty array is
+   * the opposite and has to stay distinct from it: the backends read "no ids"
+   * as "all ids", so collapsing the two turned "I disabled every Apple
+   * calendar" into "show me every Apple calendar".
+   */
   private enabledIds(settings: Settings, source: CalendarAccount['source']): string[] | null {
     const configured = settings.calendars.filter((c) => c.source === source)
-    if (configured.length === 0) return []
-    const enabled = configured.filter((c) => c.enabled).map((c) => c.id)
-    return enabled
+    if (configured.length === 0) return null
+    return configured.filter((c) => c.enabled).map((c) => c.id)
   }
 
   private isEnabled(settings: Settings, id: string): boolean {
@@ -232,28 +240,33 @@ export class CalendarService {
 
     if (isMac()) {
       const ids = this.enabledIds(settings, 'macos')
-      jobs.push(
-        (async () => {
-          try {
-            events.push(...(await listMacEvents(rangeStart, rangeEnd, ids ?? [])))
-          } catch (err) {
-            errors.push(`Apple Calendar: ${(err as Error).message}`)
-          }
-        })()
-      )
+      // Every Apple calendar switched off is a request for none of them.
+      if (ids === null || ids.length > 0) {
+        jobs.push(
+          (async () => {
+            try {
+              events.push(...(await listMacEvents(rangeStart, rangeEnd, ids ?? [])))
+            } catch (err) {
+              errors.push(`Apple Calendar: ${(err as Error).message}`)
+            }
+          })()
+        )
+      }
     }
 
     if (await graph.isConnected()) {
       const ids = this.enabledIds(settings, 'graph')
-      jobs.push(
-        (async () => {
-          try {
-            events.push(...(await graph.listGraphEvents(rangeStart, rangeEnd, ids ?? [])))
-          } catch (err) {
-            errors.push(`Outlook: ${(err as Error).message}`)
-          }
-        })()
-      )
+      if (ids === null || ids.length > 0) {
+        jobs.push(
+          (async () => {
+            try {
+              events.push(...(await graph.listGraphEvents(rangeStart, rangeEnd, ids ?? [])))
+            } catch (err) {
+              errors.push(`Outlook: ${(err as Error).message}`)
+            }
+          })()
+        )
+      }
     }
 
     for (const sub of settings.icsSubscriptions) {
