@@ -4,7 +4,8 @@ import {
   type Range,
   RangeSetBuilder,
   StateEffect,
-  StateField
+  StateField,
+  type Text
 } from '@codemirror/state'
 import {
   Decoration,
@@ -84,6 +85,7 @@ const BLOCK_ID_RE = /\s(\^[A-Za-z0-9-]+)\s*$/
 const FOOTNOTE_REF_RE = /\[\^([^\]]+)\]/g
 const FOOTNOTE_DEF_RE = /^\[\^([^\]]+)\]:/
 const INLINE_MATH_RE = /(?<!\$)\$([^$\n]+?)\$(?!\$)/g
+const HIGHLIGHT_RE = /==(?=\S)([^\n]*?\S)==/g
 
 // ---------------------------------------------------------------- folding
 
@@ -200,7 +202,248 @@ export interface LivePreviewHandlers {
   onHoverEnd?: () => void
 }
 
-function buildDecorations(view: EditorView, handlers: LivePreviewHandlers): DecorationSet {
+// ------------------------------------------------------- block decorations
+
+interface Fence {
+  lang: string
+  start: number
+  /** 0 while the fence is still open at the end of the document. */
+  end: number
+}
+
+/**
+ * Fenced regions, mapped line by line from the top of the document. This cannot
+ * start at the viewport: a code block scrolled into view mid-fence would
+ * otherwise be read as prose and get decorated as markdown.
+ */
+function scanFences(doc: Text): Map<number, Fence> {
+  const info = new Map<number, Fence>()
+  let open = false
+  let start = 0
+  let lang = ''
+
+  for (let n = 1; n <= doc.lines; n++) {
+    const fence = /^\s*(```|~~~)\s*(\S*)/.exec(doc.line(n).text)
+    if (fence) {
+      if (!open) {
+        open = true
+        start = n
+        lang = fence[2] ?? ''
+      } else {
+        for (let i = start; i <= n; i++) info.set(i, { lang, start, end: n })
+        open = false
+      }
+      continue
+    }
+    if (open) info.set(n, { lang, start, end: 0 })
+  }
+  return info
+}
+
+const TABLE_ROW_RE = /^\s*\|.*\|\s*$/
+/** The alignment row: pipes, dashes and colons, and at least one dash. */
+const TABLE_RULE_RE = /^[\s|:-]*-[\s|:-]*$/
+const EMBED_ALONE_RE = /^!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/
+const IMAGE_ALONE_RE = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)$/
+
+/** Split a table row on unescaped pipes, dropping the outer pair. */
+function splitRow(text: string): string[] {
+  const body = text.trim().replace(/^\|/, '').replace(/\|$/, '')
+  const cells: string[] = []
+  let cell = ''
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i]
+    if (ch === '\\' && body[i + 1] === '|') {
+      cell += '|'
+      i++
+      continue
+    }
+    if (ch === '|') {
+      cells.push(cell.trim())
+      cell = ''
+      continue
+    }
+    cell += ch
+  }
+  cells.push(cell.trim())
+  return cells
+}
+
+/** `:---`, `---:`, `:---:` — per-column alignment from the rule row. */
+function alignmentsOf(rule: string): ('left' | 'center' | 'right')[] {
+  return splitRow(rule).map((spec) => {
+    const left = spec.startsWith(':')
+    const right = spec.endsWith(':')
+    if (left && right) return 'center'
+    if (right) return 'right'
+    return 'left'
+  })
+}
+
+interface BlockRegion {
+  fromLine: number
+  toLine: number
+  deco: Decoration
+}
+
+interface BlockLayer {
+  /** Line numbers the block layer owns, so the inline pass leaves them alone. */
+  claimed: Set<number>
+  set: DecorationSet
+}
+
+/**
+ * The replacements that take whole lines: diagrams, display maths, GFM tables,
+ * and embeds sitting alone on a line.
+ *
+ * These have to be served from a state field rather than from the view plugin.
+ * CodeMirror rejects both block decorations and decorations spanning a line
+ * break when they arrive from a plugin — it throws a RangeError, tears the
+ * plugin down, and every other live-preview decoration goes with it. One table
+ * anywhere in a note was enough to drop the whole editor back to raw markdown,
+ * which is why the table never drew.
+ */
+function computeBlockRegions(state: EditorState, handlers: LivePreviewHandlers): BlockRegion[] {
+  const doc = state.doc
+  const regions: BlockRegion[] = []
+  const attachments = handlers.attachmentsFolder()
+  const taken = new Set<number>()
+
+  const liveLines = new Set<number>()
+  for (const range of state.selection.ranges) {
+    const first = doc.lineAt(range.from).number
+    const last = doc.lineAt(range.to).number
+    for (let n = first; n <= last; n++) liveLines.add(n)
+  }
+
+  const sectionLive = (from: number, to: number): boolean => {
+    for (let n = from; n <= to; n++) if (liveLines.has(n)) return true
+    return false
+  }
+
+  const claim = (fromLine: number, toLine: number, deco: Decoration): void => {
+    for (let n = fromLine; n <= toLine; n++) taken.add(n)
+    regions.push({ fromLine, toLine, deco })
+  }
+
+  const fences = scanFences(doc)
+
+  // Whole-fence widgets: mermaid and display maths stand in for the block.
+  for (let n = 1; n <= doc.lines; n++) {
+    const fence = fences.get(n)
+    if (!fence || fence.start !== n || fence.end <= n) continue
+
+    const lang = fence.lang.toLowerCase()
+    const isDiagram = lang === 'mermaid'
+    const isMath = lang === 'math' || lang === 'latex'
+    if (!isDiagram && !isMath) continue
+    if (sectionLive(fence.start, fence.end)) continue
+
+    const source: string[] = []
+    for (let i = fence.start + 1; i < fence.end; i++) source.push(doc.line(i).text)
+    claim(
+      fence.start,
+      fence.end,
+      Decoration.replace({
+        widget: isDiagram
+          ? new MermaidWidget(source.join('\n'))
+          : new MathWidget(source.join('\n'), true),
+        block: true
+      })
+    )
+  }
+
+  // GFM tables.
+  let n = 1
+  while (n <= doc.lines) {
+    if (taken.has(n) || fences.has(n) || !TABLE_ROW_RE.test(doc.line(n).text)) {
+      n++
+      continue
+    }
+
+    let end = n
+    while (
+      end + 1 <= doc.lines &&
+      !fences.has(end + 1) &&
+      TABLE_ROW_RE.test(doc.line(end + 1).text)
+    ) {
+      end++
+    }
+
+    // Two rows minimum, the second being the alignment rule, or it is not a table.
+    if (end > n && TABLE_RULE_RE.test(doc.line(n + 1).text)) {
+      if (!sectionLive(n, end)) {
+        const align = alignmentsOf(doc.line(n + 1).text)
+        const rows: string[][] = []
+        for (let i = n; i <= end; i++) {
+          if (i === n + 1) continue
+          rows.push(splitRow(doc.line(i).text))
+        }
+        claim(n, end, Decoration.replace({ widget: new TableWidget(rows, align), block: true }))
+      }
+      n = end + 1
+      continue
+    }
+
+    n++
+  }
+
+  // An embed alone on its line is a figure, not a word inside a sentence.
+  for (let line = 1; line <= doc.lines; line++) {
+    if (taken.has(line) || fences.has(line) || liveLines.has(line)) continue
+    const text = doc.line(line).text.trim()
+    if (!text.startsWith('![')) continue
+
+    const wiki = EMBED_ALONE_RE.exec(text)
+    if (wiki) {
+      const target = wiki[1].trim()
+      const label = (wiki[2] ?? wiki[1]).trim()
+      const kind = embedKind(target)
+      const src = resolveAssetUrl(target, attachments)
+      const widget =
+        kind === 'image'
+          ? new ImageWidget(src, label, true)
+          : kind === 'video' || kind === 'audio' || kind === 'pdf'
+            ? new MediaWidget(src, kind, label)
+            : new NoteEmbedWidget(target, handlers.loadEmbed, handlers.onOpenWikilink)
+      claim(line, line, Decoration.replace({ widget, block: true }))
+      continue
+    }
+
+    const image = IMAGE_ALONE_RE.exec(text)
+    if (image) {
+      claim(
+        line,
+        line,
+        Decoration.replace({
+          widget: new ImageWidget(resolveAssetUrl(image[2], attachments), image[1], true),
+          block: true
+        })
+      )
+    }
+  }
+
+  return regions
+}
+
+function buildBlockLayer(state: EditorState, handlers: LivePreviewHandlers): BlockLayer {
+  const regions = computeBlockRegions(state, handlers).sort((a, b) => a.fromLine - b.fromLine)
+  const claimed = new Set<number>()
+  const ranges: Range<Decoration>[] = []
+
+  for (const region of regions) {
+    for (let n = region.fromLine; n <= region.toLine; n++) claimed.add(n)
+    ranges.push(region.deco.range(state.doc.line(region.fromLine).from, state.doc.line(region.toLine).to))
+  }
+
+  return { claimed, set: Decoration.set(ranges, true) }
+}
+
+function buildDecorations(
+  view: EditorView,
+  handlers: LivePreviewHandlers,
+  claimed: Set<number>
+): DecorationSet {
   const state: Collected = { ranges: [], replaced: [] }
   const doc = view.state.doc
   const todayISO = toISODate(new Date())
@@ -216,34 +459,7 @@ function buildDecorations(view: EditorView, handlers: LivePreviewHandlers): Deco
 
   const isLive = (pos: number): boolean => liveLines.has(doc.lineAt(pos).number)
 
-  // Fenced regions are tracked from the top of the document, because a code
-  // block scrolled into view mid-fence would otherwise be treated as prose.
-  const fenceInfo = new Map<number, { open: boolean; lang: string; start: number; end: number }>()
-  {
-    let open = false
-    let start = 0
-    let lang = ''
-    for (let n = 1; n <= doc.lines; n++) {
-      const text = doc.line(n).text
-      const fence = /^\s*(```|~~~)\s*(\S*)/.exec(text)
-      if (fence) {
-        if (!open) {
-          open = true
-          start = n
-          lang = fence[2] ?? ''
-        } else {
-          for (let i = start; i <= n; i++) {
-            fenceInfo.set(i, { open: true, lang, start, end: n })
-          }
-          open = false
-        }
-        continue
-      }
-      if (open) fenceInfo.set(n, { open: true, lang, start, end: 0 })
-    }
-  }
-
-  const inFence = (n: number): boolean => fenceInfo.has(n)
+  const fenceInfo = scanFences(doc)
 
   // ---- pass 1: inline tokens Stone owns, which lezer knows nothing about ----
 
@@ -253,39 +469,10 @@ function buildDecorations(view: EditorView, handlers: LivePreviewHandlers): Deco
       const text = line.text
       const base = line.from
       const live = liveLines.has(line.number)
-      const fence = fenceInfo.get(line.number)
 
-      // Whole-fence widgets: mermaid and display maths replace the block.
-      if (fence && fence.start === line.number && fence.end > line.number) {
-        const lang = fence.lang.toLowerCase()
-        const isDiagram = lang === 'mermaid'
-        const isMath = lang === 'math' || lang === 'latex'
-        const sectionLive = (() => {
-          for (let n = fence.start; n <= fence.end; n++) if (liveLines.has(n)) return true
-          return false
-        })()
-
-        if ((isDiagram || isMath) && !sectionLive) {
-          const source: string[] = []
-          for (let n = fence.start + 1; n < fence.end; n++) source.push(doc.line(n).text)
-          pushReplace(
-            state,
-            doc.line(fence.start).from,
-            doc.line(fence.end).to,
-            Decoration.replace({
-              widget: isDiagram
-                ? new MermaidWidget(source.join('\n'))
-                : new MathWidget(source.join('\n'), true),
-              block: true
-            })
-          )
-          line = fence.end >= doc.lines ? line : doc.lineAt(doc.line(fence.end).to + 1)
-          if (fence.end >= doc.lines) break
-          continue
-        }
-      }
-
-      if (fence) {
+      // Lines the block layer has replaced wholesale are not ours to decorate;
+      // overlapping the two would put a mark inside a replaced range.
+      if (claimed.has(line.number) || fenceInfo.has(line.number)) {
         if (line.to >= doc.length) break
         line = doc.lineAt(line.to + 1)
         continue
@@ -378,6 +565,26 @@ function buildDecorations(view: EditorView, handlers: LivePreviewHandlers): Deco
         pushMark(state, base, line.to, Decoration.mark({ class: 'tok-footnote-def' }))
       }
 
+      /*
+       * `==highlight==`. Not part of CommonMark or GFM, so lezer does not know
+       * it and it has to be matched here — but it is what every Obsidian vault
+       * already uses, and the toolbar offers it.
+       */
+      HIGHLIGHT_RE.lastIndex = 0
+      let highlight: RegExpExecArray | null
+      while ((highlight = HIGHLIGHT_RE.exec(text)) !== null) {
+        const start = base + highlight.index
+        const end = start + highlight[0].length
+        pushMark(state, start + 2, end - 2, Decoration.mark({ class: 'tok-highlight' }))
+        if (live) {
+          pushMark(state, start, start + 2, Decoration.mark({ class: 'tok-mark' }))
+          pushMark(state, end - 2, end, Decoration.mark({ class: 'tok-mark' }))
+        } else {
+          pushReplace(state, start, start + 2)
+          pushReplace(state, end - 2, end)
+        }
+      }
+
       if (!live) {
         INLINE_MATH_RE.lastIndex = 0
         let math: RegExpExecArray | null
@@ -391,19 +598,19 @@ function buildDecorations(view: EditorView, handlers: LivePreviewHandlers): Deco
         }
       }
 
-      // Markdown images. A line holding nothing else becomes a block figure.
+      // Markdown images sharing a line with prose. One alone on its line is a
+      // block figure, and the block layer has already claimed it.
       MD_IMAGE_RE.lastIndex = 0
       let image: RegExpExecArray | null
       while ((image = MD_IMAGE_RE.exec(text)) !== null) {
         if (live) break
         const whole = image[0]
-        const alone = text.trim() === whole
         pushReplace(
           state,
           base + image.index,
           base + image.index + whole.length,
           Decoration.replace({
-            widget: new ImageWidget(resolveAssetUrl(image[2], attachments), image[1], alone),
+            widget: new ImageWidget(resolveAssetUrl(image[2], attachments), image[1], false),
             block: false
           })
         )
@@ -431,39 +638,17 @@ function buildDecorations(view: EditorView, handlers: LivePreviewHandlers): Deco
           continue
         }
 
+        // An embed alone on its line is drawn by the block layer instead; what
+        // reaches here sits mid-sentence and stays inline.
         if (isEmbed) {
           const kind = embedKind(target)
-          const alone = text.trim() === wl[0]
-          if (kind === 'image') {
-            pushReplace(
-              state,
-              start,
-              end,
-              Decoration.replace({
-                widget: new ImageWidget(resolveAssetUrl(target, attachments), label, alone)
-              })
-            )
-          } else if (kind === 'video' || kind === 'audio' || kind === 'pdf') {
-            pushReplace(
-              state,
-              start,
-              end,
-              Decoration.replace({
-                widget: new MediaWidget(resolveAssetUrl(target, attachments), kind, label),
-                block: alone
-              })
-            )
-          } else {
-            pushReplace(
-              state,
-              start,
-              end,
-              Decoration.replace({
-                widget: new NoteEmbedWidget(target, handlers.loadEmbed, handlers.onOpenWikilink),
-                block: alone
-              })
-            )
-          }
+          const widget =
+            kind === 'image'
+              ? new ImageWidget(resolveAssetUrl(target, attachments), label, false)
+              : kind === 'video' || kind === 'audio' || kind === 'pdf'
+                ? new MediaWidget(resolveAssetUrl(target, attachments), kind, label)
+                : new NoteEmbedWidget(target, handlers.loadEmbed, handlers.onOpenWikilink)
+          pushReplace(state, start, end, Decoration.replace({ widget }))
           continue
         }
 
@@ -485,55 +670,14 @@ function buildDecorations(view: EditorView, handlers: LivePreviewHandlers): Deco
     }
   }
 
-  // --------------------------- pass 2: GFM tables ---------------------------
-
-  {
-    let n = 1
-    while (n <= doc.lines) {
-      const text = doc.line(n).text
-      if (!/^\s*\|.*\|\s*$/.test(text) || inFence(n)) {
-        n++
-        continue
-      }
-      let end = n
-      while (end + 1 <= doc.lines && /^\s*\|.*\|\s*$/.test(doc.line(end + 1).text)) end++
-
-      // Two rows minimum, the second being the alignment row, or it is not a table.
-      const isTable = end > n && /^[\s|:-]+$/.test(doc.line(n + 1).text)
-      let sectionLive = false
-      for (let i = n; i <= end; i++) if (liveLines.has(i)) sectionLive = true
-
-      if (isTable && !sectionLive) {
-        const rows: string[][] = []
-        for (let i = n; i <= end; i++) {
-          if (i === n + 1) continue
-          rows.push(
-            doc
-              .line(i)
-              .text.trim()
-              .replace(/^\||\|$/g, '')
-              .split('|')
-              .map((c) => c.trim())
-          )
-        }
-        pushReplace(
-          state,
-          doc.line(n).from,
-          doc.line(end).to,
-          Decoration.replace({ widget: new TableWidget(rows), block: true })
-        )
-      }
-      n = end + 1
-    }
-  }
-
-  // ------------------- pass 3: the markdown tree from lezer -------------------
+  // ------------------- pass 2: the markdown tree from lezer -------------------
 
   for (const { from, to } of view.visibleRanges) {
     syntaxTree(view.state).iterate({
       from,
       to,
       enter: (node) => {
+        if (claimed.has(doc.lineAt(node.from).number)) return false
         const name = node.name
 
         const heading = HEADING_CLASS[name]
@@ -733,17 +877,35 @@ function hasEffects(update: ViewUpdate): boolean {
 }
 
 export function livePreview(handlers: LivePreviewHandlers) {
+  /*
+   * Block-level replacements live in a state field, not in the view plugin
+   * below. CodeMirror refuses block decorations — and any decoration crossing a
+   * line break — from a plugin, and enforces it by throwing, which takes the
+   * whole plugin down with it. The field is per-editor because it closes over
+   * these handlers.
+   */
+  const blockLayer = StateField.define<BlockLayer>({
+    create: (state) => buildBlockLayer(state, handlers),
+    update: (value, tr) =>
+      tr.docChanged || tr.selection ? buildBlockLayer(tr.state, handlers) : value,
+    provide: (field) => EditorView.decorations.from(field, (layer) => layer.set)
+  })
+
   const marks = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet
 
       constructor(view: EditorView) {
-        this.decorations = buildDecorations(view, handlers)
+        this.decorations = buildDecorations(view, handlers, view.state.field(blockLayer).claimed)
       }
 
       update(update: ViewUpdate): void {
         if (update.docChanged || update.viewportChanged || update.selectionSet) {
-          this.decorations = buildDecorations(update.view, handlers)
+          this.decorations = buildDecorations(
+            update.view,
+            handlers,
+            update.state.field(blockLayer).claimed
+          )
         }
       }
     },
@@ -904,5 +1066,5 @@ export function livePreview(handlers: LivePreviewHandlers) {
     }
   })
 
-  return [foldedLines, foldDecorations, frontmatterFold, marks, lines, handles, events]
+  return [foldedLines, foldDecorations, frontmatterFold, blockLayer, marks, lines, handles, events]
 }

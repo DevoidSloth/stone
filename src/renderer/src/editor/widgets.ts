@@ -336,20 +336,79 @@ export class MermaidWidget extends WidgetType {
   }
 }
 
+export type CellAlign = 'left' | 'center' | 'right'
+
+/**
+ * The inline markdown a table cell is allowed to carry.
+ *
+ * Cells are the one place the editor renders markdown outside CodeMirror's own
+ * decorations, so this is deliberately a short list and is built as DOM nodes
+ * rather than as an HTML string — cell text is note content, and it is never
+ * worth handing that to innerHTML.
+ */
+const CELL_RE =
+  /(\*\*|__)(?=\S)([\s\S]*?\S)\1|(\*|_)(?=\S)([\s\S]*?\S)\3|`([^`]+)`|~~([\s\S]+?)~~|==([\s\S]+?)==|\[\[([^\]|]+)(?:\|([^\]]+))?\]\]|\[([^\]]*)\]\(([^)\s]+)\)/
+
+function renderCell(text: string, into: HTMLElement): void {
+  let rest = text
+  while (rest.length > 0) {
+    const m = CELL_RE.exec(rest)
+    if (!m) break
+    if (m.index > 0) into.appendChild(document.createTextNode(rest.slice(0, m.index)))
+
+    const el = (tag: string, cls: string, body: string): HTMLElement => {
+      const node = document.createElement(tag)
+      node.className = cls
+      // Nested emphasis is common enough in a header cell to be worth one level.
+      if (cls === 'tok-strong' || cls === 'tok-em') renderCell(body, node)
+      else node.textContent = body
+      return node
+    }
+
+    if (m[2] !== undefined) into.appendChild(el('strong', 'tok-strong', m[2]))
+    else if (m[4] !== undefined) into.appendChild(el('em', 'tok-em', m[4]))
+    else if (m[5] !== undefined) into.appendChild(el('code', 'tok-code', m[5]))
+    else if (m[6] !== undefined) into.appendChild(el('del', 'tok-strike', m[6]))
+    else if (m[7] !== undefined) into.appendChild(el('mark', 'tok-highlight', m[7]))
+    else if (m[8] !== undefined) {
+      const link = el('span', 'tok-wikilink', (m[9] ?? m[8]).trim())
+      link.dataset.wikilink = m[8].trim()
+      into.appendChild(link)
+    } else if (m[11] !== undefined) {
+      const link = el('span', 'tok-link', m[10] || m[11])
+      link.dataset.url = m[11]
+      into.appendChild(link)
+    }
+
+    rest = rest.slice(m.index + m[0].length)
+  }
+  if (rest.length > 0) into.appendChild(document.createTextNode(rest))
+}
+
 /**
  * A GFM table, drawn as a real table while the caret is elsewhere.
  *
  * Pipes-and-dashes is unreadable at a glance, and it is the one construct where
  * the raw form is materially worse than the rendered one. Putting the caret on
  * any row of the table brings the source straight back.
+ *
+ * Rows are padded to the header's width rather than left ragged: a short row is
+ * a typo in the source, and collapsing the table's grid around it hides which
+ * row is actually wrong.
  */
 export class TableWidget extends WidgetType {
-  constructor(readonly rows: string[][]) {
+  constructor(
+    readonly rows: string[][],
+    readonly align: CellAlign[] = []
+  ) {
     super()
   }
 
   eq(other: TableWidget): boolean {
-    return JSON.stringify(other.rows) === JSON.stringify(this.rows)
+    return (
+      JSON.stringify(other.rows) === JSON.stringify(this.rows) &&
+      other.align.join() === this.align.join()
+    )
   }
 
   toDOM(): HTMLElement {
@@ -358,15 +417,22 @@ export class TableWidget extends WidgetType {
 
     const table = document.createElement('table')
     const [head, ...body] = this.rows
+    const width = Math.max(head?.length ?? 0, ...body.map((r) => r.length), this.align.length)
+
+    const cellsInto = (row: string[], parent: HTMLElement, tag: 'th' | 'td'): void => {
+      for (let i = 0; i < width; i++) {
+        const cell = document.createElement(tag)
+        const align = this.align[i] ?? 'left'
+        if (align !== 'left') cell.style.textAlign = align
+        renderCell(row[i] ?? '', cell)
+        parent.appendChild(cell)
+      }
+    }
 
     if (head) {
       const thead = document.createElement('thead')
       const tr = document.createElement('tr')
-      for (const cell of head) {
-        const th = document.createElement('th')
-        th.textContent = cell
-        tr.appendChild(th)
-      }
+      cellsInto(head, tr, 'th')
       thead.appendChild(tr)
       table.appendChild(thead)
     }
@@ -374,11 +440,7 @@ export class TableWidget extends WidgetType {
     const tbody = document.createElement('tbody')
     for (const row of body) {
       const tr = document.createElement('tr')
-      for (const cell of row) {
-        const td = document.createElement('td')
-        td.textContent = cell
-        tr.appendChild(td)
-      }
+      cellsInto(row, tr, 'td')
       tbody.appendChild(tr)
     }
     table.appendChild(tbody)
