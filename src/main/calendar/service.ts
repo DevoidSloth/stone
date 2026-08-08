@@ -2,7 +2,14 @@ import type { CalEvent, CalendarAccount, NoteMeta, Settings, Task } from '@share
 import type { Vault } from '../vault/store'
 import { fetchIcs, parseIcs } from './ics'
 import * as graph from './graph'
-import { isMac, listMacCalendars, listMacEvents, removeMacEvent, saveMacEvent } from './macos'
+import {
+  isMac,
+  listMacCalendars,
+  listMacEvents,
+  removeMacEvent,
+  resetMacCalendarAuth,
+  saveMacEvent
+} from './macos'
 
 const FEED_TTL_MS = 10 * 60 * 1000
 
@@ -302,9 +309,14 @@ export class CalendarService {
     return { events, errors }
   }
 
-  /** Force the next range query to refetch every subscribed feed. */
+  /**
+   * Force the next range query to refetch every subscribed feed, and to retry
+   * Apple Calendar — refresh is what someone reaches for after granting access
+   * in System Settings, and it should not need a restart to take effect.
+   */
   clearFeedCache(): void {
     feedCache.clear()
+    resetMacCalendarAuth()
   }
 
   async saveExternalEvent(

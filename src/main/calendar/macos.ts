@@ -46,16 +46,6 @@ function pump(isDone, timeoutSeconds) {
 }
 
 /**
- * Ask for calendar access.
- *
- * The selector is requestFullAccessToEvents_WITH_Completion_. Probing for
- * 'requestFullAccessToEventsCompletion' always misses, which silently drops
- * every macOS 14+ machine onto requestAccessToEntityType:completion: — and
- * since Sonoma that legacy call grants WRITE-ONLY access. Authorisation then
- * appears to succeed while every read returns nothing, which is exactly what a
- * calendar that "does not work" looks like.
- */
-/**
  * The bridge hands enum returns back as strings — authorizationStatusForEntityType
  * answers "0", not 0 — so every comparison has to go through Number() or it
  * silently falls through to the wrong branch.
@@ -64,6 +54,22 @@ function authStatus() {
   return Number($.EKEventStore.authorizationStatusForEntityType(ENTITY_EVENT));
 }
 
+/**
+ * Ask for calendar access.
+ *
+ * This calls the deprecated requestAccessToEntityType:completion: deliberately.
+ * requestFullAccessToEventsWithCompletion: does exist in the bridge — typeof
+ * answers "function" for it and "undefined" for a nonsense selector — but its
+ * completion block is never invoked under JXA. Measured on macOS 26.5, in one
+ * process, back to back:
+ *
+ *   requestFullAccessToEventsWithCompletion  ->  handler never fires
+ *   requestAccessToEntityTypeCompletion      ->  handler fires
+ *
+ * Calling the modern one means waiting out the entire timeout on every single
+ * query and never reaching the calendar, so the call that actually returns is
+ * the one worth making. What it grants is then checked rather than assumed.
+ */
 function authorize(store) {
   var status = authStatus();
 
@@ -72,34 +78,31 @@ function authorize(store) {
   if (status === AUTH_DENIED || status === AUTH_RESTRICTED) return { ok: false, code: 'DENIED' };
   if (status !== AUTH_NOT_DETERMINED) return { ok: false, code: 'DENIED' };
 
-  var state = { done: false, granted: false };
-  var handler = function (granted) {
-    state.granted = granted;
+  var state = { done: false };
+  // The handler's granted argument is deliberately ignored. JXA hands it over
+  // as a truthy non-boolean, so testing it is true even when nothing has been
+  // granted: authorisation "succeeded", the calendar list came back empty, and
+  // the month view sat there with no events and no error to explain it. The
+  // authorisation status is the only answer worth reading.
+  store.requestAccessToEntityTypeCompletion(ENTITY_EVENT, function () {
     state.done = true;
-  };
+  });
 
-  if (typeof store.requestFullAccessToEventsWithCompletion === 'function') {
-    store.requestFullAccessToEventsWithCompletion(handler);
-  } else {
-    // macOS 13 and earlier, where this call is full access.
-    store.requestAccessToEntityTypeCompletion(ENTITY_EVENT, handler);
-  }
-
-  // The system dialog is modal and a person has to read it.
-  pump(function () { return state.done; }, 240);
+  // Long enough to read a modal dialog, short enough that a request which is
+  // never going to come back cannot wedge the calendar behind it.
+  pump(function () { return state.done; }, 90);
 
   if (!state.done) return { ok: false, code: 'TIMEOUT' };
 
   var settled = authStatus();
 
-  // Refused, but the status never moved off "not determined": the prompt could
-  // not be put on screen at all. That is a different problem from a person
-  // clicking Don't Allow, and telling them to go un-deny it in System Settings
-  // sends them somewhere with nothing to change.
-  if (!state.granted && settled === AUTH_NOT_DETERMINED) return { ok: false, code: 'NOPROMPT' };
-  if (!state.granted) return { ok: false, code: 'DENIED' };
+  if (settled === AUTH_FULL) return { ok: true };
   if (settled === AUTH_WRITE_ONLY) return { ok: false, code: 'WRITEONLY' };
-  return { ok: true };
+  // Asked, answered, and nothing was recorded: the prompt never reached the
+  // screen. That is not the same as someone clicking Don't Allow, and sending
+  // them to System Settings to un-deny a grant they never made wastes a trip.
+  if (settled === AUTH_NOT_DETERMINED) return { ok: false, code: 'NOPROMPT' };
+  return { ok: false, code: 'DENIED' };
 }
 
 /** The message Calendar itself gives, rather than a guess about what went wrong. */
@@ -328,15 +331,52 @@ const SETTINGS_HINT = 'System Settings › Privacy & Security › Calendars'
  */
 let authorized = false
 
+/**
+ * A refusal already seen this session.
+ *
+ * Without it every calendar query re-runs the whole authorisation dance, and a
+ * refusal that takes the timeout to establish is paid again on each refresh.
+ * `resetMacCalendarAuth` clears it, so granting access in System Settings and
+ * hitting refresh is enough to recover — no restart.
+ */
+let blocked: MacCalendarError | null = null
+
+/**
+ * osascript calls run strictly one at a time.
+ *
+ * The month view, the agenda pane and the reminder scheduler all ask for events
+ * at once. Each was spawning its own osascript, and each sat in the same
+ * authorisation wait — three processes deep, all blocked on the same dialog.
+ */
+let queue: Promise<unknown> = Promise.resolve()
+
+export function resetMacCalendarAuth(): void {
+  blocked = null
+}
+
 async function invoke<T>(args: Record<string, unknown>): Promise<T> {
   if (!isMac()) {
     throw new MacCalendarError('Apple Calendar is only available on macOS.', 'unavailable')
   }
+  if (blocked) throw blocked
+
+  const next = queue.then(
+    () => runBridge<T>(args),
+    () => runBridge<T>(args)
+  )
+  // The queue must not reject, or every later call inherits this one's failure.
+  queue = next.catch(() => undefined)
+  return next
+}
+
+async function runBridge<T>(args: Record<string, unknown>): Promise<T> {
+  if (blocked) throw blocked
   const script = await ensureScript()
 
   try {
     const { stdout } = await run('osascript', ['-l', 'JavaScript', script, JSON.stringify(args)], {
-      timeout: authorized ? 90_000 : 260_000,
+      // The one call that can sit behind a modal dialog is the first.
+      timeout: authorized ? 45_000 : 110_000,
       maxBuffer: 32 * 1024 * 1024
     })
 
@@ -375,8 +415,16 @@ async function invoke<T>(args: Record<string, unknown>): Promise<T> {
     authorized = true
     return parsed.data as T
   } catch (err) {
-    if (err instanceof MacCalendarError) throw err
-    throw new MacCalendarError((err as Error).message, 'failed')
+    const error =
+      err instanceof MacCalendarError
+        ? err
+        : new MacCalendarError((err as Error).message, 'failed')
+
+    // Anything about access rather than about this one query is remembered, so
+    // the next refresh fails immediately instead of queueing behind another
+    // authorisation wait. Refresh clears it.
+    if (error.code !== 'failed') blocked = error
+    throw error
   }
 }
 
