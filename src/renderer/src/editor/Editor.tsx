@@ -32,6 +32,8 @@ import { cycleStatus, isTaskLine, parseTaskLine, setStatusOnLine } from '@shared
 import { isFoldable, livePreview, toggleFold } from './live-preview'
 import { blockHandles } from './blocks'
 import { slashMenu } from './slash'
+import { wrapSelection } from './format'
+import { selectionToolbar } from './selection-toolbar'
 
 /**
  * CodeMirror injects its own base styles at a specificity plain CSS cannot beat,
@@ -98,23 +100,6 @@ const codeHighlight = HighlightStyle.define([
   { tag: tags.operator, color: 'var(--text-muted)' },
   { tag: tags.propertyName, color: 'var(--text)' }
 ])
-
-/** Wrap the selection (or word) in a marker — how bold and italic are applied. */
-function wrapSelection(view: EditorView, marker: string): boolean {
-  const changes = view.state.changeByRange((range) => {
-    const text = view.state.sliceDoc(range.from, range.to)
-    const already =
-      text.startsWith(marker) && text.endsWith(marker) && text.length > marker.length * 2
-    const insert = already ? text.slice(marker.length, -marker.length) : `${marker}${text}${marker}`
-    const delta = already ? -marker.length : marker.length
-    return {
-      changes: { from: range.from, to: range.to, insert },
-      range: EditorSelection.range(range.from + delta, range.to + delta)
-    }
-  })
-  view.dispatch(changes)
-  return true
-}
 
 function toggleTaskAtCursor(view: EditorView): boolean {
   const { state } = view
@@ -341,11 +326,14 @@ export function Editor({
         onHoverLink: (target, rect) => handlers.current.onHoverLink?.(target, rect),
         onHoverEnd: () => handlers.current.onHoverEnd?.()
       }),
+      selectionToolbar(),
       ...blockHandles(),
       fileHandlers,
       keymap.of([
         { key: 'Mod-b', run: (v) => wrapSelection(v, '**') },
         { key: 'Mod-i', run: (v) => wrapSelection(v, '*') },
+        // Not Mod-Shift-h, which already collapses the section below.
+        { key: 'Mod-Shift-m', run: (v) => wrapSelection(v, '==') },
         { key: 'Mod-`', run: (v) => wrapSelection(v, '`') },
         { key: 'Mod-Enter', run: toggleTaskAtCursor },
         { key: 'Mod-Shift-h', run: toggleFoldAtCursor },

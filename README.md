@@ -96,6 +96,12 @@ Settings › Subscribe to a calendar.
 Calendar.app, because Apple Events are slow enough to make a year-wide query
 visibly stall. macOS asks for calendar permission the first time.
 
+Since macOS 14 that permission comes in two grades, and only **full access** can
+read events — write-only lets Stone add an event but shows you an empty
+calendar. Stone asks for full access and names the difference if it only has the
+lesser one; if you see that message, switch it under System Settings › Privacy &
+Security › Calendars.
+
 **Microsoft Graph** needs a client ID from your own free Azure app registration
 (public client, `Calendars.ReadWrite` scope). Stone deliberately does not ship a
 shared one: that would put every install behind a single quota and a single
@@ -135,7 +141,20 @@ an evicted file is a file it cannot read.
 | `Ctrl/Cmd N` | New note |
 | `Ctrl/Cmd 1-5` | Today, Notes, Calendar, Tasks, Graph |
 | `Ctrl/Cmd B` `I` | Bold, italic |
+| `Ctrl/Cmd Shift M` | Highlight |
 | `Ctrl/Cmd Enter` | Turn the line into a task, or cycle its status |
+
+## Formatting
+
+Highlight any text and a formatting bar appears over it, the way Obsidian's
+does: bold, italic, strikethrough, `==highlight==`, inline code, a link or a
+`[[wikilink]]`, heading levels, quote, list, and task — plus **Tx** to strip
+inline markup back out.
+
+Every button is a toggle and shows its state, so pressing bold on text that is
+already bold unwraps it rather than nesting a second pair of asterisks. The bar
+waits for the pointer to come up before it appears, so it never chases a drag,
+and `Esc` dismisses it without losing the selection.
 
 ## Architecture
 
