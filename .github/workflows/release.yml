@@ -60,11 +60,18 @@ jobs:
       #
       # then set MACOS_SIGNING_CERT (the base64) and MACOS_SIGNING_CERT_PASSWORD.
       - name: Import signing certificate
-        if: runner.os == 'macOS' && secrets.MACOS_SIGNING_CERT != ''
+        # `secrets` can't be read from an `if:` — it isn't resolved yet when
+        # that's evaluated — so the presence check happens in the script below
+        # instead, against the env var it's copied into.
+        if: runner.os == 'macOS'
         env:
           MACOS_SIGNING_CERT: ${{ secrets.MACOS_SIGNING_CERT }}
           MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
         run: |
+          if [ -z "$MACOS_SIGNING_CERT" ]; then
+            echo "No MACOS_SIGNING_CERT secret set; skipping certificate import."
+            exit 0
+          fi
           KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
           PASSWORD="$(uuidgen)"
           security create-keychain -p "$PASSWORD" "$KEYCHAIN"
