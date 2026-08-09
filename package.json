@@ -1,6 +1,6 @@
 {
   "name": "stone",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Notes, tasks, and calendar over plain markdown files.",
   "main": "./out/main/index.js",
   "author": "Stone",
