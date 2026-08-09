@@ -55,6 +55,14 @@ function resolveIdentity() {
 export default async function signMac(context) {
   if (context.electronPlatformName !== 'darwin') return
 
+  // A universal build packs x64 and arm64 into throwaway `*-temp` directories,
+  // merges them, then packs the result — and electron-builder runs afterPack
+  // on all three, not just the last one. Signing the two temp bundles gives
+  // each its own _CodeSignature/CodeResources, and @electron/universal's merge
+  // requires every non-binary file to be byte-identical between them, so
+  // signing early breaks the merge before this hook ever sees the real app.
+  if (context.appOutDir.endsWith('-temp')) return
+
   const identity = resolveIdentity()
   const appPath = path.join(
     context.appOutDir,
