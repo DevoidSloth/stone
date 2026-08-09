@@ -125,6 +125,85 @@
   height: auto;
 }
 
+/* ------------------------------------------------------- embedded query */
+
+/*
+ * A query inside a note is a passage, not a screen. It is inset rather than
+ * boxed so the eye reads it as part of the document, and the rows are set a
+ * step down from body text so a long result never overpowers the prose it sits
+ * in.
+ */
+.cm-embed--query {
+  margin: var(--sp-2) 0;
+  padding: var(--sp-2) 0 var(--sp-2) var(--sp-3);
+  border-left: 2px solid var(--border);
+  font-size: var(--t-xs);
+}
+
+.embedq__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
+}
+
+.embedq__count {
+  font-size: var(--t-2xs);
+  color: var(--text-ghost);
+  font-variant-numeric: tabular-nums;
+}
+
+.embedq__row,
+.embedq__task {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: 2px var(--sp-1);
+  border-radius: var(--r-sm);
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.embedq__row:hover,
+.embedq__task:hover {
+  background: var(--bg-hover);
+}
+
+.embedq__label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.embedq__meta {
+  flex: 0 0 auto;
+  max-width: 40%;
+  font-size: var(--t-2xs);
+  color: var(--text-faint);
+}
+
+.embedq__empty,
+.embedq__warning,
+.embedq--error {
+  margin: 0;
+  padding: 2px var(--sp-1);
+  font-size: var(--t-2xs);
+  color: var(--text-faint);
+}
+
+.embedq--error,
+.embedq__warning {
+  color: var(--danger, #ee6b6b);
+}
+
 /* ----------------------------------------------------------------- maths */
 
 .cm-math {

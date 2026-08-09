@@ -329,6 +329,29 @@ export const IconRestore = (p: IconProps) => (
   </Icon>
 )
 
+export const IconPuzzle = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M6.4 2.6h3.2v1.6a1.4 1.4 0 1 0 2.8 0V2.6h1.2v3.2h-1.6a1.4 1.4 0 1 0 0 2.8h1.6v4.8H9.6v-1.6a1.4 1.4 0 1 0-2.8 0v1.6H2.6V8.6h1.6a1.4 1.4 0 1 0 0-2.8H2.6V2.6Z" />
+  </Icon>
+)
+
+export const IconRelation = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="4" cy="4" r="2.1" />
+    <circle cx="12" cy="12" r="2.1" />
+    <path d="M6.1 4H10a2 2 0 0 1 2 2v3.9" />
+  </Icon>
+)
+
+export const IconPalette = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M8 2a6 6 0 0 0 0 12c.9 0 1.4-.6 1.4-1.3 0-.9-.8-1.2-.8-2 0-.6.5-1 1.1-1H11a3 3 0 0 0 3-3c0-2.6-2.7-4.7-6-4.7Z" />
+    <circle cx="5.5" cy="7" r=".9" fill="currentColor" stroke="none" />
+    <circle cx="8" cy="5" r=".9" fill="currentColor" stroke="none" />
+    <circle cx="10.8" cy="6.6" r=".9" fill="currentColor" stroke="none" />
+  </Icon>
+)
+
 /**
  * A cleaved block of stone — the same hull the app icon is cut from, see
  * scripts/make-icon.cjs. Change one, change the other.

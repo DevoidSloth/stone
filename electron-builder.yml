@@ -30,6 +30,12 @@ nsis:
   createDesktopShortcut: always
   shortcutName: Stone
 
+# `stone://` links, so the clipper and any script can hand work to a running
+# instance. Declared per platform because each one registers schemes its own way.
+protocols:
+  - name: Stone
+    schemes: [stone]
+
 mac:
   target:
     - target: dmg
@@ -43,11 +49,17 @@ mac:
     NSCalendarsFullAccessUsageDescription: Stone shows your Apple Calendar events alongside your notes and tasks, and writes events you create in Stone back to Calendar.
     NSRemindersUsageDescription: Stone can mirror tasks into Reminders.
     NSAppleEventsUsageDescription: Stone uses Apple Events to read your calendars through EventKit.
-  # Both keys are needed. `entitlementsInherit` only covers the helper processes;
-  # without `entitlements` the app itself is signed with electron-builder's
-  # defaults, which carry no calendar entitlement, and EventKit refuses it.
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # Signing is handled by scripts/sign-mac.mjs instead of by electron-builder.
+  # electron-builder validates the trust chain of a signing identity and skips
+  # signing entirely when it cannot build one, which is what a self-signed
+  # certificate always looks like. An unsigned app is the cause of the calendar
+  # permission resetting on every update: with no certificate to anchor to,
+  # macOS pins the TCC grant to the binary's cdhash, which every build changes.
+  identity: null
+
+afterPack: scripts/sign-mac.mjs
 
 dmg:
   artifactName: ${productName}-${version}.${ext}

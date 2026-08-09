@@ -24,7 +24,7 @@ function TabStrip({ paneIndex }: { paneIndex: number }) {
   const closeTab = useStone((s) => s.closeTab)
   const closePane = useStone((s) => s.closePane)
   const splitPane = useStone((s) => s.splitPane)
-  const setPalette = useStone((s) => s.setPalette)
+  const createNote = useStone((s) => s.createNote)
 
   if (!pane) return null
 
@@ -67,9 +67,9 @@ function TabStrip({ paneIndex }: { paneIndex: number }) {
         <button
           type="button"
           className="tabstrip__new"
-          aria-label="Open a note in a new tab"
-          title="Open a note in a new tab"
-          onClick={() => setPalette(true)}
+          aria-label="New note in a new tab"
+          title="New note in a new tab"
+          onClick={() => void createNote('Untitled', undefined, { pane: paneIndex, newTab: true })}
         >
           <IconPlus size={13} />
         </button>

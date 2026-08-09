@@ -396,10 +396,21 @@ async function runBridge<T>(args: Record<string, unknown>): Promise<T> {
         'write-only'
       )
     }
+    /*
+     * macOS recorded no answer at all, which almost always means TCC is holding
+     * a grant for a build of Stone that no longer matches this one. An app with
+     * no signing certificate has nothing stable for TCC to anchor to, so the
+     * grant gets pinned to the binary's cdhash and the next build invalidates
+     * it — leaving a stale row that suppresses the prompt without granting
+     * anything. Clearing that row is the only thing that recovers it; quitting
+     * and reopening does not, and neither does the Settings pane, which has no
+     * entry to toggle.
+     */
     if (parsed.error === 'NOPROMPT') {
       throw new MacCalendarError(
-        'macOS would not show the calendar permission prompt. Quit and reopen Stone, then try ' +
-          `again — or add it yourself under ${SETTINGS_HINT}.`,
+        'macOS would not show the calendar permission prompt, which usually means it is ' +
+          'holding a stale permission record for an earlier build of Stone. Run ' +
+          '`tccutil reset Calendar com.stone.app` in Terminal, then reopen Stone.',
         'denied'
       )
     }

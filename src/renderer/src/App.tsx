@@ -1,6 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useStone } from './store'
-import { today } from './lib/dates'
+import { buildKeymap } from './commands'
+import { chordFromEvent } from './lib/keys'
 import { TitleBar } from './components/TitleBar'
 import { Sidebar } from './components/Sidebar'
 import { Panes } from './components/Panes'
@@ -11,12 +12,26 @@ import { GraphView } from './components/GraphView'
 import { SearchView } from './components/SearchView'
 import { TrashView } from './components/TrashView'
 import { DatabaseView } from './components/DatabaseView'
+import { CanvasView } from './components/CanvasView'
+import { LibraryView } from './components/LibraryView'
 import { SidePanels } from './components/SidePanels'
 import { AgendaPane } from './components/AgendaPane'
 import { CommandPalette } from './components/CommandPalette'
 import { QuickAdd } from './components/QuickAdd'
 import { SettingsModal } from './components/SettingsModal'
 import { Welcome } from './components/Welcome'
+
+/** True when the keystroke belongs to a field or the editor, not to a shortcut. */
+function isTyping(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null
+  if (!el || !el.tagName) return false
+  return (
+    el.tagName === 'INPUT' ||
+    el.tagName === 'TEXTAREA' ||
+    el.tagName === 'SELECT' ||
+    el.isContentEditable
+  )
+}
 
 function platformClass(): string {
   if (window.stone.platform === 'darwin') return 'is-mac'
@@ -30,12 +45,10 @@ export function App() {
   const view = useStone((s) => s.view)
   const toasts = useStone((s) => s.toasts)
   const boot = useStone((s) => s.boot)
-  const setView = useStone((s) => s.setView)
-  const setPalette = useStone((s) => s.setPalette)
-  const setQuickAdd = useStone((s) => s.setQuickAdd)
-  const openDaily = useStone((s) => s.openDaily)
-  const createNote = useStone((s) => s.createNote)
   const dismissToast = useStone((s) => s.dismissToast)
+
+  // Rebuilt only when the user rebinds something, not on every render.
+  const keymap = useMemo(() => buildKeymap(settings?.keybindings ?? {}), [settings?.keybindings])
 
   useEffect(() => {
     void boot()
@@ -47,107 +60,18 @@ export function App() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      const state = useStone.getState()
-      const mod = event.metaKey || event.ctrlKey
+      const chord = chordFromEvent(event)
+      if (!chord) return
+      const command = keymap.get(chord)
+      if (!command) return
 
-      // Back and forward: the mouse buttons and the platform chords.
-      if (mod && event.key === '[') {
-        event.preventDefault()
-        state.goBack()
-        return
-      }
-      if (mod && event.key === ']') {
-        event.preventDefault()
-        state.goForward()
-        return
-      }
-      if (event.altKey && !mod && event.key === 'ArrowLeft') {
-        event.preventDefault()
-        state.goBack()
-        return
-      }
-      if (event.altKey && !mod && event.key === 'ArrowRight') {
-        event.preventDefault()
-        state.goForward()
-        return
-      }
+      // A binding with no modifier is a letter someone might be typing. The old
+      // handler dodged this by only ever looking at Mod chords; now that any
+      // chord is bindable, text fields and the editor keep the keystroke.
+      if (!/\+/.test(chord) && isTyping(event.target)) return
 
-      if (!mod) return
-
-      if (event.shiftKey) {
-        switch (event.key.toLowerCase()) {
-          case 'f':
-            event.preventDefault()
-            setView('search')
-            return
-          case 'e':
-            event.preventDefault()
-            state.splitPane()
-            return
-          case 'o':
-            event.preventDefault()
-            state.togglePanel()
-            return
-        }
-        return
-      }
-
-      switch (event.key.toLowerCase()) {
-        case 'k':
-          event.preventDefault()
-          setPalette(true)
-          break
-        case 'n':
-          event.preventDefault()
-          void createNote('Untitled')
-          break
-        case 's': {
-          event.preventDefault()
-          const relPath = state.activeRelPath
-          if (relPath) void state.saveDoc(relPath)
-          break
-        }
-        case 'j':
-          event.preventDefault()
-          setQuickAdd(true)
-          break
-        case 't':
-          event.preventDefault()
-          void openDaily(today())
-          setView('today')
-          break
-        case 'w': {
-          event.preventDefault()
-          const pane = state.panes[state.activePane]
-          const tab = pane?.tabs[pane.active]
-          if (tab) state.closeTab(state.activePane, tab.id)
-          break
-        }
-        case '1':
-          event.preventDefault()
-          setView('today')
-          break
-        case '2':
-          event.preventDefault()
-          setView('notes')
-          break
-        case '3':
-          event.preventDefault()
-          setView('calendar')
-          break
-        case '4':
-          event.preventDefault()
-          setView('tasks')
-          break
-        case '5':
-          event.preventDefault()
-          setView('graph')
-          break
-        case '6':
-          event.preventDefault()
-          setView('views')
-          break
-      }
+      event.preventDefault()
+      command.run({ query: '' })
     }
 
     // Mouse thumb buttons, which is how most people navigate back.
@@ -168,7 +92,7 @@ export function App() {
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('mouseup', onMouse)
     }
-  }, [setPalette, setQuickAdd, setView, createNote, openDaily])
+  }, [keymap])
 
   if (!ready) {
     return (
@@ -212,6 +136,10 @@ export function App() {
               <TrashView />
             ) : view === 'views' ? (
               <DatabaseView />
+            ) : view === 'canvas' ? (
+              <CanvasView />
+            ) : view === 'library' ? (
+              <LibraryView />
             ) : view === 'today' ? (
               <TodayView />
             ) : (

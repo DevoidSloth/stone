@@ -95,6 +95,13 @@ const BLOCKS: Block[] = [
     snippet: '```math\n|\n```',
     wholeLine: true
   },
+  {
+    label: 'Query',
+    detail: 'A live list of notes or tasks',
+    keywords: 'query database view dataview list filter',
+    snippet: '```stone\nfrom: |\nwhere: status is active\nsort: edited desc\n```\n',
+    wholeLine: true
+  },
   { label: 'Link to a note', detail: 'A wikilink', keywords: 'link wikilink reference', snippet: '[[|]]' },
   { label: 'Embed a note', detail: 'Transclude another page', keywords: 'embed transclude include', snippet: '![[|]]' },
   { label: 'Tag', detail: 'File this note', keywords: 'tag label', snippet: '#|' },

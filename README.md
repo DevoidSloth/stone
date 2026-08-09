@@ -139,10 +139,40 @@ an evicted file is a file it cannot read.
 | `Ctrl/Cmd J` | Quick-add a task from anywhere |
 | `Ctrl/Cmd T` | Jump to today |
 | `Ctrl/Cmd N` | New note |
-| `Ctrl/Cmd 1-5` | Today, Notes, Calendar, Tasks, Graph |
+| `Ctrl/Cmd 1-8` | Today, Notes, Calendar, Tasks, Graph, Views, Canvas, Documents |
 | `Ctrl/Cmd B` `I` | Bold, italic |
 | `Ctrl/Cmd Shift M` | Highlight |
 | `Ctrl/Cmd Enter` | Turn the line into a task, or cycle its status |
+
+Every one of those is rebindable. Settings › Keyboard lists each command with the
+chords bound to it; click one to remove it, or record another. A command can
+answer to several, and a chord bound twice is called out rather than silently
+resolved. Bindings are stored by command id, so they survive an update.
+
+## Capture
+
+Quick-add used to answer only when Stone had focus, which is the moment you are
+least likely to need it. Three routes now bring it in from outside:
+
+- a **global shortcut** — `Ctrl/Cmd Shift Space` by default, rebindable, and it
+  says so plainly if another app already owns the combination;
+- a **menu-bar icon**, so capture survives the window being closed;
+- **`stone://` links** — `stone://capture?text=…`, `stone://open?path=…`,
+  `stone://daily` — which any script or app can fire.
+
+### The web clipper
+
+Turn it on in Settings › Capture and Stone listens on `127.0.0.1` for pages sent
+from the browser. Copy the bookmarklet it gives you into a bookmark; clicking it
+on any page sends your selection, or the whole article when nothing is selected,
+into your clippings folder as markdown with the source URL in frontmatter.
+
+That is an inbound socket in an app that otherwise has none, so it is fenced in:
+off unless you turn it on, bound to loopback so nothing off the machine can
+reach it, and every request carries a secret only your bookmarklet knows —
+because any page in your browser can reach a localhost port, and the token is
+what separates yours from a site that guessed the number. Reissue it whenever
+you like; the old bookmarklet stops working.
 
 ## Formatting
 
@@ -195,12 +225,155 @@ so cost stays near-linear instead of the O(n²) that makes naive versions stall
 past a few hundred notes. The layout cools and stops rather than spinning
 forever, and the view auto-frames once it has settled.
 
+## Databases
+
+A view is a saved query with a shape — table, board, gallery, list, timeline —
+over the notes you already have. The rows are notes, the columns are frontmatter
+keys Stone inferred a type for.
+
+Views also **write back**. Drag a card between board columns and it rewrites that
+note's grouping property; edit a table cell and it edits one line of YAML,
+leaving the rest of the file byte-identical. **New** creates a note that already
+satisfies the view's filters, so it does not vanish the moment it is created.
+Columns that describe the file rather than live in it — `folder`, `edited` — stay
+read-only, because you change those by moving or editing the note.
+
+### Relations and rollups
+
+A `[[link]]` in a frontmatter property is a *typed* link: the key says what the
+relationship is.
+
+```markdown
+---
+project: "[[Website rebuild]]"
+---
+```
+
+Both notes then show it in the Relations panel — outward, and inward on the note
+being pointed at, which is the half nobody writes by hand. A project note never
+lists its own tasks, and that incoming list is what you actually want.
+
+A **rollup** column follows one of those relations and summarises the far side:
+count, sum, average, min, max, earliest, latest, or a list. "Open tasks per
+project" is a rollup over the incoming `project` relation.
+
+Write the value quoted. `project: [[X]]` unquoted is a nested sequence in YAML,
+not a string — Stone reads both, but the quoted form is what every other tool
+will understand.
+
+## Queries inside notes
+
+A ```` ```stone ```` block is a live query, rendered where you wrote it:
+
+```stone
+from: Projects
+where: status is active
+sort: edited desc
+as: list
+limit: 10
+```
+
+or naming a view you already saved:
+
+```stone
+view: Active projects
+```
+
+`from`, `source` (`notes` or `tasks`), `where`, `sort`, `group`, `columns`, `as`,
+and `limit`. The syntax is `key: value` lines because that is the same shape as
+the frontmatter above it, it stays readable in any other editor, and a typo
+produces one wrong line rather than swallowing the query.
+
+This is what makes a daily note assemble itself. It is always a lens — a query
+block never writes.
+
+## Canvas
+
+An infinite board for the thinking that is not linear: cards you place yourself,
+notes embedded as cards, and arrows between them. Drag from any edge of a card to
+connect it; scroll to pan, `Cmd`-scroll to zoom.
+
+It saves as a `.canvas` file in the vault in the **JSON Canvas** format
+(jsoncanvas.org), which is the same format Obsidian uses — so a board made here
+opens there, and vice versa. Anything in the file Stone does not understand is
+carried through a save untouched rather than dropped.
+
+## Documents
+
+PDFs and GoodNotes notebooks, indexed where they already live. Point Stone at the
+iCloud folder GoodNotes writes to and it reads them in place — nothing is moved,
+copied, or rewritten. A folder can instead be set to copy into the vault, if you
+would rather the vault stayed self-contained.
+
+Text is extracted so documents turn up in search alongside notes. For a PDF that
+means the text layer; for a GoodNotes package it means an imported PDF if the
+notebook was built from one, and the handwriting-recognition results otherwise.
+PDFs render in the app through Chromium's own viewer; a GoodNotes document opens
+in GoodNotes, which is the only thing that can edit one.
+
+Be clear about the limits, because they decide whether a document is findable:
+
+- **Scanned PDFs have no text and never will here.** There is no OCR. They are
+  findable by name.
+- **Subsetted CID fonts** decode to glyph indices rather than letters. Stone
+  detects that and indexes nothing rather than filling search with noise, so
+  those are also name-only.
+- **The GoodNotes format is undocumented**, so everything read out of a package
+  is inference and a future GoodNotes release may change it. When that happens
+  the document still appears with its name, date, and a working "open in
+  GoodNotes" — that is the floor it degrades to, not an error.
+- **An evicted iCloud file is not on the machine.** Those are listed and marked
+  as not downloaded rather than silently omitted.
+
+## Themes and plugins
+
+A **theme** is one `.css` file in the vault's theme folder, chosen in Settings;
+snippets still stack on top of whichever theme is in force. One is replaced, the
+others accumulate — which is the only real difference between them.
+
+A **plugin** is a folder under `.stone/plugins` with a `manifest.json` and a
+`main.js`:
+
+```js
+stone.addCommand({
+  id: 'count',
+  name: 'Count my notes',
+  callback: async () => {
+    const notes = await stone.vault.list()
+    stone.notice(`You have ${notes.length} notes.`)
+  }
+})
+```
+
+Plugins do **not** run in Stone's window. Obsidian's run in its renderer with
+full access to the DOM and to Node, which is why its ecosystem is so large and
+why a malicious plugin there owns the machine. Stone's renderer is locked down —
+`contextIsolation`, no `nodeIntegration`, and a CSP with `script-src 'self'` that
+makes injected script a non-event — and widening that so third-party code could
+be loaded into it would trade away the app's best security property for a
+feature.
+
+So a plugin runs in an offscreen window with no vault access, no network, and no
+view of the interface. Everything it can actually do arrives back over IPC as a
+small set of verbs, each checked against the permissions its manifest declared
+and you approved when you switched it on. Ask to write without `vault-write` and
+the call is refused.
+
+The honest cost: a plugin cannot draw its own interface, because it has no DOM to
+draw into. It can add commands, respond to events, and read and write notes.
+
 ## Known gaps
 
-- No PDF or image embedding beyond standard markdown image syntax.
 - Google Calendar is read-only, via ICS subscription. Two-way Google sync would
   need OAuth and a verified app.
 - Recurring events from ICS feeds are expanded up to 2000 occurrences per
   series, which is a guard against malformed `RRULE`s rather than a real limit.
 - The week view lays overlapping events on top of each other instead of
   side-by-side columns.
+- No OCR, so scanned PDFs are findable by name only. See **Documents** for the
+  rest of what does and does not get indexed.
+- Plugins cannot draw interface, by design. See **Themes and plugins**.
+- Canvas has no multi-select marquee or undo of its own yet; deleting a card is
+  the one destructive action and it takes the selection, not the board.
+- There is still no mobile app. The vault is markdown in a synced folder, so
+  Obsidian on a phone reads the notes — but not Stone's tasks or calendar.

@@ -140,6 +140,18 @@ export interface PropertyDef {
   count: number
 }
 
+/**
+ * A resolved link written in frontmatter, rather than in the body.
+ *
+ * The property key is what makes it a relation and not just a backlink: it says
+ * what the connection *is*, which is what a rollup then aggregates over.
+ */
+export interface RelationEdge {
+  from: string
+  property: string
+  to: string
+}
+
 // ------------------------------------------------------------ database views
 
 export type ViewKind = 'table' | 'board' | 'gallery' | 'timeline' | 'list'
@@ -167,6 +179,26 @@ export interface ViewSort {
   direction: 'asc' | 'desc'
 }
 
+export type RollupFn = 'count' | 'sum' | 'average' | 'min' | 'max' | 'earliest' | 'latest' | 'list'
+
+/**
+ * A column computed from the notes a relation points at.
+ *
+ * `relation` names the frontmatter key to follow; `direction` decides whether
+ * to follow it outward (the notes this one links to) or back (the notes that
+ * link here), which is what makes "Project → its Tasks" expressible without
+ * anyone having to maintain both halves of the link by hand.
+ */
+export interface ViewRollup {
+  id: string
+  name: string
+  relation: string
+  direction: 'outgoing' | 'incoming'
+  fn: RollupFn
+  /** Property aggregated on the far side. Ignored by `count`. */
+  target: string
+}
+
 /** A named, saved query over the vault — Notion's database, over files. */
 export interface SavedView {
   id: string
@@ -182,6 +214,134 @@ export interface SavedView {
   groupBy: string | null
   /** Property keys shown as columns in table view. */
   columns: string[]
+  /** Computed columns that follow a relation and aggregate the far side. */
+  rollups?: ViewRollup[]
+}
+
+// ----------------------------------------------------------------- library
+
+/**
+ * A folder of documents Stone watches.
+ *
+ * `index` leaves the files where they are — the iCloud folder GoodNotes already
+ * writes to, a Downloads folder — and only reads them. `copy` imports anything
+ * new into the vault's attachments folder, so the vault stays self-contained.
+ * Both are legitimate: one keeps a single copy, the other keeps the vault
+ * portable, and which matters is not something the app can decide.
+ */
+export interface LibraryFolder {
+  id: string
+  path: string
+  label: string
+  mode: 'index' | 'copy'
+}
+
+export type DocumentKind = 'pdf' | 'goodnotes' | 'epub' | 'other'
+
+export interface LibraryDoc {
+  /** Absolute path for an indexed file; vault-relative for a copied one. */
+  id: string
+  path: string
+  name: string
+  kind: DocumentKind
+  folderId: string
+  /** Set when the file lives inside the vault and can use `stone-file://`. */
+  relPath: string | null
+  size: number
+  mtime: number
+  pageCount: number | null
+  /** True for an iCloud placeholder whose contents are not on this machine. */
+  evicted: boolean
+  /** Extraction problems worth telling the user about, rather than hiding. */
+  warning: string | null
+  /** Notes that link to this document. */
+  hasText: boolean
+}
+
+// ------------------------------------------------------------------ canvas
+
+/**
+ * JSON Canvas — the open format Obsidian's canvases use (jsoncanvas.org).
+ *
+ * Stone stores canvases in exactly that shape rather than inventing one, for
+ * the same reason notes are markdown: a `.canvas` file written here opens in
+ * Obsidian, and one written there opens here. The premise of the app is that
+ * you own the files, and a proprietary board format would quietly break it.
+ */
+export type CanvasSide = 'top' | 'right' | 'bottom' | 'left'
+
+interface CanvasNodeBase {
+  id: string
+  x: number
+  y: number
+  width: number
+  height: number
+  /** A preset index `"1"`–`"6"`, or a hex colour. */
+  color?: string
+}
+
+export type CanvasNode =
+  | (CanvasNodeBase & { type: 'text'; text: string })
+  | (CanvasNodeBase & { type: 'file'; file: string; subpath?: string })
+  | (CanvasNodeBase & { type: 'link'; url: string })
+  | (CanvasNodeBase & { type: 'group'; label?: string })
+
+export interface CanvasEdge {
+  id: string
+  fromNode: string
+  fromSide?: CanvasSide
+  toNode: string
+  toSide?: CanvasSide
+  color?: string
+  label?: string
+}
+
+export interface CanvasData {
+  nodes: CanvasNode[]
+  edges: CanvasEdge[]
+}
+
+export interface CanvasFile {
+  relPath: string
+  name: string
+  mtime: number
+}
+
+// ------------------------------------------------------ themes and plugins
+
+/** One stylesheet in the vault's theme folder, with its header metadata. */
+export interface ThemeInfo {
+  relPath: string
+  name: string
+  author: string | null
+  description: string | null
+}
+
+/** What a plugin is allowed to do. Checked in main on every API call. */
+export type PluginPermission = 'commands' | 'vault-read' | 'vault-write' | 'events'
+
+export interface PluginManifest {
+  id: string
+  name: string
+  version: string
+  description: string
+  author: string | null
+  permissions: PluginPermission[]
+}
+
+export interface LoadedPlugin extends PluginManifest {
+  /** Folder under `.stone/plugins`, which is also the id when none is stated. */
+  dir: string
+  enabled: boolean
+  /** Set when the plugin failed to parse, load, or run. */
+  error: string | null
+}
+
+/** A command a plugin registered, surfaced in Stone's own palette. */
+export interface PluginCommand {
+  pluginId: string
+  id: string
+  name: string
 }
 
 // ----------------------------------------------------------------- recovery
@@ -240,6 +400,11 @@ export interface Settings {
   weekStartsOn: 0 | 1
   /** Vim keybindings in the editor. */
   vimMode: boolean
+  /**
+   * Chords bound to each command, by command id, overriding its defaults.
+   * A command absent here keeps its default; one mapped to `[]` is unbound.
+   */
+  keybindings: Record<string, string[]>
   spellcheck: boolean
   /** Fire an OS notification when a task falls due. */
   remindersEnabled: boolean
@@ -247,8 +412,29 @@ export interface Settings {
   reminderLeadMinutes: number
   /** Keep a snapshot of each note on save, for recovery. */
   snapshotsEnabled: boolean
-  /** Vault-relative CSS files loaded into the renderer. */
+
+  // ------------------------------------------------------------- capture
+  /** System-wide chord that opens quick-add, in Electron accelerator form. */
+  captureShortcut: string | null
+  /** Show a tray icon, so capture survives the window being closed. */
+  trayEnabled: boolean
+  /** Listen on loopback for the browser clipper. Off unless asked for. */
+  clipperEnabled: boolean
+  clipperPort: number
+  /** Shared secret the bookmarklet presents. Regenerated on demand. */
+  clipperToken: string
+  /** Folder clipped pages are filed under. */
+  clipFolder: string
+  /** Vault-relative CSS files loaded into the renderer, on top of the theme. */
   cssSnippets: string[]
+  /** Folder inside the vault holding theme stylesheets. */
+  themeFolder: string
+  /** The one theme in force, by vault-relative path. */
+  activeTheme: string | null
+  /** Plugin ids the user has switched on. */
+  enabledPlugins: string[]
+  /** Folders of PDFs and GoodNotes documents Stone indexes. */
+  libraryFolders: LibraryFolder[]
   /** Notes pinned to the top of the sidebar. */
   favorites: string[]
   savedViews: SavedView[]
@@ -315,6 +501,17 @@ export interface GraphData {
   nodes: GraphNode[]
   edges: GraphEdge[]
 }
+
+/**
+ * Something to do, arriving from outside the window — the global chord, the
+ * tray, or a `stone://` link. Main raises the window and forwards one of these
+ * rather than acting itself, so the renderer's existing paths stay authoritative.
+ */
+export type CaptureAction =
+  | { type: 'quick-add'; text?: string }
+  | { type: 'open'; relPath: string }
+  | { type: 'daily' }
+  | { type: 'new-note'; title: string; content?: string }
 
 /** Emitted by main whenever the on-disk vault changes. */
 export type VaultEvent =

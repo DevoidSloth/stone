@@ -18,6 +18,7 @@ import {
   IconOutline,
   IconPlus,
   IconProperties,
+  IconRelation,
   IconRestore,
   IconTrash,
   IconX
@@ -35,10 +36,90 @@ const PANELS: { id: SidePanel; label: string; icon: (p: { size?: number }) => Re
   { id: 'outline', label: 'Outline', icon: IconOutline },
   { id: 'backlinks', label: 'Links', icon: IconLink },
   { id: 'properties', label: 'Properties', icon: IconProperties },
+  { id: 'relations', label: 'Relations', icon: IconRelation },
   { id: 'comments', label: 'Comments', icon: IconComment },
   { id: 'localgraph', label: 'Local graph', icon: IconGraph },
   { id: 'history', label: 'Versions', icon: IconHistory }
 ]
+
+// ---------------------------------------------------------------- relations
+
+/**
+ * Relations: the typed links this note is part of.
+ *
+ * Distinct from the Links panel, which answers "what mentions this?". A
+ * relation answers "what mentions this, and as *what*?" — the frontmatter key
+ * is the label on the edge. Both directions are shown, because the useful half
+ * is usually the one nobody wrote: a project note never lists its own tasks,
+ * and that incoming list is the thing you actually want when you open it.
+ */
+function RelationsPanel() {
+  const relPath = useStone((s) => s.activeRelPath)
+  const relations = useStone((s) => s.relations)
+  const notes = useStone((s) => s.notes)
+  const openNote = useStone((s) => s.openNote)
+
+  const byPath = useMemo(() => new Map(notes.map((n) => [n.relPath, n])), [notes])
+
+  const { outgoing, incoming } = useMemo(() => {
+    const out = new Map<string, string[]>()
+    const inc = new Map<string, string[]>()
+    for (const edge of relations) {
+      if (edge.from === relPath) out.set(edge.property, [...(out.get(edge.property) ?? []), edge.to])
+      if (edge.to === relPath) inc.set(edge.property, [...(inc.get(edge.property) ?? []), edge.from])
+    }
+    return { outgoing: out, incoming: inc }
+  }, [relations, relPath])
+
+  if (!relPath) return <p className="panel__empty">Open a note to see its relations.</p>
+
+  if (outgoing.size === 0 && incoming.size === 0) {
+    return (
+      <p className="panel__empty">
+        No relations yet. Put a <code>[[link]]</code> in a frontmatter property — say{' '}
+        <code>project: [[Website rebuild]]</code> — and both notes will show it here.
+      </p>
+    )
+  }
+
+  const group = (
+    label: string,
+    map: Map<string, string[]>,
+    verb: string
+  ): ReactElement | null => {
+    if (map.size === 0) return null
+    return (
+      <>
+        <div className="panel__section eyebrow">{label}</div>
+        {[...map.entries()].map(([property, paths]) => (
+          <div key={`${label}-${property}`} className="relgroup">
+            <div className="relgroup__key">
+              {verb} <b>{property}</b>
+            </div>
+            {[...new Set(paths)].map((path) => (
+              <button
+                key={path}
+                type="button"
+                className="panelrow"
+                onClick={() => void openNote(path)}
+              >
+                <b className="truncate">{byPath.get(path)?.title ?? path}</b>
+                <span className="panelrow__sub truncate">{byPath.get(path)?.excerpt ?? ''}</span>
+              </button>
+            ))}
+          </div>
+        ))}
+      </>
+    )
+  }
+
+  return (
+    <>
+      {group('Points at', outgoing, 'via')}
+      {group('Pointed at by', incoming, 'as their')}
+    </>
+  )
+}
 
 // ------------------------------------------------------------------ outline
 
@@ -641,6 +722,7 @@ export function SidePanels() {
             {panel === 'outline' && <OutlinePanel note={note} />}
             {panel === 'backlinks' && <LinksPanel />}
             {panel === 'properties' && <PropertiesPanel />}
+            {panel === 'relations' && <RelationsPanel />}
             {panel === 'comments' && <CommentsPanel />}
             {panel === 'localgraph' && <LocalGraphPanel />}
             {panel === 'history' && <HistoryPanel />}

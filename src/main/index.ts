@@ -2,9 +2,12 @@ import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import { registerIpc, vault } from './ipc'
-import { loadSettings, saveSettings } from './settings'
+import { loadSettings, peekSettings, saveSettings } from './settings'
 import { CHROME_BG, OVERLAY } from './window-chrome'
 import { registerProtocolHandler, registerProtocolScheme } from './protocol'
+import { handleUrl, registerCapture, teardownCapture, urlFromArgv } from './capture'
+import { stopClipper } from './clipper'
+import { reloadPlugins, shutdownPlugins } from './plugins'
 
 const isDev = !app.isPackaged
 
@@ -149,13 +152,34 @@ app.whenReady().then(async () => {
   const settings = await loadSettings()
   nativeTheme.themeSource = settings.theme === 'system' ? 'system' : settings.theme
 
-  registerProtocolHandler(vault)
+  // The library roots are read live rather than captured, so adding a folder
+  // takes effect without a restart — and removing one revokes access at once.
+  registerProtocolHandler(vault, () => {
+    const roots = peekSettings().libraryFolders.map((f) => f.path)
+    // Thumbnails are cached outside any watched folder but are ours to serve.
+    return [...roots, path.join(app.getPath('userData'), 'thumbnails')]
+  })
   registerIpc()
+
+  registerCapture(
+    {
+      // Capture has to work with the window closed, which on macOS is the
+      // normal state of a running app — so this creates one when there is none
+      // rather than dropping the keystroke.
+      ensureWindow: async () => BrowserWindow.getAllWindows()[0] ?? (await createWindow())
+    },
+    { shortcut: settings.captureShortcut, tray: settings.trayEnabled }
+  )
 
   // Reopen the last vault before the window paints, so the UI never flashes empty.
   if (settings.vaultPath) {
     try {
       await vault.open(settings.vaultPath)
+      // Reopening the last vault bypasses the IPC handler, so start its plugins
+      // here too — otherwise they only ever run after an explicit vault change.
+      if (settings.enabledPlugins.length > 0) {
+        void reloadPlugins(settings.vaultPath, settings.enabledPlugins).catch(() => undefined)
+      }
     } catch {
       await saveSettings({ vaultPath: null })
     }
@@ -174,13 +198,23 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   void vault.close()
+  teardownCapture()
+  stopClipper()
+  shutdownPlugins()
 })
 
 // A second instance should focus the existing window rather than open a rival vault.
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
+    // On Windows and Linux a `stone://` link starts a second process, and the
+    // URL rides in on its argv — this is the only place it can be read.
+    const url = urlFromArgv(argv)
+    if (url) {
+      handleUrl(url)
+      return
+    }
     const [win] = BrowserWindow.getAllWindows()
     if (win) {
       if (win.isMinimized()) win.restore()

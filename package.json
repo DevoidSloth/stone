@@ -16,7 +16,8 @@
     "dist:win": "electron-vite build && electron-builder --win --publish never",
     "dist:mac": "electron-vite build && electron-builder --mac --publish never",
     "dist": "electron-vite build && electron-builder --win --mac --publish never",
-    "postinstall": "electron-builder install-app-deps"
+    "signing-cert": "./scripts/make-signing-cert.sh",
+    "postinstall": "electron-builder install-app-deps && node scripts/patch-dev-electron.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

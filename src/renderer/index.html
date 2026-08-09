@@ -8,12 +8,18 @@
       This CSP makes that a guarantee rather than a habit.
 
       `stone-file:` is Stone's own scheme, handled in main and resolved strictly
-      inside the open vault — it is how embedded images load without granting
-      the renderer the whole filesystem the way `file:` would.
+      inside the open vault — or, for the document library, inside the folders
+      you explicitly asked Stone to watch. It is how embedded images load, and
+      how a PDF reaches Chromium's viewer, without granting the renderer the
+      whole filesystem the way `file:` would.
+
+      `frame-src` is listed for that PDF viewer alone. Note what is still
+      withheld: `script-src` remains `'self'`, so nothing loaded over the scheme
+      can execute, and there is no network origin anywhere in this policy.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: stone-file:; media-src 'self' stone-file:; connect-src 'self' stone-file:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: stone-file:; media-src 'self' stone-file:; frame-src stone-file:; connect-src 'self' stone-file:"
     />
     <title>Stone</title>
   </head>

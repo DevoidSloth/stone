@@ -1,10 +1,10 @@
 import { net, protocol } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { STONE_PROTOCOL, toProtocolUrl } from '@shared/attachments'
+import { DOC_HOST, STONE_PROTOCOL, toDocumentUrl, toProtocolUrl } from '@shared/attachments'
 import type { Vault } from './vault/store'
 
-export { STONE_PROTOCOL, toProtocolUrl }
+export { STONE_PROTOCOL, toDocumentUrl, toProtocolUrl }
 
 /**
  * `stone-file://` — read-only access to files inside the open vault.
@@ -35,26 +35,42 @@ export function registerProtocolScheme(): void {
   ])
 }
 
-export function registerProtocolHandler(vault: Vault): void {
-  protocol.handle(STONE_PROTOCOL, async (request) => {
-    const root = vault.vaultPath
-    if (!root) return new Response('No vault is open.', { status: 404 })
+/** True when `absolute` sits at or under `root`. */
+function contains(root: string, absolute: string): boolean {
+  const resolvedRoot = path.resolve(root)
+  return absolute === resolvedRoot || absolute.startsWith(resolvedRoot + path.sep)
+}
 
+export function registerProtocolHandler(vault: Vault, libraryRoots: () => string[]): void {
+  protocol.handle(STONE_PROTOCOL, async (request) => {
+    let host: string
     let relative: string
     try {
-      // `stone-file://vault/Attachments/a.png` — the host segment is a fixed
-      // label so the URL parses as a standard scheme; only the path matters.
+      // `stone-file://vault/Attachments/a.png` — the host segment names which
+      // set of roots the path is resolved against; only two are ever valid.
       const url = new URL(request.url)
+      host = url.hostname
       relative = decodeURIComponent(url.pathname).replace(/^\/+/, '')
     } catch {
       return new Response('Bad request.', { status: 400 })
     }
     if (!relative) return new Response('Not found.', { status: 404 })
 
-    const absolute = path.resolve(root, ...relative.split('/'))
-    const resolvedRoot = path.resolve(root)
-    if (absolute !== resolvedRoot && !absolute.startsWith(resolvedRoot + path.sep)) {
-      return new Response('Refused.', { status: 403 })
+    let absolute: string
+
+    if (host === DOC_HOST) {
+      // A library document lives outside the vault by design, so the guard here
+      // is the set of folders the user explicitly added rather than one root.
+      // Everything else on the disk stays exactly as unreachable as before.
+      absolute = path.resolve(`/${relative}`)
+      if (!libraryRoots().some((root) => contains(root, absolute))) {
+        return new Response('Refused.', { status: 403 })
+      }
+    } else {
+      const root = vault.vaultPath
+      if (!root) return new Response('No vault is open.', { status: 404 })
+      absolute = path.resolve(root, ...relative.split('/'))
+      if (!contains(root, absolute)) return new Response('Refused.', { status: 403 })
     }
 
     try {

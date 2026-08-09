@@ -1,0 +1,213 @@
+/*
+ * The document library.
+ *
+ * A grid of covers with a viewer that slides in beside it, rather than a modal:
+ * comparing a document against the list you found it in is the common case, and
+ * a modal makes that impossible.
+ */
+
+.library {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.library__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border-hair);
+}
+
+.library__search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 1;
+  max-width: 420px;
+  color: var(--text-ghost);
+}
+
+.library__search .field {
+  flex: 1;
+}
+
+.library__count {
+  margin-left: auto;
+  font-size: var(--t-2xs);
+  color: var(--text-ghost);
+  font-variant-numeric: tabular-nums;
+}
+
+.library__folders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+}
+
+.library__folders em {
+  margin-left: var(--sp-1);
+  font-style: normal;
+  color: var(--text-ghost);
+}
+
+.library__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.library__grid {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--sp-3);
+  align-content: start;
+  padding: var(--sp-4);
+  overflow-y: auto;
+}
+
+.libcard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.libcard:hover {
+  background: var(--bg-hover);
+}
+
+.libcard[data-active='true'] {
+  border-color: var(--border);
+  background: var(--bg-surface);
+}
+
+/*
+ * A fixed aspect ratio for every cover, so the grid stays a grid whatever the
+ * page proportions of the documents in it.
+ */
+.libcard__cover {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  object-position: top center;
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-sm);
+  background: var(--bg-page);
+}
+
+.libcard__cover--blank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--t-xs);
+  letter-spacing: 0.08em;
+  color: var(--text-ghost);
+}
+
+.libcard b {
+  font-size: var(--t-xs);
+  font-weight: 500;
+}
+
+.libcard__meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--t-2xs);
+  color: var(--text-faint);
+}
+
+.libcard__excerpt {
+  font-size: var(--t-2xs);
+  line-height: 1.45;
+  color: var(--text-faint);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.libcard__warn {
+  font-size: var(--t-2xs);
+  color: var(--text-ghost);
+}
+
+/* ----------------------------------------------------------------- viewer */
+
+.library__viewer {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 min(56%, 780px);
+  min-width: 0;
+  border-left: 1px solid var(--border-hair);
+}
+
+.library__viewerhead {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border-hair);
+}
+
+.library__viewerhead b {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--t-xs);
+  font-weight: 500;
+}
+
+.library__frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: var(--bg-sunken, var(--bg-surface));
+}
+
+.library__text {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-4);
+}
+
+.library__text pre {
+  margin: var(--sp-3) 0 0;
+  font-size: var(--t-2xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-muted);
+}
+
+.library__warning {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--t-2xs);
+  color: var(--text-faint);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-hair);
+}
+
+.library__cite {
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--border-hair);
+}
+
+.empty__actions {
+  display: flex;
+  gap: var(--sp-2);
+  justify-content: center;
+}

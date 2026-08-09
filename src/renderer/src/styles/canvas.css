@@ -1,0 +1,233 @@
+/*
+ * The canvas.
+ *
+ * Two stacked layers inside one transformed world: an SVG for edges underneath,
+ * absolutely positioned cards above. Both are scaled by the same transform on
+ * the parent, so a zoom is one composited operation rather than a re-layout of
+ * every node.
+ */
+
+.canvasview {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.canvasview__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border-hair);
+}
+
+.canvasview__tools {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+.canvasview__zoom {
+  min-width: 44px;
+  text-align: right;
+  font-size: var(--t-2xs);
+  color: var(--text-ghost);
+  font-variant-numeric: tabular-nums;
+}
+
+.canvasview__swatches {
+  display: flex;
+  gap: 4px;
+}
+
+.swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.swatch--none {
+  background: transparent;
+  position: relative;
+}
+
+.swatch--none::after {
+  content: '';
+  position: absolute;
+  inset: 3px 0;
+  border-top: 1px solid var(--text-ghost);
+  transform: rotate(-45deg);
+}
+
+.canvasview__surface {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+  /* The board is its own plane; it should not read as part of the page. */
+  background: var(--bg-sunken, var(--bg-surface));
+}
+
+.canvasview__surface:active {
+  cursor: grabbing;
+}
+
+.canvasview__world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  transform-origin: 0 0;
+  /* A dot grid, which reads as a surface without competing with the cards. */
+  background-image: radial-gradient(circle, var(--border-hair) 1px, transparent 1px);
+}
+
+/*
+ * Edges are drawn in a viewBox-less SVG sized far larger than any board, so
+ * coordinates map one-to-one onto the world's own. Negative positions are
+ * reachable because the box starts well to the top-left of the origin.
+ */
+.canvasview__edges {
+  position: absolute;
+  left: -10000px;
+  top: -10000px;
+  width: 20000px;
+  height: 20000px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.canvasview__edges > g,
+.canvasview__edges > path {
+  transform: translate(10000px, 10000px);
+}
+
+/* ------------------------------------------------------------------ nodes */
+
+.cnode {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-page);
+  color: var(--text);
+  cursor: grab;
+  overflow: hidden;
+}
+
+.cnode[data-selected='true'] {
+  border-color: var(--accent, var(--text-faint));
+  box-shadow: 0 0 0 2px var(--accent, var(--text-faint));
+}
+
+.cnode__text {
+  font-size: var(--t-xs);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow: hidden;
+}
+
+.cnode__hint {
+  color: var(--text-ghost);
+}
+
+.cnode__editor {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  resize: none;
+  outline: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--t-xs);
+  line-height: 1.55;
+}
+
+.cnode__title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--t-xs);
+  font-weight: 500;
+  color: var(--text-strong);
+}
+
+.cnode__excerpt {
+  font-size: var(--t-2xs);
+  line-height: 1.5;
+  color: var(--text-faint);
+  overflow: hidden;
+  /* Fades rather than clips, so a card never looks truncated mid-word. */
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+
+/* -------------------------------------------------------- ports and grips */
+
+/*
+ * Ports stay invisible until the card is hovered. Four dots on every card at
+ * all times turns a board into a circuit diagram.
+ */
+.cnode__port {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid var(--bg-page);
+  background: var(--text-ghost);
+  opacity: 0;
+  cursor: crosshair;
+  transition: opacity 120ms ease;
+}
+
+.cnode:hover .cnode__port,
+.cnode[data-selected='true'] .cnode__port {
+  opacity: 1;
+}
+
+.cnode__port--top {
+  top: -5px;
+  left: calc(50% - 5px);
+}
+.cnode__port--bottom {
+  bottom: -5px;
+  left: calc(50% - 5px);
+}
+.cnode__port--left {
+  left: -5px;
+  top: calc(50% - 5px);
+}
+.cnode__port--right {
+  right: -5px;
+  top: calc(50% - 5px);
+}
+
+.cnode__resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  opacity: 0;
+}
+
+.cnode:hover .cnode__resize {
+  opacity: 1;
+  background: linear-gradient(
+    135deg,
+    transparent 50%,
+    var(--text-ghost) 50%,
+    var(--text-ghost) 60%,
+    transparent 60%
+  );
+}

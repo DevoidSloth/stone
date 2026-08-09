@@ -319,7 +319,16 @@ export function Editor({
       placeholder('Type / for blocks, [[ to link a note, # for a tag, and ⌘⏎ to make a task.'),
       livePreview({
         onOpenWikilink: (target) => handlers.current.onOpenWikilink(target),
-        onOpenUrl: (url) => void window.stone.shell.openExternal(url),
+        onOpenUrl: (url) => {
+          // A link to a library document is a local path, which `openExternal`
+          // refuses by design. Those go to the library's own opener, which is
+          // checked against the watched folders in main.
+          if (url.startsWith('file://')) {
+            void window.stone.library.openExternally(decodeURIComponent(url.slice('file://'.length)))
+            return
+          }
+          void window.stone.shell.openExternal(url)
+        },
         onSelectTag: (tag) => handlers.current.onSelectTag(tag),
         loadEmbed: (target) => handlers.current.loadEmbed?.(target) ?? Promise.resolve(null),
         attachmentsFolder: () => handlers.current.attachmentsFolder ?? 'Attachments',

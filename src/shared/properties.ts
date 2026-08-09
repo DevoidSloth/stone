@@ -16,11 +16,25 @@ export const RESERVED_KEYS = new Set(['icon', 'cover', 'title', 'aliases', 'tags
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2})?$/
 const URL_RE = /^https?:\/\/\S+$/
 
+const WIKILINK_ONLY_RE = /^\[\[([^\]]+)\]\]$/
+
 function typeOfValue(value: unknown): PropertyType {
   if (typeof value === 'boolean') return 'checkbox'
   if (typeof value === 'number') return 'number'
   if (value instanceof Date) return 'date'
-  if (Array.isArray(value)) return 'multi'
+  if (Array.isArray(value)) {
+    // A list of links is still a relation — one that happens to point at several
+    // notes. Calling it multi-select would turn "Projects: [[A]], [[B]]" into two
+    // opaque tags and lose the only thing that made it worth writing as links.
+    //
+    // A nested array is the unquoted `key: [[Name]]` case, which YAML has
+    // already stripped the brackets from — see `relationTargets`.
+    const entries = value.filter((v) => v != null && v !== '')
+    if (entries.length === 0) return 'multi'
+    if (entries.every((v) => Array.isArray(v))) return 'relation'
+    if (entries.every((v) => WIKILINK_ONLY_RE.test(String(v).trim()))) return 'relation'
+    return 'multi'
+  }
   if (typeof value === 'string') {
     if (ISO_DATE_RE.test(value.trim())) return 'date'
     if (URL_RE.test(value.trim())) return 'url'
@@ -112,6 +126,49 @@ export function inferProperties(
   }
 
   return out.sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
+}
+
+/**
+ * The link targets a relation property points at, unresolved.
+ *
+ * Accepts the shapes people actually write: one link, a YAML list of links, or
+ * a single string holding several. Resolving these to notes is the vault's job
+ * — aliases and basenames are only known there.
+ *
+ * The awkward case is an *unquoted* `project: [[Website rebuild]]`, which is
+ * what everyone types because that is how a link looks. YAML reads it as a
+ * sequence nested in a sequence, so by the time it arrives here the brackets
+ * are gone and it is `[["Website rebuild"]]`. A nested array is therefore
+ * treated as a link in its own right — otherwise the most common way of
+ * writing a relation is the one way that silently does not work.
+ */
+export function relationTargets(value: unknown): string[] {
+  const out: string[] = []
+
+  const visit = (entry: unknown, nested: boolean): void => {
+    if (entry == null) return
+
+    if (Array.isArray(entry)) {
+      // A bare inner array is YAML's rendering of `[[Name]]`; its items are
+      // the link text. A top-level array is just a list of values.
+      if (nested) {
+        const name = entry.map((v) => String(v)).join(', ').trim()
+        if (name) out.push(name)
+        return
+      }
+      for (const item of entry) visit(item, true)
+      return
+    }
+
+    const text = String(entry)
+    for (const match of text.matchAll(/\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|[^\]]*)?\]\]/g)) {
+      const name = match[1].trim()
+      if (name) out.push(name)
+    }
+  }
+
+  visit(value, false)
+  return out
 }
 
 /** Render a property for display in a table cell or card. */

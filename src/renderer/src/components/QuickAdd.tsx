@@ -11,6 +11,7 @@ import { formatTime, relativeDay } from '../lib/dates'
  */
 export function QuickAdd() {
   const open = useStone((s) => s.quickAddOpen)
+  const seed = useStone((s) => s.quickAddSeed)
   const setQuickAdd = useStone((s) => s.setQuickAdd)
   const quickAddTask = useStone((s) => s.quickAddTask)
   const selectedDay = useStone((s) => s.selectedDay)
@@ -23,11 +24,16 @@ export function QuickAdd() {
 
   useEffect(() => {
     if (open) {
-      setValue('')
+      // Capture can arrive carrying text — a `stone://capture?text=…` link, or
+      // a selection sent from the browser — so open on that rather than empty.
+      setValue(seed)
       setLiteral(false)
-      requestAnimationFrame(() => inputRef.current?.focus())
+      requestAnimationFrame(() => {
+        inputRef.current?.focus()
+        inputRef.current?.select()
+      })
     }
-  }, [open])
+  }, [open, seed])
 
   const parsed = useMemo(
     () => parseQuickAdd(value, new Date(), { weekStartsOn }),

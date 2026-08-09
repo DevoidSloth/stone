@@ -1,6 +1,8 @@
 import { useStone, type View } from '../store'
 import {
+  IconBoard,
   IconCalendar,
+  IconFolder,
   IconGraph,
   IconNote,
   IconSearch,
@@ -17,7 +19,9 @@ const VIEWS: { id: View; label: string; icon: typeof IconNote; key: string }[] =
   { id: 'notes', label: 'Notes', icon: IconNote, key: '2' },
   { id: 'calendar', label: 'Calendar', icon: IconCalendar, key: '3' },
   { id: 'tasks', label: 'Tasks', icon: IconTasks, key: '4' },
-  { id: 'graph', label: 'Graph', icon: IconGraph, key: '5' }
+  { id: 'graph', label: 'Graph', icon: IconGraph, key: '5' },
+  { id: 'canvas', label: 'Canvas', icon: IconBoard, key: '7' },
+  { id: 'library', label: 'Documents', icon: IconFolder, key: '8' }
 ]
 
 function vaultName(path: string | null): string {

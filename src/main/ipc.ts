@@ -4,6 +4,7 @@ import path from 'node:path'
 import type {
   CalEvent,
   CalendarAccount,
+  CanvasData,
   Priority,
   SearchOptions,
   Settings,
@@ -11,6 +12,7 @@ import type {
 } from '@shared/types'
 import {
   buildTaskLine,
+  parseQuickAdd,
   rollRecurrence,
   setDueOnLine,
   setPriorityOnLine,
@@ -29,7 +31,35 @@ import { exportHtml, exportMarkdown, exportPdf, exportVault, revealExport } from
 import { runImport, type ImportKind } from './import'
 import { addComment, listComments, removeComment, updateComment } from './comments'
 import { checkReminders, startReminders, stopReminders } from './notify'
-import { toProtocolUrl } from './protocol'
+import { toDocumentUrl, toProtocolUrl } from './protocol'
+import {
+  documentText,
+  documentThumbnail,
+  importDocument,
+  listDocuments,
+  loadCache,
+  scanLibrary,
+  searchDocuments
+} from './library'
+import { setCaptureShortcut, setTrayEnabled } from './capture'
+import { listThemes, readTheme } from './themes'
+import { createCanvas, deleteCanvas, listCanvases, readCanvas, writeCanvas } from './canvas'
+import {
+  configurePluginHost,
+  discoverPlugins,
+  handlePluginApi,
+  pluginCommands,
+  reloadPlugins,
+  runPluginCommand
+} from './plugins'
+import {
+  bookmarkletSource,
+  clipperRunning,
+  newToken,
+  startClipper,
+  stopClipper,
+  type ClipperHooks
+} from './clipper'
 
 export const vault = new Vault()
 const calendar = new CalendarService(vault)
@@ -66,6 +96,44 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
+/**
+ * What the clipper is allowed to do to the vault.
+ *
+ * Deliberately two narrow operations rather than a general write: the listener
+ * is the least trusted thing in the process, so it gets a verb, not a path.
+ */
+const clipperHooks: ClipperHooks = {
+  async saveClip(clip) {
+    const settings = await loadSettings()
+    const frontmatter = [
+      '---',
+      `date: ${toISODate(new Date())}`,
+      ...(clip.url ? [`source: ${clip.url}`] : []),
+      ...(clip.tags.length > 0 ? [`tags: [${clip.tags.join(', ')}]`] : []),
+      '---',
+      '',
+      clip.markdown,
+      ''
+    ].join('\n')
+
+    const created = await vault.createNote(settings.clipFolder, clip.title, frontmatter)
+    if ('error' in created) throw new Error(created.error)
+    broadcast('vault:event', { type: 'reindexed', count: 1 })
+    return created.relPath
+  },
+
+  async saveTask(text) {
+    const settings = await loadSettings()
+    const parsed = parseQuickAdd(text)
+    const line = buildTaskLine(parsed)
+    const day = parsed.due ? parsed.due.slice(0, 10) : toISODate(new Date())
+    const result = await vault.addTaskToDaily(day, settings.dailyFolder, line)
+    if ('error' in result) throw new Error(result.error)
+    broadcast('vault:event', { type: 'reindexed', count: 1 })
+    return result.relPath
+  }
+}
+
 /** Load a template note's body, or null when none is configured or readable. */
 async function readTemplate(relPath: string | null): Promise<string | null> {
   if (!relPath || !vault.vaultPath) return null
@@ -79,8 +147,54 @@ async function readTemplate(relPath: string | null): Promise<string | null> {
 export function registerIpc(): void {
   vault.on('vault-event', (event) => broadcast('vault:event', event))
 
-  void loadSettings().then((settings) => {
+  configurePluginHost({
+    readNote: async (relPath) => (await vault.getNote(relPath))?.content ?? null,
+    writeNote: async (relPath, content) => {
+      const result = await vault.saveNote(relPath, content)
+      if (!result.ok) throw new Error(result.error)
+    },
+    listNotes: () => vault.listNotes().map((n) => ({ relPath: n.relPath, title: n.title })),
+    notice: (message) =>
+      broadcast('vault:event', { type: 'reminder', title: 'Plugin', body: message, relPath: null }),
+    onCommandsChanged: (commands) => broadcast('plugins:commands', commands),
+    preloadPath: path.join(__dirname, '../preload/plugin-host.js'),
+    loadHost: async (win) => {
+      const devUrl = process.env.ELECTRON_RENDERER_URL
+      if (devUrl) await win.loadURL(`${devUrl}/plugin-host.html`)
+      else await win.loadFile(path.join(__dirname, '../renderer/plugin-host.html'))
+    }
+  })
+
+
+  void loadSettings().then(async (settings) => {
     vault.snapshotsEnabled = settings.snapshotsEnabled
+
+    // The library is scanned in the background: extraction reads whole files,
+    // and a first run over a large GoodNotes folder takes long enough that
+    // doing it before the window paints would look like a hang.
+    if (settings.libraryFolders.length > 0) {
+      await loadCache()
+      void scanLibrary(settings.libraryFolders)
+        .then((found) => broadcast('library:scanned', found))
+        .catch(() => undefined)
+    }
+
+    // The clipper was left on, so bring it back up. A port already in use is
+    // reported rather than retried — something else owns it, and silently
+    // moving to another port would break the bookmarklet the user installed.
+    if (settings.clipperEnabled && settings.clipperToken) {
+      void startClipper(settings.clipperPort, settings.clipperToken, clipperHooks).catch(
+        (err: Error) => {
+          broadcast('vault:event', {
+            type: 'reminder',
+            title: 'Web clipper',
+            body: `Could not listen on port ${settings.clipperPort}: ${err.message}`,
+            relPath: null
+          })
+        }
+      )
+    }
+
     startReminders(
       { tasks: () => vault.allTasks(), events: upcomingEvents },
       () => ({
@@ -137,7 +251,13 @@ export function registerIpc(): void {
 
   handle('vault:open', async (vaultPath: string) => {
     await vault.open(vaultPath)
-    await saveSettings({ vaultPath, firstRunComplete: true })
+    const settings = await saveSettings({ vaultPath, firstRunComplete: true })
+    // Plugins live inside the vault, so opening one is what makes them exist.
+    // A failure here is the plugin's problem, not the vault's — it is reported
+    // per plugin in the manager rather than aborting the open.
+    if (settings.enabledPlugins.length > 0) {
+      void reloadPlugins(vaultPath, settings.enabledPlugins).catch(() => undefined)
+    }
     return { vaultPath, stats: vault.stats() }
   })
 
@@ -340,6 +460,7 @@ export function registerIpc(): void {
   // ---------------------------------------------------------- properties
 
   handle('vault:properties', () => vault.properties())
+  handle('vault:relations', () => vault.relations())
 
   handle('tags:rename', (from: string, to: string) => vault.renameTag(from, to))
 
@@ -409,6 +530,250 @@ export function registerIpc(): void {
     )
     if (result) await vault.reindex()
     return result
+  })
+
+  // -------------------------------------------------- capture and clipper
+
+  handle('capture:setShortcut', async (chord: string | null) => {
+    const ok = setCaptureShortcut(chord)
+    // Store it either way: a chord another app has claimed is still the user's
+    // choice, and it may well be free the next time Stone starts.
+    await saveSettings({ captureShortcut: chord })
+    return { ok }
+  })
+
+  handle('capture:setTray', async (enabled: boolean) => {
+    setTrayEnabled(enabled)
+    await saveSettings({ trayEnabled: enabled })
+    return true
+  })
+
+  handle('clipper:status', async () => {
+    const settings = await loadSettings()
+    return {
+      running: clipperRunning(),
+      port: settings.clipperPort,
+      bookmarklet: settings.clipperToken
+        ? bookmarkletSource(settings.clipperPort, settings.clipperToken)
+        : ''
+    }
+  })
+
+  handle('clipper:setEnabled', async (enabled: boolean) => {
+    const settings = await loadSettings()
+    if (!enabled) {
+      stopClipper()
+      await saveSettings({ clipperEnabled: false })
+      return { running: false, bookmarklet: '' }
+    }
+    // First time on, mint a token. Reusing an empty one would leave the
+    // listener effectively open to any page that finds the port.
+    const token = settings.clipperToken || newToken()
+    await startClipper(settings.clipperPort, token, clipperHooks)
+    await saveSettings({ clipperEnabled: true, clipperToken: token })
+    return {
+      running: true,
+      bookmarklet: bookmarkletSource(settings.clipperPort, token)
+    }
+  })
+
+  handle('clipper:regenerateToken', async () => {
+    const settings = await loadSettings()
+    const token = newToken()
+    await saveSettings({ clipperToken: token })
+    if (settings.clipperEnabled) await startClipper(settings.clipperPort, token, clipperHooks)
+    return { bookmarklet: bookmarkletSource(settings.clipperPort, token) }
+  })
+
+  // ---------------------------------------------------------------- library
+
+  handle('library:list', () => listDocuments())
+
+  handle('library:scan', async () => {
+    const settings = await loadSettings()
+    const found = await scanLibrary(settings.libraryFolders)
+
+    // `copy` folders bring anything new into the vault. Done after the scan so
+    // extraction has already run against the original, and the copy inherits
+    // the cached result rather than being read a second time.
+    if (vault.vaultPath) {
+      for (const folder of settings.libraryFolders.filter((f) => f.mode === 'copy')) {
+        for (const doc of found.filter((d) => d.folderId === folder.id && !d.evicted)) {
+          try {
+            await importDocument(vault.vaultPath, settings.attachmentsFolder, doc.path)
+          } catch {
+            // One document that will not copy should not stop the rest.
+          }
+        }
+      }
+    }
+    return found
+  })
+
+  handle('library:search', (query: string) => searchDocuments(query))
+  handle('library:text', (id: string) => documentText(id))
+
+  handle('library:url', (absPath: string) => toDocumentUrl(absPath))
+
+  handle('library:thumbnail', (id: string) => {
+    const file = documentThumbnail(id)
+    return file ? toDocumentUrl(file) : null
+  })
+
+  /**
+   * Both of these hand a path to the operating system, and the path can come
+   * from note content — a `[link](file://…)` anyone could have written or
+   * synced in. So neither trusts its argument: a path is only opened when it
+   * sits inside a folder the user added to the library, or inside the vault.
+   * Without this, a crafted link is an instruction to launch anything on disk.
+   */
+  const assertOpenable = async (absPath: string): Promise<string> => {
+    const settings = await loadSettings()
+    const resolved = path.resolve(absPath)
+    const roots = [
+      ...settings.libraryFolders.map((f) => f.path),
+      ...(vault.vaultPath ? [vault.vaultPath] : [])
+    ]
+    const allowed = roots.some((root) => {
+      const resolvedRoot = path.resolve(root)
+      return resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)
+    })
+    if (!allowed) throw new Error('That file is outside your vault and watched folders.')
+    return resolved
+  }
+
+  handle('library:reveal', async (absPath: string) => {
+    shell.showItemInFolder(await assertOpenable(absPath))
+    return true
+  })
+
+  handle('library:open', async (absPath: string) => {
+    // Hands a GoodNotes document back to GoodNotes, which is the only thing
+    // that can actually edit one.
+    await shell.openPath(await assertOpenable(absPath))
+    return true
+  })
+
+  handle('library:addFolder', async (mode: 'index' | 'copy') => {
+    const win = BrowserWindow.getFocusedWindow()
+    const options: Electron.OpenDialogOptions = {
+      title: 'Choose a folder of documents',
+      properties: ['openDirectory']
+    }
+    const picked = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    if (picked.canceled || picked.filePaths.length === 0) return null
+
+    const settings = await loadSettings()
+    const folder = {
+      id: `lib-${Date.now().toString(36)}`,
+      path: picked.filePaths[0],
+      label: path.basename(picked.filePaths[0]),
+      mode
+    }
+    await saveSettings({ libraryFolders: [...settings.libraryFolders, folder] })
+    return folder
+  })
+
+  handle('library:removeFolder', async (id: string) => {
+    const settings = await loadSettings()
+    const libraryFolders = settings.libraryFolders.filter((f) => f.id !== id)
+    await saveSettings({ libraryFolders })
+    await scanLibrary(libraryFolders)
+    return libraryFolders
+  })
+
+  // ----------------------------------------------------------------- canvas
+
+  handle('canvas:list', () => {
+    if (!vault.vaultPath) return []
+    return listCanvases(vault.vaultPath)
+  })
+
+  handle('canvas:read', (relPath: string) => {
+    if (!vault.vaultPath) throw new Error('No vault is open.')
+    return readCanvas(vault.vaultPath, relPath)
+  })
+
+  handle('canvas:write', async (relPath: string, data: CanvasData) => {
+    if (!vault.vaultPath) throw new Error('No vault is open.')
+    await writeCanvas(vault.vaultPath, relPath, data)
+    return true
+  })
+
+  handle('canvas:create', async (folder: string, name: string) => {
+    if (!vault.vaultPath) throw new Error('No vault is open.')
+    return createCanvas(vault.vaultPath, folder, name)
+  })
+
+  handle('canvas:delete', async (relPath: string) => {
+    if (!vault.vaultPath) throw new Error('No vault is open.')
+    await deleteCanvas(vault.vaultPath, relPath)
+    return true
+  })
+
+  // ------------------------------------------------- themes and snippets
+
+  handle('vault:themes', async () => {
+    if (!vault.vaultPath) return []
+    const settings = await loadSettings()
+    return listThemes(vault.vaultPath, settings.themeFolder)
+  })
+
+  handle('vault:themeCss', async () => {
+    if (!vault.vaultPath) return ''
+    const settings = await loadSettings()
+    return readTheme(vault.vaultPath, settings.activeTheme)
+  })
+
+  // ---------------------------------------------------------------- plugins
+
+  handle('plugins:list', async () => {
+    if (!vault.vaultPath) return []
+    const settings = await loadSettings()
+    return discoverPlugins(vault.vaultPath, settings.enabledPlugins)
+  })
+
+  handle('plugins:setEnabled', async (id: string, enabled: boolean) => {
+    if (!vault.vaultPath) throw new Error('No vault is open.')
+    const settings = await loadSettings()
+    const enabledPlugins = enabled
+      ? [...new Set([...settings.enabledPlugins, id])]
+      : settings.enabledPlugins.filter((p) => p !== id)
+    await saveSettings({ enabledPlugins })
+    return reloadPlugins(vault.vaultPath, enabledPlugins)
+  })
+
+  handle('plugins:reload', async () => {
+    if (!vault.vaultPath) throw new Error('No vault is open.')
+    const settings = await loadSettings()
+    return reloadPlugins(vault.vaultPath, settings.enabledPlugins)
+  })
+
+  handle('plugins:commands', () => pluginCommands())
+
+  handle('plugins:run', (pluginId: string, commandId: string) => {
+    runPluginCommand(pluginId, commandId)
+    return true
+  })
+
+  /** The host's one way out. Everything it asks for is checked in `plugins.ts`. */
+  ipcMain.handle('plugin-host:api', async (_event, pluginId: string, method: string, args: unknown[]) => {
+    try {
+      return { ok: true, data: await handlePluginApi(pluginId, method, args) }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  })
+
+  ipcMain.on('plugin-host:failed', (_event, pluginId: string, message: string) => {
+    broadcast('vault:event', {
+      type: 'reminder',
+      title: `Plugin ${pluginId}`,
+      body: message,
+      relPath: null
+    })
   })
 
   // --------------------------------------------------------- css snippets

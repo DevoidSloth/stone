@@ -1,6 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   CalEvent,
+  CanvasData,
+  CanvasFile,
+  CaptureAction,
+  LibraryDoc,
+  LibraryFolder,
+  LoadedPlugin,
+  PluginCommand,
   CalendarAccount,
   CloudTarget,
   Comment,
@@ -10,6 +17,7 @@ import type {
   NoteMeta,
   Priority,
   PropertyDef,
+  RelationEdge,
   SearchHit,
   SearchOptions,
   Settings,
@@ -17,6 +25,7 @@ import type {
   Task,
   TaskStatus,
   TrashEntry,
+  ThemeInfo,
   VaultEvent,
   VaultStats
 } from '@shared/types'
@@ -59,14 +68,19 @@ const api = {
     tags: () => call<{ tag: string; count: number }[]>('vault:tags'),
     renameTag: (from: string, to: string) => call<{ notes: number }>('tags:rename', from, to),
     properties: () => call<PropertyDef[]>('vault:properties'),
+    relations: () => call<RelationEdge[]>('vault:relations'),
     activity: () => call<Record<string, number>>('vault:activity'),
     revealInFolder: (relPath: string) => call<boolean>('vault:revealInFolder', relPath),
     cssSnippets: () => call<{ name: string; css: string }[]>('vault:cssSnippets'),
     pickCssSnippet: () => call<string | null>('vault:pickCssSnippet'),
+    themes: () => call<ThemeInfo[]>('vault:themes'),
+    themeCss: () => call<string>('vault:themeCss'),
     onEvent: (handler: (event: VaultEvent) => void) => {
       const listener = (_e: unknown, payload: VaultEvent): void => handler(payload)
       ipcRenderer.on('vault:event', listener)
-      return () => ipcRenderer.removeListener('vault:event', listener)
+      return (): void => {
+        ipcRenderer.removeListener('vault:event', listener)
+      }
     }
   },
 
@@ -221,6 +235,73 @@ const api = {
     signOut: () => call<void>('graph:signOut')
   },
 
+  library: {
+    list: () => call<LibraryDoc[]>('library:list'),
+    scan: () => call<LibraryDoc[]>('library:scan'),
+    search: (query: string) =>
+      call<{ doc: LibraryDoc; score: number; excerpt: string }[]>('library:search', query),
+    text: (id: string) => call<string>('library:text', id),
+    url: (absPath: string) => call<string>('library:url', absPath),
+    thumbnail: (id: string) => call<string | null>('library:thumbnail', id),
+    reveal: (absPath: string) => call<boolean>('library:reveal', absPath),
+    openExternally: (absPath: string) => call<boolean>('library:open', absPath),
+    addFolder: (mode: 'index' | 'copy') =>
+      call<LibraryFolder | null>('library:addFolder', mode),
+    removeFolder: (id: string) => call<LibraryFolder[]>('library:removeFolder', id),
+    onScanned: (handler: (docs: LibraryDoc[]) => void) => {
+      const listener = (_e: unknown, payload: LibraryDoc[]): void => handler(payload)
+      ipcRenderer.on('library:scanned', listener)
+      return (): void => {
+        ipcRenderer.removeListener('library:scanned', listener)
+      }
+    }
+  },
+
+  canvas: {
+    list: () => call<CanvasFile[]>('canvas:list'),
+    read: (relPath: string) => call<CanvasData>('canvas:read', relPath),
+    write: (relPath: string, data: CanvasData) => call<boolean>('canvas:write', relPath, data),
+    create: (folder: string, name: string) => call<{ relPath: string }>('canvas:create', folder, name),
+    remove: (relPath: string) => call<boolean>('canvas:delete', relPath)
+  },
+
+  plugins: {
+    list: () => call<LoadedPlugin[]>('plugins:list'),
+    setEnabled: (id: string, enabled: boolean) =>
+      call<LoadedPlugin[]>('plugins:setEnabled', id, enabled),
+    reload: () => call<LoadedPlugin[]>('plugins:reload'),
+    commands: () => call<PluginCommand[]>('plugins:commands'),
+    run: (pluginId: string, commandId: string) => call<boolean>('plugins:run', pluginId, commandId),
+    onCommands: (handler: (commands: PluginCommand[]) => void) => {
+      const listener = (_e: unknown, payload: PluginCommand[]): void => handler(payload)
+      ipcRenderer.on('plugins:commands', listener)
+      return (): void => {
+        ipcRenderer.removeListener('plugins:commands', listener)
+      }
+    }
+  },
+
+  capture: {
+    setShortcut: (chord: string | null) => call<{ ok: boolean }>('capture:setShortcut', chord),
+    setTray: (enabled: boolean) => call<boolean>('capture:setTray', enabled),
+    /** Quick-add, open a note, and the rest, arriving from outside the window. */
+    onAction: (handler: (action: CaptureAction) => void) => {
+      const listener = (_e: unknown, payload: CaptureAction): void => handler(payload)
+      ipcRenderer.on('stone:action', listener)
+      return (): void => {
+        ipcRenderer.removeListener('stone:action', listener)
+      }
+    }
+  },
+
+  clipper: {
+    status: () =>
+      call<{ running: boolean; port: number; bookmarklet: string }>('clipper:status'),
+    setEnabled: (enabled: boolean) =>
+      call<{ running: boolean; bookmarklet: string }>('clipper:setEnabled', enabled),
+    regenerateToken: () => call<{ bookmarklet: string }>('clipper:regenerateToken')
+  },
+
   shell: {
     openExternal: (url: string) => call<boolean>('app:openExternal', url)
   },
@@ -233,7 +314,9 @@ const api = {
     onMaximizeChange: (handler: (maximized: boolean) => void) => {
       const listener = (_e: unknown, value: boolean): void => handler(value)
       ipcRenderer.on('window:maximized', listener)
-      return () => ipcRenderer.removeListener('window:maximized', listener)
+      return (): void => {
+        ipcRenderer.removeListener('window:maximized', listener)
+      }
     }
   },
 

@@ -3,13 +3,15 @@ import type {
   FilterOp,
   NoteMeta,
   PropertyType,
+  RollupFn,
   SavedView,
   Task,
-  ViewFilter,
   ViewKind,
-  ViewSort
+  ViewRollup
 } from '@shared/types'
-import { compareProperty, formatProperty } from '@shared/properties'
+import { formatProperty } from '@shared/properties'
+import { buildRelationIndex, evaluateRollup } from '@shared/rollups'
+import { BUILT_IN, builtInValue, runView } from '@shared/view-query'
 import { dueDay } from '@shared/task-syntax'
 import { useStone } from '../store'
 import { relativeDay } from '../lib/dates'
@@ -55,70 +57,6 @@ const OPS: { id: FilterOp; label: string }[] = [
   { id: 'not-empty', label: 'is not empty' }
 ]
 
-/** Columns every note has, alongside whatever frontmatter provides. */
-const BUILT_IN = ['title', 'folder', 'tag', 'edited', 'tasks']
-
-function builtInValue(note: NoteMeta, key: string): unknown {
-  switch (key) {
-    case 'title':
-      return note.title
-    case 'folder':
-      return note.relPath.includes('/') ? note.relPath.slice(0, note.relPath.lastIndexOf('/')) : ''
-    case 'tag':
-      return note.tags
-    case 'edited':
-      return new Date(note.mtime).toISOString().slice(0, 10)
-    case 'tasks':
-      return note.taskCount === 0 ? '' : `${note.doneCount}/${note.taskCount}`
-    default:
-      return note.frontmatter[key]
-  }
-}
-
-function matches(note: NoteMeta, filter: ViewFilter): boolean {
-  const raw = builtInValue(note, filter.property)
-  const values = Array.isArray(raw) ? raw.map(String) : raw == null ? [] : [String(raw)]
-  const haystack = values.join(' ').toLowerCase()
-  const needle = filter.value.trim().toLowerCase()
-
-  switch (filter.op) {
-    case 'empty':
-      return values.length === 0 || haystack === ''
-    case 'not-empty':
-      return values.length > 0 && haystack !== ''
-    case 'is':
-      return values.some((v) => v.toLowerCase() === needle)
-    case 'is-not':
-      return !values.some((v) => v.toLowerCase() === needle)
-    case 'contains':
-      return haystack.includes(needle)
-    case 'not-contains':
-      return !haystack.includes(needle)
-    case 'before':
-      return haystack !== '' && haystack < needle
-    case 'after':
-      return haystack !== '' && haystack > needle
-    default:
-      return true
-  }
-}
-
-function applySorts(notes: NoteMeta[], sorts: ViewSort[], typeOf: (k: string) => PropertyType): NoteMeta[] {
-  if (sorts.length === 0) return notes
-  return [...notes].sort((a, b) => {
-    for (const sort of sorts) {
-      const type = typeOf(sort.property)
-      const result = compareProperty(
-        builtInValue(a, sort.property),
-        builtInValue(b, sort.property),
-        type
-      )
-      if (result !== 0) return sort.direction === 'asc' ? result : -result
-    }
-    return 0
-  })
-}
-
 export function newView(kind: ViewKind = 'table'): SavedView {
   return {
     id: `view-${Date.now().toString(36)}`,
@@ -136,14 +74,27 @@ export function newView(kind: ViewKind = 'table'): SavedView {
 
 // ------------------------------------------------------------------ builder
 
+const ROLLUP_FNS: RollupFn[] = [
+  'count',
+  'sum',
+  'average',
+  'min',
+  'max',
+  'earliest',
+  'latest',
+  'list'
+]
+
 function ViewBuilder({
   view,
   columns,
+  relationKeys,
   onChange,
   onClose
 }: {
   view: SavedView
   columns: string[]
+  relationKeys: string[]
   onChange: (next: SavedView) => void
   onClose: () => void
 }) {
@@ -372,13 +323,249 @@ function ViewBuilder({
           </button>
         ))}
       </div>
+
+      {/* -------------------------------------------------------- rollups */}
+
+      <div className="builder__section eyebrow">Rollups</div>
+      <p className="hint">
+        Follow a relation — a frontmatter key holding <code>[[links]]</code> — and summarise the
+        notes on the other end.
+      </p>
+
+      {(view.rollups ?? []).map((rollup, index) => {
+        const update = (patch: Partial<ViewRollup>): void => {
+          const rollups = [...(view.rollups ?? [])]
+          rollups[index] = { ...rollup, ...patch }
+          onChange({ ...view, rollups })
+        }
+        return (
+          <div className="builder__filter" key={rollup.id}>
+            <input
+              className="field"
+              value={rollup.name}
+              placeholder="Column name"
+              onChange={(e) => update({ name: e.target.value })}
+            />
+
+            <select
+              className="field"
+              value={rollup.direction}
+              onChange={(e) => update({ direction: e.target.value as ViewRollup['direction'] })}
+            >
+              <option value="outgoing">Notes this links to</option>
+              <option value="incoming">Notes that link here</option>
+            </select>
+
+            <select
+              className="field"
+              value={rollup.relation}
+              onChange={(e) => update({ relation: e.target.value })}
+            >
+              {relationKeys.length === 0 && <option value="">No relations in this vault</option>}
+              {relationKeys.map((key) => (
+                <option key={key} value={key}>
+                  via {key}
+                </option>
+              ))}
+            </select>
+
+            <select
+              className="field"
+              value={rollup.fn}
+              onChange={(e) => update({ fn: e.target.value as RollupFn })}
+            >
+              {ROLLUP_FNS.map((fn) => (
+                <option key={fn} value={fn}>
+                  {fn}
+                </option>
+              ))}
+            </select>
+
+            {rollup.fn !== 'count' && (
+              <select
+                className="field"
+                value={rollup.target}
+                onChange={(e) => update({ target: e.target.value })}
+              >
+                <option value="open-tasks">open tasks</option>
+                <option value="tasks">all tasks</option>
+                <option value="words">words</option>
+                <option value="title">title</option>
+                {columns.map((column) => (
+                  <option key={column} value={column}>
+                    {column}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            <button
+              type="button"
+              className="btn btn--ghost btn--icon btn--sm"
+              aria-label="Remove rollup"
+              onClick={() =>
+                onChange({ ...view, rollups: (view.rollups ?? []).filter((_, i) => i !== index) })
+              }
+            >
+              <IconX size={12} />
+            </button>
+          </div>
+        )
+      })}
+
+      <button
+        type="button"
+        className="btn btn--sm"
+        onClick={() =>
+          onChange({
+            ...view,
+            rollups: [
+              ...(view.rollups ?? []),
+              {
+                id: `rollup-${Date.now().toString(36)}`,
+                name: 'Rollup',
+                relation: relationKeys[0] ?? '',
+                direction: 'incoming',
+                fn: 'count',
+                target: 'open-tasks'
+              }
+            ]
+          })
+        }
+      >
+        <IconPlus size={12} />
+        Add a rollup
+      </button>
     </div>
   )
 }
 
 // ------------------------------------------------------------------- shapes
 
-function TableShape({ rows, columns, typeOf }: { rows: NoteMeta[]; columns: string[]; typeOf: (k: string) => PropertyType }) {
+/** Columns that are derived from the file itself and cannot be typed into. */
+const READ_ONLY_COLUMNS = new Set(['folder', 'edited', 'tasks', 'tag'])
+
+/**
+ * One cell.
+ *
+ * A frontmatter column is editable in place; the built-in ones are not, because
+ * they describe the file rather than live in it — you change `edited` by editing
+ * the note, and `folder` by moving it.
+ *
+ * The click that starts an edit has to be kept from the row, whose job is to
+ * open the note. That is the whole reason this is a component rather than a
+ * fragment: it owns the stopPropagation, and the draft state that lets a cell
+ * be typed into without every keystroke writing to disk.
+ */
+function Cell({
+  note,
+  column,
+  type,
+  editable,
+  onCommit
+}: {
+  note: NoteMeta
+  column: string
+  type: PropertyType
+  editable: boolean
+  onCommit: (value: string | null) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+
+  if (column === 'title') {
+    return (
+      <td>
+        <span className="dbtable__title">
+          {note.icon && <span className="dbtable__icon">{note.icon}</span>}
+          {note.title}
+        </span>
+      </td>
+    )
+  }
+
+  const raw = builtInValue(note, column)
+  const shown = formatProperty(raw, type)
+
+  if (!editable) return <td>{shown}</td>
+
+  if (!editing) {
+    return (
+      <td
+        className="dbtable__cell--editable"
+        onClick={(e) => {
+          e.stopPropagation()
+          setDraft(raw == null ? '' : String(Array.isArray(raw) ? raw.join(', ') : raw))
+          setEditing(true)
+        }}
+      >
+        {shown || <span className="dbtable__placeholder">—</span>}
+      </td>
+    )
+  }
+
+  const commit = (): void => {
+    setEditing(false)
+    const trimmed = draft.trim()
+    onCommit(trimmed === '' ? null : trimmed)
+  }
+
+  if (type === 'checkbox') {
+    return (
+      <td onClick={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          autoFocus
+          checked={draft === 'true' || draft === 'Yes'}
+          onChange={(e) => {
+            setEditing(false)
+            onCommit(e.target.checked ? 'true' : 'false')
+          }}
+          onBlur={() => setEditing(false)}
+        />
+      </td>
+    )
+  }
+
+  return (
+    <td onClick={(e) => e.stopPropagation()}>
+      <input
+        className="field field--cell"
+        autoFocus
+        type={type === 'date' ? 'date' : type === 'number' ? 'number' : 'text'}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            commit()
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            setEditing(false)
+          }
+        }}
+      />
+    </td>
+  )
+}
+
+function TableShape({
+  rows,
+  columns,
+  typeOf,
+  rollups,
+  rollupValue,
+  onEdit
+}: {
+  rows: NoteMeta[]
+  columns: string[]
+  typeOf: (k: string) => PropertyType
+  rollups: ViewRollup[]
+  rollupValue: (rollup: ViewRollup, relPath: string) => string
+  onEdit: (relPath: string, key: string, value: string | null) => void
+}) {
   const openNote = useStone((s) => s.openNote)
   return (
     <div className="dbtable__wrap">
@@ -388,21 +575,29 @@ function TableShape({ rows, columns, typeOf }: { rows: NoteMeta[]; columns: stri
             {columns.map((column) => (
               <th key={column}>{column}</th>
             ))}
+            {rollups.map((rollup) => (
+              <th key={rollup.id} className="dbtable__rollup">
+                {rollup.name}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
           {rows.map((note) => (
             <tr key={note.relPath} onClick={() => void openNote(note.relPath)}>
               {columns.map((column) => (
-                <td key={column}>
-                  {column === 'title' ? (
-                    <span className="dbtable__title">
-                      {note.icon && <span className="dbtable__icon">{note.icon}</span>}
-                      {note.title}
-                    </span>
-                  ) : (
-                    formatProperty(builtInValue(note, column), typeOf(column))
-                  )}
+                <Cell
+                  key={column}
+                  note={note}
+                  column={column}
+                  type={typeOf(column)}
+                  editable={!READ_ONLY_COLUMNS.has(column) && column !== 'title'}
+                  onCommit={(value) => onEdit(note.relPath, column, value)}
+                />
+              ))}
+              {rollups.map((rollup) => (
+                <td key={rollup.id} className="dbtable__rollup">
+                  {rollupValue(rollup, note.relPath)}
                 </td>
               ))}
             </tr>
@@ -413,12 +608,57 @@ function TableShape({ rows, columns, typeOf }: { rows: NoteMeta[]; columns: stri
   )
 }
 
-function BoardShape({ groups }: { groups: { key: string; notes: NoteMeta[] }[] }) {
+/**
+ * The board, which is the one shape where the view stops being a lens.
+ *
+ * Dragging a card from one column to another is a claim about the note — that
+ * its status is now "doing", that its stage is now "shipped" — so it writes the
+ * grouping property back to that note's frontmatter. Everything else in this
+ * file still only reads; this is the deliberate exception, because a column you
+ * cannot move a card into is a report pretending to be a board.
+ *
+ * Without a `groupBy` there is nothing a drop could mean, so the board stays
+ * read-only rather than inventing a property to write.
+ */
+function BoardShape({
+  groups,
+  groupBy,
+  onMove
+}: {
+  groups: { key: string; notes: NoteMeta[] }[]
+  groupBy: string | null
+  onMove: (relPath: string, value: string) => void
+}) {
   const openNote = useStone((s) => s.openNote)
+  const [dragging, setDragging] = useState<string | null>(null)
+  const [over, setOver] = useState<string | null>(null)
+
+  const editable = Boolean(groupBy) && groupBy !== 'tag' && groupBy !== 'edited'
+
   return (
     <div className="board">
       {groups.map((group) => (
-        <section key={group.key} className="board__column">
+        <section
+          key={group.key}
+          className="board__column"
+          data-dropping={editable && over === group.key}
+          onDragOver={(e) => {
+            if (!editable || !dragging) return
+            // Only a preventDefault here makes the column a valid drop target.
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'move'
+            setOver(group.key)
+          }}
+          onDragLeave={() => setOver((k) => (k === group.key ? null : k))}
+          onDrop={(e) => {
+            if (!editable || !dragging) return
+            e.preventDefault()
+            setOver(null)
+            const relPath = e.dataTransfer.getData('text/stone-note') || dragging
+            setDragging(null)
+            if (relPath) onMove(relPath, group.key)
+          }}
+        >
           <header className="board__head">
             <span className="eyebrow">{group.key || 'No value'}</span>
             <span className="board__count">{group.notes.length}</span>
@@ -429,6 +669,17 @@ function BoardShape({ groups }: { groups: { key: string; notes: NoteMeta[] }[] }
                 key={note.relPath}
                 type="button"
                 className="board__card"
+                draggable={editable}
+                data-dragging={dragging === note.relPath}
+                onDragStart={(e) => {
+                  setDragging(note.relPath)
+                  e.dataTransfer.effectAllowed = 'move'
+                  e.dataTransfer.setData('text/stone-note', note.relPath)
+                }}
+                onDragEnd={() => {
+                  setDragging(null)
+                  setOver(null)
+                }}
                 onClick={() => void openNote(note.relPath)}
               >
                 <b className="truncate">
@@ -564,10 +815,14 @@ export function DatabaseView() {
   const notes = useStone((s) => s.notes)
   const tasks = useStone((s) => s.tasks)
   const schema = useStone((s) => s.properties)
+  const relations = useStone((s) => s.relations)
   const activeViewId = useStone((s) => s.activeViewId)
   const setActiveView = useStone((s) => s.setActiveView)
   const saveView = useStone((s) => s.saveView)
   const deleteView = useStone((s) => s.deleteView)
+  const setNoteProperty = useStone((s) => s.setNoteProperty)
+  const createNote = useStone((s) => s.createNote)
+  const toast = useStone((s) => s.toast)
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<SavedView | null>(null)
@@ -580,6 +835,12 @@ export function DatabaseView() {
     [schema]
   )
 
+  /** Keys that actually hold links somewhere in the vault — the rollup sources. */
+  const relationKeys = useMemo(
+    () => [...new Set(relations.map((r) => r.property))].sort(),
+    [relations]
+  )
+
   const typeOf = useMemo(() => {
     const map = new Map(schema.map((p) => [p.key, p.type]))
     return (key: string): PropertyType => {
@@ -589,13 +850,7 @@ export function DatabaseView() {
     }
   }, [schema])
 
-  const rows = useMemo(() => {
-    if (!view) return []
-    let list = notes
-    if (view.folder) list = list.filter((n) => n.relPath.startsWith(`${view.folder}/`))
-    for (const filter of view.filters) list = list.filter((n) => matches(n, filter))
-    return applySorts(list, view.sorts, typeOf)
-  }, [notes, view, typeOf])
+  const rows = useMemo(() => (view ? runView(view, notes, typeOf) : []), [notes, view, typeOf])
 
   const taskRows = useMemo<Task[]>(() => {
     if (!view || view.source !== 'tasks') return []
@@ -622,8 +877,62 @@ export function DatabaseView() {
       .sort((a, b) => (a.key === '' ? 1 : b.key === '' ? -1 : a.key.localeCompare(b.key)))
   }, [rows, view])
 
+  // Rollups walk the relation graph, so the indexes are built once per change
+  // rather than per cell — a table of 200 rows would otherwise rescan every edge
+  // 200 times for a single column.
+  const relationIndex = useMemo(() => buildRelationIndex(relations), [relations])
+  const notesByPath = useMemo(() => new Map(notes.map((n) => [n.relPath, n])), [notes])
+  const tasksByNote = useMemo(() => {
+    const map = new Map<string, Task[]>()
+    for (const task of tasks) map.set(task.relPath, [...(map.get(task.relPath) ?? []), task])
+    return map
+  }, [tasks])
+
+  const rollupValue = useMemo(
+    () =>
+      (rollup: ViewRollup, relPath: string): string =>
+        evaluateRollup(rollup, relPath, relationIndex, notesByPath, tasksByNote),
+    [relationIndex, notesByPath, tasksByNote]
+  )
+
   const commit = (next: SavedView): void => {
     setDraft(next)
+  }
+
+  /**
+   * Create a row that already belongs in the view.
+   *
+   * A note added from inside a filtered view should satisfy that filter, or it
+   * vanishes the moment it is created — so every `is` filter, and the column it
+   * was dropped into, are written as frontmatter up front.
+   */
+  const addRow = async (groupKey?: string): Promise<void> => {
+    if (!view) return
+    const seed: string[] = []
+    for (const filter of view.filters) {
+      if (filter.op === 'is' && filter.value.trim() && !BUILT_IN.includes(filter.property)) {
+        seed.push(`${filter.property}: ${filter.value.trim()}`)
+      }
+    }
+    if (view.groupBy && groupKey && !BUILT_IN.includes(view.groupBy)) {
+      seed.push(`${view.groupBy}: ${groupKey}`)
+    }
+    const content = seed.length > 0 ? `---\n${seed.join('\n')}\n---\n\n` : ''
+    await createNote('Untitled', view.folder || undefined)
+    const created = useStone.getState().activeRelPath
+    if (created && content) {
+      await window.stone.notes.save(created, content)
+      await useStone.getState().refreshVault()
+    }
+  }
+
+  const moveCard = (relPath: string, value: string): void => {
+    if (!view?.groupBy) return
+    if (BUILT_IN.includes(view.groupBy)) {
+      toast(`"${view.groupBy}" comes from the file itself, so a card cannot be dragged into it.`, 'error')
+      return
+    }
+    void setNoteProperty(relPath, view.groupBy, value || null)
   }
 
   const persist = (): void => {
@@ -714,6 +1023,13 @@ export function DatabaseView() {
             {view.source === 'tasks' ? taskRows.length : rows.length}
           </span>
 
+          {view.source === 'notes' && (
+            <button type="button" className="btn btn--sm" onClick={() => void addRow()}>
+              <IconPlus size={12} />
+              New
+            </button>
+          )}
+
           <button type="button" className="btn btn--sm" onClick={() => setEditing((v) => !v)}>
             Configure
           </button>
@@ -748,9 +1064,16 @@ export function DatabaseView() {
           ) : rows.length === 0 ? (
             <p className="panel__empty">No notes match this view.</p>
           ) : view.kind === 'table' ? (
-            <TableShape rows={rows} columns={view.columns} typeOf={typeOf} />
+            <TableShape
+              rows={rows}
+              columns={view.columns}
+              typeOf={typeOf}
+              rollups={view.rollups ?? []}
+              rollupValue={rollupValue}
+              onEdit={(relPath, key, value) => void setNoteProperty(relPath, key, value)}
+            />
           ) : view.kind === 'board' ? (
-            <BoardShape groups={groups} />
+            <BoardShape groups={groups} groupBy={view.groupBy} onMove={moveCard} />
           ) : view.kind === 'gallery' ? (
             <GalleryShape rows={rows} />
           ) : view.kind === 'timeline' ? (
@@ -764,6 +1087,7 @@ export function DatabaseView() {
           <ViewBuilder
             view={view}
             columns={columns}
+            relationKeys={relationKeys}
             onChange={commit}
             onClose={() => setEditing(false)}
           />

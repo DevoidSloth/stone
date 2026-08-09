@@ -18,7 +18,11 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/preload/index.ts') }
+        input: {
+          index: resolve(__dirname, 'src/preload/index.ts'),
+          // The plugin host gets its own, far smaller, bridge.
+          'plugin-host': resolve(__dirname, 'src/preload/plugin-host.ts')
+        }
       }
     },
     resolve: {
@@ -29,7 +33,10 @@ export default defineConfig({
     root: resolve(__dirname, 'src/renderer'),
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/renderer/index.html') }
+        input: {
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          'plugin-host': resolve(__dirname, 'src/renderer/plugin-host.html')
+        }
       }
     },
     resolve: {

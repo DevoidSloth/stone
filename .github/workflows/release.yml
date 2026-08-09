@@ -44,11 +44,48 @@ jobs:
 
       - run: npm run typecheck
 
+      # macOS records calendar permission against the app's code signature. With
+      # no certificate there is nothing stable to record, so the grant is pinned
+      # to the binary's cdhash and every release silently revokes the access the
+      # previous one was given. The certificate must therefore be the SAME one
+      # every release — generating a fresh one per build is no better than
+      # shipping unsigned.
+      #
+      # Export the local certificate once and store it as a repository secret:
+      #
+      #   security export -t identities -f pkcs12 \
+      #     -k ~/Library/Keychains/login.keychain-db \
+      #     -o stone-signing.p12 -P '<password>'
+      #   base64 -i stone-signing.p12 | pbcopy
+      #
+      # then set MACOS_SIGNING_CERT (the base64) and MACOS_SIGNING_CERT_PASSWORD.
+      - name: Import signing certificate
+        if: runner.os == 'macOS' && secrets.MACOS_SIGNING_CERT != ''
+        env:
+          MACOS_SIGNING_CERT: ${{ secrets.MACOS_SIGNING_CERT }}
+          MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          PASSWORD="$(uuidgen)"
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+          echo "$MACOS_SIGNING_CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_SIGNING_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$PASSWORD" "$KEYCHAIN" >/dev/null
+          # The signing script reads the default search list, so the new
+          # keychain has to join it rather than replace it.
+          security list-keychains -d user -s "$KEYCHAIN" \
+            $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+
       - name: Build and package
         run: npm run ${{ matrix.script }}
         env:
-          # No Apple Developer ID in this repo, so leave the app unsigned rather
-          # than letting electron-builder pick up a stray keychain identity.
+          # Signing is done by scripts/sign-mac.mjs, not by electron-builder, so
+          # its own identity discovery stays off.
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - uses: actions/upload-artifact@v4

@@ -28,6 +28,7 @@ import {
   MermaidWidget,
   NoteEmbedWidget,
   PropsWidget,
+  QueryWidget,
   RuleWidget,
   TableWidget,
   resolveAssetUrl
@@ -336,7 +337,9 @@ function computeBlockRegions(state: EditorState, handlers: LivePreviewHandlers):
     const lang = fence.lang.toLowerCase()
     const isDiagram = lang === 'mermaid'
     const isMath = lang === 'math' || lang === 'latex'
-    if (!isDiagram && !isMath) continue
+    // `stone` blocks are queries — a saved view, or one described in place.
+    const isQuery = lang === 'stone' || lang === 'query'
+    if (!isDiagram && !isMath && !isQuery) continue
     if (sectionLive(fence.start, fence.end)) continue
 
     const source: string[] = []
@@ -347,7 +350,9 @@ function computeBlockRegions(state: EditorState, handlers: LivePreviewHandlers):
       Decoration.replace({
         widget: isDiagram
           ? new MermaidWidget(source.join('\n'))
-          : new MathWidget(source.join('\n'), true),
+          : isQuery
+            ? new QueryWidget(source.join('\n'))
+            : new MathWidget(source.join('\n'), true),
         block: true
       })
     )

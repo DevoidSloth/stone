@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      This page exists to run third-party code, and nothing else.
+
+      `unsafe-eval` is here on purpose and appears nowhere else in Stone: a
+      plugin arrives as source text and has to be compiled at runtime. It is
+      survivable only because of what the rest of this policy withholds — no
+      network of any kind, no images, no styles, no frames, and no DOM worth
+      attacking, since this window is never shown. The plugin's only way out is
+      the message channel, where main checks its permissions.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'unsafe-eval'; connect-src 'none'"
+    />
+    <title>Stone plugin host</title>
+  </head>
+  <body>
+    <script type="module" src="/src/plugin-host/host.ts"></script>
+  </body>
+</html>

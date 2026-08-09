@@ -11,6 +11,7 @@ import type {
   Note,
   NoteMeta,
   PropertyDef,
+  RelationEdge,
   SearchHit,
   SearchMatch,
   SearchOptions,
@@ -20,7 +21,7 @@ import type {
   VaultEvent,
   VaultStats
 } from '@shared/types'
-import { inferProperties } from '@shared/properties'
+import { RESERVED_KEYS, inferProperties, relationTargets } from '@shared/properties'
 import { parseNote, countWords, type ParsedNote } from './parse'
 import {
   appendLine,
@@ -69,6 +70,8 @@ export class Vault extends EventEmitter {
   private words = new Map<string, number>()
   private hashes = new Map<string, string>()
   private backlinkMap = new Map<string, Set<string>>()
+  /** Resolved frontmatter links: which note names which, under which key. */
+  private relationEdges: RelationEdge[] = []
   private watcher: FSWatcher | null = null
   private pending = new Map<string, NodeJS.Timeout>()
   /** Lowercased name → relPath, covering full paths, basenames, and aliases. */
@@ -346,6 +349,8 @@ goes back to being an ordinary note.
   private rebuildBacklinks(): void {
     this.rebuildLinkIndex()
     this.backlinkMap.clear()
+    this.relationEdges = []
+
     for (const [relPath, meta] of this.notes) {
       // Embeds count as backlinks: a note that transcludes another is every
       // bit as much a reference to it as one that merely points at it.
@@ -355,7 +360,25 @@ goes back to being an ordinary note.
         if (!this.backlinkMap.has(target)) this.backlinkMap.set(target, new Set())
         this.backlinkMap.get(target)!.add(relPath)
       }
+
+      // A link written in frontmatter is a *typed* link — the key names what
+      // the relationship is. That is the whole difference between a backlink
+      // and a relation, and it is why these are indexed separately rather than
+      // folded into the set above.
+      for (const [key, value] of Object.entries(meta.frontmatter)) {
+        if (RESERVED_KEYS.has(key)) continue
+        for (const name of relationTargets(value)) {
+          const target = this.resolveLink(name)
+          if (!target || target === relPath) continue
+          this.relationEdges.push({ from: relPath, property: key, to: target })
+        }
+      }
     }
+  }
+
+  /** Every resolved frontmatter link in the vault, both directions available. */
+  relations(): RelationEdge[] {
+    return this.relationEdges
   }
 
   private async reloadFile(absPath: string): Promise<void> {
@@ -497,7 +520,7 @@ goes back to being an ordinary note.
         const target = this.resolveLink(link)
         if (!target || target === relPath) continue
 
-        const key = `${relPath} ${target}`
+        const key = `${relPath}\u0000${target}`
         if (seen.has(key)) continue
         seen.add(key)
 

@@ -1,7 +1,10 @@
 import { WidgetType } from '@codemirror/view'
 import katex from 'katex'
+import { createElement } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
 import type { TaskStatus } from '@shared/types'
 import { embedKind, isExternalUrl, toProtocolUrl } from '@shared/attachments'
+import { EmbeddedQuery } from '../components/EmbeddedQuery'
 
 /**
  * The block and inline widgets live preview swaps in for raw markdown.
@@ -329,6 +332,49 @@ export class MermaidWidget extends WidgetType {
       })
 
     return wrap
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+
+/**
+ * A `stone` query block, drawn by React inside a CodeMirror widget.
+ *
+ * The result has to react to the vault — a task ticked elsewhere should tick
+ * here — and the components that know how to render rows are already React.
+ * So this mounts a root rather than building DOM by hand, and tears it down in
+ * `destroy`, which CodeMirror calls when the decoration goes away. Skipping
+ * that would leak a subscribed root per keystroke that rebuilt the block.
+ *
+ * Unmounting is deferred by a microtask because CodeMirror may call `destroy`
+ * while React is mid-render, and synchronously unmounting from inside a render
+ * is the one thing `createRoot` refuses to do.
+ */
+export class QueryWidget extends WidgetType {
+  private root: Root | null = null
+
+  constructor(readonly source: string) {
+    super()
+  }
+
+  eq(other: QueryWidget): boolean {
+    return other.source === this.source
+  }
+
+  toDOM(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'cm-embed cm-embed--query'
+    this.root = createRoot(wrap)
+    this.root.render(createElement(EmbeddedQuery, { source: this.source }))
+    return wrap
+  }
+
+  destroy(): void {
+    const root = this.root
+    this.root = null
+    if (root) queueMicrotask(() => root.unmount())
   }
 
   ignoreEvent(): boolean {

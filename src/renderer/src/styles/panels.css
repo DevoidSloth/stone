@@ -1005,6 +1005,56 @@
   font-size: 14px;
 }
 
+/*
+ * An editable cell reads as inert until the pointer is over it, so a table stays
+ * a table rather than looking like a form somebody left open.
+ */
+.dbtable__cell--editable:hover {
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--border);
+  border-radius: var(--r-sm);
+}
+
+.dbtable__placeholder {
+  color: var(--text-ghost);
+}
+
+.field--cell {
+  width: 100%;
+  min-width: 90px;
+  padding: 2px var(--sp-1);
+  font-size: var(--t-xs);
+}
+
+/* A computed column is not something you can edit, and should not invite it. */
+.dbtable__rollup {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Relations, grouped under the frontmatter key that names the relationship. */
+.relgroup {
+  margin-bottom: var(--sp-2);
+}
+
+.relgroup__key {
+  padding: 0 var(--sp-3) var(--sp-1);
+  font-size: var(--t-2xs);
+  color: var(--text-ghost);
+}
+
+.relgroup__key b {
+  color: var(--text-faint);
+  font-weight: 500;
+}
+
+.hint {
+  margin-top: var(--sp-1);
+  font-size: var(--t-2xs);
+  line-height: 1.55;
+  color: var(--text-faint);
+}
+
 /* board */
 
 .board {
@@ -1057,6 +1107,24 @@
 
 .board__card:hover {
   box-shadow: var(--shadow-sm);
+}
+
+.board__card[draggable='true'] {
+  cursor: grab;
+}
+
+/*
+ * The card being dragged stays in place, dimmed, rather than being removed —
+ * a column that reflows the moment you pick something up makes it very hard to
+ * aim at the gap you meant.
+ */
+.board__card[data-dragging='true'] {
+  opacity: 0.4;
+}
+
+.board__column[data-dropping='true'] {
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--accent, var(--border-strong, var(--border)));
 }
 
 .board__card b {

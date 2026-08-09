@@ -20,11 +20,22 @@ export const DEFAULT_SETTINGS: Settings = {
   showStrataRail: false,
   weekStartsOn: 1,
   vimMode: false,
+  keybindings: {},
   spellcheck: true,
   remindersEnabled: true,
   reminderLeadMinutes: 10,
   snapshotsEnabled: true,
+  captureShortcut: 'CommandOrControl+Shift+Space',
+  trayEnabled: true,
+  clipperEnabled: false,
+  clipperPort: 41999,
+  clipperToken: '',
+  clipFolder: 'Clippings',
   cssSnippets: [],
+  themeFolder: 'Themes',
+  activeTheme: null,
+  enabledPlugins: [],
+  libraryFolders: [],
   favorites: [],
   savedViews: [],
   calendars: [],
@@ -48,6 +59,17 @@ export async function loadSettings(): Promise<Settings> {
     cache = { ...DEFAULT_SETTINGS }
   }
   return cache
+}
+
+/**
+ * The settings already in memory, without awaiting.
+ *
+ * For the few callers that cannot be async — the protocol handler runs per
+ * request and must decide synchronously whether a path is allowed. Returns the
+ * defaults before the first load, which denies rather than over-permits.
+ */
+export function peekSettings(): Settings {
+  return cache ?? DEFAULT_SETTINGS
 }
 
 export async function saveSettings(patch: Partial<Settings>): Promise<Settings> {

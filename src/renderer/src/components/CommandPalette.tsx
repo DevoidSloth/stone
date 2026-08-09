@@ -1,24 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { SearchHit } from '@shared/types'
 import { useStone } from '../store'
-import { today } from '../lib/dates'
-import {
-  IconCalendar,
-  IconDownload,
-  IconNote,
-  IconOutline,
-  IconPlus,
-  IconProperties,
-  IconRefresh,
-  IconSettings,
-  IconSplit,
-  IconSun,
-  IconTable,
-  IconTasks,
-  IconTrash,
-  IconLayers,
-  IconSearch
-} from '../ui/icons'
+import { COMMANDS, commandLabel, keysFor } from '../commands'
+import { formatChord } from '../lib/keys'
+import { IconNote, IconPuzzle, IconSearch } from '../ui/icons'
 
 interface Command {
   id: string
@@ -33,18 +18,8 @@ export function CommandPalette() {
   const setPalette = useStone((s) => s.setPalette)
   const notes = useStone((s) => s.notes)
   const settings = useStone((s) => s.settings)
+  const pluginCommands = useStone((s) => s.pluginCommands)
   const openNote = useStone((s) => s.openNote)
-  const openDaily = useStone((s) => s.openDaily)
-  const createNote = useStone((s) => s.createNote)
-  const setView = useStone((s) => s.setView)
-  const setSettingsOpen = useStone((s) => s.setSettingsOpen)
-  const setQuickAdd = useStone((s) => s.setQuickAdd)
-  const updateSettings = useStone((s) => s.updateSettings)
-  const refreshVault = useStone((s) => s.refreshVault)
-  const openPeriodic = useStone((s) => s.openPeriodic)
-  const splitPane = useStone((s) => s.splitPane)
-  const setSidePanel = useStone((s) => s.setSidePanel)
-  const toast = useStone((s) => s.toast)
 
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<SearchHit[]>([])
@@ -78,166 +53,33 @@ export function CommandPalette() {
     return () => clearTimeout(timer)
   }, [query, open])
 
-  const commands = useMemo<Command[]>(
-    () => [
-      {
-        id: 'today',
-        label: "Open today's note",
-        hint: 'T',
-        icon: <IconLayers size={15} />,
-        run: () => void openDaily(today())
-      },
-      {
-        id: 'new-note',
-        label: query.trim() ? `Create note "${query.trim()}"` : 'Create a note',
-        icon: <IconPlus size={15} />,
-        run: () => void createNote(query.trim() || 'Untitled')
-      },
-      {
-        id: 'new-task',
-        label: 'Add a task',
-        icon: <IconTasks size={15} />,
-        run: () => setQuickAdd(true)
-      },
-      {
-        id: 'search',
-        label: 'Search the whole vault',
-        hint: '⇧F',
-        icon: <IconSearch size={15} />,
-        run: () => setView('search')
-      },
-      {
-        id: 'calendar',
-        label: 'Go to calendar',
-        icon: <IconCalendar size={15} />,
-        run: () => setView('calendar')
-      },
-      {
-        id: 'tasks',
-        label: 'Go to tasks',
-        icon: <IconTasks size={15} />,
-        run: () => setView('tasks')
-      },
-      {
-        id: 'views',
-        label: 'Go to views',
-        icon: <IconTable size={15} />,
-        run: () => setView('views')
-      },
-      {
-        id: 'trash',
-        label: 'Open the trash',
-        icon: <IconTrash size={15} />,
-        run: () => setView('trash')
-      },
-      {
-        id: 'weekly',
-        label: "Open this week's note",
-        icon: <IconCalendar size={15} />,
-        run: () => void openPeriodic('week')
-      },
-      {
-        id: 'monthly',
-        label: "Open this month's note",
-        icon: <IconCalendar size={15} />,
-        run: () => void openPeriodic('month')
-      },
-      {
-        id: 'split',
-        label: 'Split the editor',
-        hint: '⇧E',
-        icon: <IconSplit size={15} />,
-        run: () => splitPane()
-      },
-      {
-        id: 'outline',
-        label: 'Show the outline',
-        icon: <IconOutline size={15} />,
-        run: () => {
-          setView('notes')
-          setSidePanel('outline')
-        }
-      },
-      {
-        id: 'properties',
-        label: 'Edit page properties',
-        icon: <IconProperties size={15} />,
-        run: () => {
-          setView('notes')
-          setSidePanel('properties')
-        }
-      },
-      {
-        id: 'export-pdf',
-        label: 'Export this note as a PDF',
-        icon: <IconDownload size={15} />,
-        run: () => {
-          const relPath = useStone.getState().activeRelPath
-          if (!relPath) {
-            toast('Open a note first.', 'error')
-            return
-          }
-          void window.stone.exporter.pdf(relPath).then((saved) => {
-            if (saved) toast(`Exported to ${saved}.`, 'success')
-          })
-        }
-      },
-      {
-        id: 'export-vault',
-        label: 'Export the whole vault',
-        icon: <IconDownload size={15} />,
-        run: () => {
-          void window.stone.exporter.vault().then((result) => {
-            if (result) toast(`${result.count} notes exported to ${result.folder}.`, 'success')
-          })
-        }
-      },
-      {
-        id: 'vim',
-        label: settings?.vimMode ? 'Turn off vim mode' : 'Turn on vim mode',
-        icon: <IconSettings size={15} />,
-        run: () => void updateSettings({ vimMode: !settings?.vimMode })
-      },
-      {
-        id: 'theme',
-        label: settings?.theme === 'light' ? 'Use the dark theme' : 'Use the light theme',
-        icon: <IconSun size={15} />,
-        run: () => void updateSettings({ theme: settings?.theme === 'light' ? 'dark' : 'light' })
-      },
-      {
-        id: 'reindex',
-        label: 'Rebuild the vault index',
-        icon: <IconRefresh size={15} />,
-        run: () => {
-          void window.stone.vault
-            .reindex()
-            .then(() => refreshVault())
-            .then(() => toast('Vault reindexed.', 'success'))
-        }
-      },
-      {
-        id: 'settings',
-        label: 'Open settings',
-        icon: <IconSettings size={15} />,
-        run: () => setSettingsOpen(true)
+  const commands = useMemo<Command[]>(() => {
+    const overrides = settings?.keybindings ?? {}
+    const ctx = { query }
+    const built = COMMANDS.filter((c) => !c.paletteHidden).map((command) => {
+      const Icon = command.icon
+      const [chord] = keysFor(command, overrides)
+      return {
+        id: command.id,
+        label: commandLabel(command, ctx),
+        hint: chord ? formatChord(chord) : undefined,
+        icon: <Icon size={15} />,
+        run: () => command.run(ctx)
       }
-    ],
-    [
-      query,
-      settings,
-      openDaily,
-      createNote,
-      setQuickAdd,
-      setView,
-      updateSettings,
-      refreshVault,
-      setSettingsOpen,
-      openPeriodic,
-      splitPane,
-      setSidePanel,
-      toast
+    })
+
+    // Plugin commands sit alongside the built-in ones rather than in a section
+    // of their own: to the person typing, where a command came from is trivia.
+    return [
+      ...built,
+      ...pluginCommands.map((command) => ({
+        id: `${command.pluginId}:${command.id}`,
+        label: command.name,
+        icon: <IconPuzzle size={15} />,
+        run: () => void window.stone.plugins.run(command.pluginId, command.id)
+      }))
     ]
-  )
+  }, [query, settings, pluginCommands])
 
   const filteredCommands = useMemo(() => {
     const q = query.trim().toLowerCase()

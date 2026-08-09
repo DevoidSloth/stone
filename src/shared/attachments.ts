@@ -12,6 +12,9 @@ const VIDEO_RE = /\.(mp4|webm|ogv|mov)$/i
 const AUDIO_RE = /\.(mp3|wav|m4a|ogg|flac)$/i
 const PDF_RE = /\.pdf$/i
 
+/** The host segment that resolves a path against the watched library folders. */
+export const DOC_HOST = 'doc'
+
 export function toProtocolUrl(relPath: string): string {
   const encoded = relPath
     .replace(/^\/+/, '')
@@ -19,6 +22,21 @@ export function toProtocolUrl(relPath: string): string {
     .map(encodeURIComponent)
     .join('/')
   return `${STONE_PROTOCOL}://vault/${encoded}`
+}
+
+/**
+ * The URL for a library document, which is an absolute path outside the vault.
+ *
+ * Main re-checks it against the watched folders on every request — this only
+ * builds the URL, it does not grant anything.
+ */
+export function toDocumentUrl(absPath: string): string {
+  const encoded = absPath
+    .split(/[\\/]/)
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/')
+  return `${STONE_PROTOCOL}://${DOC_HOST}/${encoded}`
 }
 
 /** True for anything that is already a URL and must be left alone. */

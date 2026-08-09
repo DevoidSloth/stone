@@ -6,7 +6,9 @@ import type {
   GraphData,
   Mention,
   NoteMeta,
+  PluginCommand,
   PropertyDef,
+  RelationEdge,
   SavedView,
   SearchHit,
   SearchOptions,
@@ -18,10 +20,28 @@ import type {
   VaultStats
 } from '@shared/types'
 import { toISODate } from '@shared/task-syntax'
+import { setFrontmatterKey } from '@shared/frontmatter'
 
-export type View = 'today' | 'notes' | 'calendar' | 'tasks' | 'graph' | 'search' | 'trash' | 'views'
+export type View =
+  | 'today'
+  | 'notes'
+  | 'calendar'
+  | 'tasks'
+  | 'graph'
+  | 'search'
+  | 'trash'
+  | 'views'
+  | 'canvas'
+  | 'library'
 export type CalendarMode = 'month' | 'week' | 'agenda'
-export type SidePanel = 'backlinks' | 'outline' | 'properties' | 'comments' | 'localgraph' | 'history'
+export type SidePanel =
+  | 'backlinks'
+  | 'outline'
+  | 'properties'
+  | 'relations'
+  | 'comments'
+  | 'localgraph'
+  | 'history'
 
 export interface Toast {
   id: number
@@ -80,6 +100,8 @@ interface StoneState {
   tags: { tag: string; count: number }[]
   folders: string[]
   properties: PropertyDef[]
+  /** Resolved frontmatter links, for relation columns and rollups. */
+  relations: RelationEdge[]
   templates: NoteMeta[]
   activity: Record<string, number>
   graph: GraphData | null
@@ -107,6 +129,9 @@ interface StoneState {
 
   activeViewId: string | null
 
+  /** Commands contributed by plugins, merged into the palette. */
+  pluginCommands: PluginCommand[]
+
   /**
    * The Today view's journal is bound to the day's note specifically, kept
    * separate from the global selection so that clicking a note in the sidebar
@@ -130,6 +155,8 @@ interface StoneState {
   paletteOpen: boolean
   settingsOpen: boolean
   quickAddOpen: boolean
+  /** Text quick-add opens with, when capture arrived carrying some. */
+  quickAddSeed: string
   sidebarOpen: boolean
   agendaOpen: boolean
   toasts: Toast[]
@@ -160,13 +187,18 @@ interface StoneState {
   saveDoc: (relPath: string) => Promise<void>
   consumeReveal: (relPath: string) => void
 
-  createNote: (title: string, folder?: string) => Promise<void>
+  createNote: (
+    title: string,
+    folder?: string,
+    opts?: { pane?: number; newTab?: boolean }
+  ) => Promise<void>
   createFromTemplate: (title: string, templateRelPath: string) => Promise<void>
   deleteNote: (relPath: string) => Promise<void>
   renameNote: (relPath: string, title: string) => Promise<void>
   moveNote: (relPath: string, folder: string) => Promise<void>
   duplicateNote: (relPath: string) => Promise<void>
   toggleFavorite: (relPath: string) => Promise<void>
+  setNoteProperty: (relPath: string, key: string, value: string | null) => Promise<void>
 
   openDaily: (date?: string) => Promise<void>
   openPeriodic: (kind: 'week' | 'month', date?: string) => Promise<void>
@@ -204,9 +236,10 @@ interface StoneState {
 
   updateSettings: (patch: Partial<Settings>) => Promise<void>
   applyCssSnippets: () => Promise<void>
+  applyTheme: () => Promise<void>
   setPalette: (open: boolean) => void
   setSettingsOpen: (open: boolean) => void
-  setQuickAdd: (open: boolean) => void
+  setQuickAdd: (open: boolean, seed?: string) => void
   toggleSidebar: () => void
   toggleAgenda: () => void
   setSidePanel: (panel: SidePanel) => void
@@ -232,6 +265,7 @@ export const useStone = create<StoneState>((set, get) => ({
   tags: [],
   folders: [],
   properties: [],
+  relations: [],
   templates: [],
   activity: {},
   graph: null,
@@ -257,6 +291,7 @@ export const useStone = create<StoneState>((set, get) => ({
   searching: false,
 
   activeViewId: null,
+  pluginCommands: [],
 
   dailyRelPath: null,
   dailyContent: '',
@@ -275,6 +310,7 @@ export const useStone = create<StoneState>((set, get) => ({
   paletteOpen: false,
   settingsOpen: false,
   quickAddOpen: false,
+  quickAddSeed: '',
   sidebarOpen: true,
   agendaOpen: true,
   toasts: [],
@@ -289,9 +325,35 @@ export const useStone = create<StoneState>((set, get) => ({
       await get().refreshVault()
       void get().loadCalendar()
       void get().refreshAccounts()
-      void get().applyCssSnippets()
+      // Theme before snippets, so a snippet can still override the theme.
+      void get().applyTheme().then(() => get().applyCssSnippets())
+      void window.stone.plugins
+        .commands()
+        .then((pluginCommands) => set({ pluginCommands }))
+        .catch(() => undefined)
     }
     set({ ready: true })
+
+    window.stone.plugins.onCommands((pluginCommands) => set({ pluginCommands }))
+
+    // Capture from the global chord, the tray, or a `stone://` link. Main has
+    // already raised the window by the time one of these lands.
+    window.stone.capture.onAction((action) => {
+      switch (action.type) {
+        case 'quick-add':
+          get().setQuickAdd(true, action.text)
+          break
+        case 'open':
+          void get().openNote(action.relPath)
+          break
+        case 'daily':
+          void get().openDaily().then(() => get().setView('today'))
+          break
+        case 'new-note':
+          void get().createNote(action.title)
+          break
+      }
+    })
 
     window.stone.vault.onEvent((event) => {
       if (event.type === 'conflict') {
@@ -358,17 +420,19 @@ export const useStone = create<StoneState>((set, get) => ({
   },
 
   async refreshVault() {
-    const [notes, tasks, stats, tags, activity, folders, properties, templates] = await Promise.all([
-      window.stone.notes.list(),
-      window.stone.tasks.all(),
-      window.stone.vault.stats(),
-      window.stone.vault.tags(),
-      window.stone.vault.activity(),
-      window.stone.folders.list().catch(() => [] as string[]),
-      window.stone.vault.properties().catch(() => [] as PropertyDef[]),
-      window.stone.templates.list().catch(() => [] as NoteMeta[])
-    ])
-    set({ notes, tasks, stats, tags, activity, folders, properties, templates })
+    const [notes, tasks, stats, tags, activity, folders, properties, relations, templates] =
+      await Promise.all([
+        window.stone.notes.list(),
+        window.stone.tasks.all(),
+        window.stone.vault.stats(),
+        window.stone.vault.tags(),
+        window.stone.vault.activity(),
+        window.stone.folders.list().catch(() => [] as string[]),
+        window.stone.vault.properties().catch(() => [] as PropertyDef[]),
+        window.stone.vault.relations().catch(() => [] as RelationEdge[]),
+        window.stone.templates.list().catch(() => [] as NoteMeta[])
+      ])
+    set({ notes, tasks, stats, tags, activity, folders, properties, relations, templates })
 
     // Only the graph screen pays for rebuilding the graph on every file change.
     if (get().view === 'graph') void get().loadGraph()
@@ -400,6 +464,11 @@ export const useStone = create<StoneState>((set, get) => ({
   // ------------------------------------------------------------- navigation
 
   async openNote(relPath, opts = {}) {
+    // Today's journal autosaves on a delay, so flush it before reading any file
+    // off disk — otherwise opening the day note as a page loses the last few
+    // keystrokes, and the pending write then lands under the open editor.
+    if (get().dailyDirty) await get().saveDaily()
+
     const note = await window.stone.notes.get(relPath)
     if (!note) {
       get().toast('That note is no longer in the vault.', 'error')
@@ -435,7 +504,10 @@ export const useStone = create<StoneState>((set, get) => ({
         panes,
         activePane: paneIndex,
         activeRelPath: relPath,
-        view: state.view === 'today' ? 'today' : 'notes',
+        // Opening a page is a request to read it, so the pane it lands in has
+        // to be the one on screen — including from Today, whose sidebar and
+        // event rows would otherwise open notes nobody can see.
+        view: 'notes',
         docs: {
           ...state.docs,
           [relPath]: {
@@ -447,9 +519,6 @@ export const useStone = create<StoneState>((set, get) => ({
         }
       }
     })
-
-    // Opening a page from anywhere other than Today is a request to read it.
-    if (get().view !== 'today') set({ view: 'notes' })
 
     const [backlinks, mentions] = await Promise.all([
       window.stone.notes.backlinks(relPath),
@@ -656,14 +725,14 @@ export const useStone = create<StoneState>((set, get) => ({
 
   // ----------------------------------------------------------- note actions
 
-  async createNote(title, folder) {
+  async createNote(title, folder, opts = {}) {
     const settings = get().settings
     const target = folder ?? settings?.inboxFolder ?? 'Notes'
     try {
       // Empty body: the filename is the title, so an H1 would just duplicate it.
       const { relPath } = await window.stone.notes.create(target, title, '')
       await get().refreshVault()
-      await get().openNote(relPath)
+      await get().openNote(relPath, opts)
       set({ view: 'notes' })
     } catch (err) {
       get().toast((err as Error).message, 'error')
@@ -748,6 +817,51 @@ export const useStone = create<StoneState>((set, get) => ({
       ? settings.favorites.filter((f) => f !== relPath)
       : [...settings.favorites, relPath]
     await get().updateSettings({ favorites })
+  },
+
+  /**
+   * Write one frontmatter key on a note that may not be open.
+   *
+   * This is what makes a database view a place you can change things rather
+   * than only read them. It goes through the same surgical frontmatter helpers
+   * the properties panel uses, so dragging a card between board columns edits
+   * exactly one line of YAML and leaves the rest of the file byte-identical.
+   *
+   * The buffer is patched too when the note happens to be open, since the file
+   * watcher would otherwise land an "external change" on a note the user is
+   * looking at, and discard nothing but confuse everyone.
+   */
+  async setNoteProperty(relPath, key, value) {
+    try {
+      const open = get().docs[relPath]
+      const content = open?.content ?? (await window.stone.notes.get(relPath))?.content
+      if (content === undefined) throw new Error('That note is no longer in the vault.')
+
+      const next = setFrontmatterKey(content, key, value)
+      if (next === content) return
+
+      const result = await window.stone.notes.save(relPath, next, open?.hash ?? undefined)
+      if (open) {
+        set((state) => ({
+          docs: {
+            ...state.docs,
+            [relPath]: { ...state.docs[relPath], content: next, hash: result.hash, dirty: false }
+          }
+        }))
+      }
+      // Optimistic, so a dragged card lands in its new column on the same frame
+      // rather than after the watcher has caught up.
+      set((state) => ({
+        notes: state.notes.map((n) =>
+          n.relPath === relPath
+            ? { ...n, frontmatter: { ...n.frontmatter, [key]: value ?? undefined } }
+            : n
+        )
+      }))
+      await get().refreshVault()
+    } catch (err) {
+      get().toast((err as Error).message, 'error')
+    }
   },
 
   // ------------------------------------------------------------- daily note
@@ -1070,6 +1184,30 @@ export const useStone = create<StoneState>((set, get) => ({
     }
     set({ settings })
     if (patch.cssSnippets) void get().applyCssSnippets()
+    if (patch.activeTheme !== undefined || patch.themeFolder) void get().applyTheme()
+  },
+
+  /**
+   * The active theme, in its own style element ahead of the snippets one.
+   *
+   * Order is the whole mechanism here: two stylesheets of equal specificity are
+   * resolved by which came last, so putting the theme first is what lets a
+   * snippet adjust a theme rather than fight it.
+   */
+  async applyTheme() {
+    let style = document.getElementById('stone-theme') as HTMLStyleElement | null
+    if (!style) {
+      style = document.createElement('style')
+      style.id = 'stone-theme'
+      const snippets = document.getElementById('stone-snippets')
+      if (snippets) document.head.insertBefore(style, snippets)
+      else document.head.appendChild(style)
+    }
+    try {
+      style.textContent = await window.stone.vault.themeCss()
+    } catch {
+      style.textContent = ''
+    }
   },
 
   /**
@@ -1099,8 +1237,8 @@ export const useStone = create<StoneState>((set, get) => ({
   setSettingsOpen(settingsOpen) {
     set({ settingsOpen })
   },
-  setQuickAdd(quickAddOpen) {
-    set({ quickAddOpen })
+  setQuickAdd(quickAddOpen, seed) {
+    set({ quickAddOpen, quickAddSeed: quickAddOpen ? (seed ?? '') : '' })
   },
   toggleSidebar() {
     set((s) => ({ sidebarOpen: !s.sidebarOpen }))

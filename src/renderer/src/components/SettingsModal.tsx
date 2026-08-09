@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useStone } from '../store'
+import { KeybindingSettings } from './KeybindingSettings'
+import { CaptureSettings } from './CaptureSettings'
+import { ExtensionSettings } from './ExtensionSettings'
 import { IconCloud, IconPlus, IconRefresh, IconTrash, IconX } from '../ui/icons'
 
 const FEED_COLORS = ['#e0a94a', '#45c79a', '#8891ff', '#ee6b6b', '#4fa8d8', '#b07ce0']
@@ -292,6 +295,18 @@ export function SettingsModal() {
               </div>
             )}
           </section>
+
+          <div className="divider" />
+
+          <KeybindingSettings />
+
+          <div className="divider" />
+
+          <CaptureSettings />
+
+          <div className="divider" />
+
+          <ExtensionSettings />
 
           <div className="divider" />
 

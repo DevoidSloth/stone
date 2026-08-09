@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
 import path from 'node:path'
 import { ensureDir, sanitizeFilename, uniquePath } from './vault/fs'
+import { htmlToMarkdown as convertHtml } from './html-markdown'
 
 /**
  * Importers.
@@ -105,30 +106,7 @@ function quoteIfNeeded(value: string): string {
 
 /** Strip HTML to text, preserving paragraph and list structure. */
 function htmlToMarkdown(html: string): string {
-  return html
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|h[1-6]|li|tr)>/gi, '\n')
-    .replace(/<li[^>]*>/gi, '- ')
-    .replace(/<h1[^>]*>/gi, '\n# ')
-    .replace(/<h2[^>]*>/gi, '\n## ')
-    .replace(/<h3[^>]*>/gi, '\n### ')
-    .replace(/<(b|strong)>([\s\S]*?)<\/\1>/gi, '**$2**')
-    .replace(/<(i|em)>([\s\S]*?)<\/\1>/gi, '*$2*')
-    .replace(/<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
-    .replace(/<en-todo[^>]*checked="true"[^>]*\/?>/gi, '- [x] ')
-    .replace(/<en-todo[^>]*\/?>/gi, '- [ ] ')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
+  return convertHtml(html, { evernoteTodos: true })
 }
 
 /** Evernote `.enex` is XML holding one `<note>` per exported note. */
