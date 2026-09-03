@@ -195,16 +195,35 @@ function extractStreams(data: Buffer): string[] {
   return out
 }
 
-/** Read the text-showing operators out of one content stream. */
+/**
+ * How large a backward kern has to be before it counts as a word space.
+ *
+ * TJ offsets are thousandths of an em, negative meaning "move right". Typesetters
+ * use small negative values to tighten letter pairs and large ones to separate
+ * words, and the gap between those two uses is where this sits. Too low and
+ * every kerned pair becomes a word break; too high and text sets solid.
+ */
+const WORD_GAP = 140
+
+/**
+ * Read the text-showing operators out of one content stream.
+ *
+ * The subtlety is that a PDF does not have to contain any spaces. `Tj` shows a
+ * string; `TJ` shows an array of strings interleaved with kerning numbers, and
+ * many producers — LaTeX especially — emit one glyph per element and express
+ * every space as a numeric gap. So the numbers have to be read: joining the
+ * fragments blindly gives `Math1920,FinalExam`, and inserting a space between
+ * each gives `Pa u l D a wk in s`. Both were real output from this function
+ * before it understood the array.
+ */
 function textFromStream(stream: string): string[] {
   const pieces: string[] = []
 
-  // `(text) Tj`, `[(a) -20 (b)] TJ`, and the quote operators that also move the
-  // line. Strings are collected wherever they appear before a show operator,
-  // which is looser than parsing properly but survives malformed streams.
-  const re = /\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>|\bTJ\b|\bTj\b|\bT\*\b|\bTD\b|\bTd\b|'|"/g
+  const re =
+    /\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>|-?\d+(?:\.\d+)?|\[|\]|\bTJ\b|\bTj\b|\bT\*\b|\bTD\b|\bTd\b|'|"/g
 
   let pending: string[] = []
+  let inArray = false
   let match: RegExpExecArray | null
 
   const flush = (breakLine: boolean): void => {
@@ -218,10 +237,19 @@ function textFromStream(stream: string): string[] {
 
   while ((match = re.exec(stream)) !== null) {
     const token = match[0]
-    if (token.startsWith('(')) {
+
+    if (token === '[') {
+      inArray = true
+    } else if (token === ']') {
+      inArray = false
+    } else if (token.startsWith('(')) {
       pending.push(decodeLiteral(token.slice(1, -1)))
     } else if (token.startsWith('<')) {
       pending.push(decodeHex(token.slice(1, -1)))
+    } else if (inArray && /^-?[\d.]+$/.test(token)) {
+      // Only inside a TJ array is a bare number a kern; elsewhere it is an
+      // operand to something we are not tracking, and must be ignored.
+      if (Number(token) <= -WORD_GAP) pending.push(' ')
     } else if (token === 'Tj' || token === 'TJ') {
       flush(false)
     } else if (token === "'" || token === '"' || token === 'T*' || token === 'TD' || token === 'Td') {
@@ -266,8 +294,11 @@ export function extractPdfText(data: Buffer, limit = 400_000): PdfText {
     if (total > limit) break
   }
 
+  // Joined without a separator: spacing is now carried by the text itself and by
+  // the kerns turned into spaces above, so adding more here would re-break the
+  // words that fix was for. Line breaks arrive as their own pieces.
   const text = chunks
-    .join(' ')
+    .join('')
     .replace(/[ \t]+/g, ' ')
     .replace(/ ?\n ?/g, '\n')
     .replace(/\n{3,}/g, '\n\n')

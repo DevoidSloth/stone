@@ -33,6 +33,17 @@ function asStringArray(value: unknown): string[] {
   return []
 }
 
+/**
+ * Page icons are not only emoji: a chapter number or a monogram is a valid
+ * icon. Stone quotes them on write, but a hand-edited `icon: 7` reaches YAML
+ * as a number, and dropping it would silently erase the icon on save.
+ */
+function resolveIcon(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() || null
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return null
+}
+
 /** Frontmatter `date:` wins; otherwise a `YYYY-MM-DD` in the filename. */
 function resolveDate(frontmatter: Record<string, unknown>, relPath: string): string | null {
   const fm = frontmatter.date ?? frontmatter.day
@@ -180,7 +191,7 @@ export function parseNote(
     doneCount: tasks.filter((t) => t.status === 'done').length,
     excerpt: buildExcerpt(body),
     date: resolveDate(frontmatter, relPath),
-    icon: typeof frontmatter.icon === 'string' ? frontmatter.icon.trim() || null : null,
+    icon: resolveIcon(frontmatter.icon),
     cover: typeof frontmatter.cover === 'string' ? frontmatter.cover.trim() || null : null,
     words: countWords(raw)
   }

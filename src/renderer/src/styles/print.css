@@ -1,0 +1,601 @@
+/*
+ * The print sheet.
+ *
+ * Loaded only by the print window, never by the app. It borrows the app's
+ * tokens for colour and its two text faces, then throws away every assumption
+ * that belongs to a screen: no dark mode, no hover, no viewport. Paper has a
+ * fixed width and hard edges, and most of what follows is about where the page
+ * is allowed to break.
+ *
+ * Page geometry is set from `printToPDF` options, not here, and the two must
+ * not both try: CSS `@page` margins move the content while the printer's
+ * margins move the header and footer, so setting both puts them out of step.
+ *
+ * That is also why the running header appears on the cover. Chromium draws it
+ * into the printer's margin box on every page, there is no page-index selector
+ * to switch it off for the first one, and `@page :first { margin: 0 }` only
+ * pulls the cover's own content to the paper's edge without moving the header.
+ * Suppressing it properly would mean printing the cover separately and joining
+ * two PDFs, which needs a PDF writer this app does not have.
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  /* Tokens carry a dark theme; paper does not. */
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background: #fff;
+  color: var(--text);
+  font-family: var(--font-serif);
+  font-size: 10.5pt;
+  line-height: 1.55;
+  /* Serif text at print sizes wants the real thing, not synthesised weights. */
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Two or three words stranded at the top of a page is the single most common
+   thing that makes an exported document look machine-made. */
+p,
+li,
+blockquote {
+  orphans: 3;
+  widows: 3;
+}
+
+/* ------------------------------------------------------------------- cover */
+
+.cover {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  /* The printer's own margins are already applied, so the cover fills what is
+     left of the sheet rather than guessing at page height. */
+  min-height: 92vh;
+  break-after: page;
+}
+
+.cover__top {
+  padding-top: 22vh;
+}
+
+.cover__icon {
+  font-size: 34pt;
+  line-height: 1;
+  margin-bottom: 0.4em;
+}
+
+.cover__title {
+  font-family: var(--font-serif);
+  font-size: 30pt;
+  font-weight: 500;
+  line-height: 1.12;
+  letter-spacing: -0.015em;
+  margin: 0;
+}
+
+.cover__subtitle {
+  font-family: var(--font-ui);
+  font-size: 12pt;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin: 0.7em 0 0;
+  max-width: 34em;
+}
+
+.cover__rule {
+  border-top: 1px solid var(--text);
+  margin-bottom: 0.8em;
+}
+
+.cover__meta {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-ui);
+  font-size: 8.5pt;
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------- contents */
+
+.toc {
+  break-after: page;
+}
+
+.toc__head,
+.doc h1,
+.doc h2,
+.doc h3,
+.doc h4,
+.doc h5,
+.doc h6 {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  letter-spacing: var(--track-tight);
+  /* A heading alone at the foot of a page is a heading in the wrong place. */
+  break-after: avoid;
+  break-inside: avoid;
+}
+
+.toc__head {
+  font-size: 15pt;
+  margin: 0 0 1.4em;
+}
+
+.toc__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-ui);
+  font-size: 10pt;
+}
+
+.toc__row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+  margin-bottom: 0.62em;
+  break-inside: avoid;
+}
+
+.toc__row--h3 {
+  padding-left: 1.4em;
+  font-size: 9.5pt;
+  color: var(--text-muted);
+}
+
+.toc__link {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* The leader is drawn, not typed, so it cannot wrap or drift out of alignment. */
+.toc__dots {
+  flex: 1;
+  border-bottom: 1px dotted var(--border-strong);
+  transform: translateY(-0.25em);
+  min-width: 1.5em;
+}
+
+.toc__page {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+/* First pass only: a placeholder that reserves the width the real number takes. */
+.toc__page--pending {
+  visibility: hidden;
+}
+
+/* -------------------------------------------------------------------- body */
+
+.doc h1 {
+  font-size: 19pt;
+  margin: 0 0 0.7em;
+}
+.doc h2 {
+  font-size: 14pt;
+  margin: 1.9em 0 0.55em;
+}
+.doc h3 {
+  font-size: 11.5pt;
+  margin: 1.5em 0 0.4em;
+}
+.doc h4,
+.doc h5,
+.doc h6 {
+  font-size: 10.5pt;
+  margin: 1.3em 0 0.35em;
+}
+
+/* An h2 that opens the document should not be pushed down by its own margin. */
+.doc > h1:first-child,
+.doc > h2:first-child {
+  margin-top: 0;
+}
+
+.doc p {
+  margin: 0 0 0.75em;
+}
+
+.doc ul,
+.doc ol {
+  margin: 0 0 0.85em;
+  padding-left: 1.5em;
+}
+
+.doc li {
+  margin-bottom: 0.28em;
+}
+
+.doc li > ul,
+.doc li > ol {
+  margin: 0.28em 0 0;
+}
+
+/* Tasks. A printed checkbox is a drawn box — form controls print inconsistently
+   across viewers, and a missing tick is worse than no tick at all. */
+.doc .task {
+  list-style: none;
+  position: relative;
+  padding-left: 0.3em;
+}
+
+.task__box {
+  position: absolute;
+  left: -1.15em;
+  top: 0.24em;
+  width: 0.72em;
+  height: 0.72em;
+  border: 1px solid var(--text-ghost);
+  border-radius: 2px;
+}
+
+.task__box--done {
+  background: var(--text-muted);
+  border-color: var(--text-muted);
+}
+
+.task__box--done::after {
+  content: '';
+  position: absolute;
+  left: 0.16em;
+  top: 0.02em;
+  width: 0.22em;
+  height: 0.42em;
+  border: solid #fff;
+  border-width: 0 1.4px 1.4px 0;
+  transform: rotate(43deg);
+}
+
+.task--done {
+  color: var(--text-faint);
+}
+
+.doc blockquote {
+  margin: 0 0 0.9em;
+  padding-left: 1em;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-muted);
+  font-style: italic;
+  break-inside: avoid;
+}
+
+.doc blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* ---------------------------------------------------------------- callouts */
+
+.callout {
+  border-left: 3px solid var(--text-ghost);
+  background: var(--bg-surface);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  padding: 0.7em 0.9em;
+  margin: 0 0 0.95em;
+  break-inside: avoid;
+  font-size: 0.96em;
+}
+
+.callout p:last-child {
+  margin-bottom: 0;
+}
+
+.callout p:first-child strong {
+  font-family: var(--font-ui);
+  font-size: 0.92em;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+}
+
+.callout--info {
+  border-left-color: var(--accent);
+  background: var(--blue-soft);
+}
+.callout--tip {
+  border-left-color: var(--green);
+  background: var(--green-soft);
+}
+.callout--warn {
+  border-left-color: var(--yellow);
+  background: var(--yellow-soft);
+}
+.callout--danger {
+  border-left-color: var(--red);
+  background: var(--red-soft);
+}
+.callout--quote {
+  border-left-color: var(--text-ghost);
+  background: var(--bg-surface);
+}
+
+/* ------------------------------------------------------------------ tables */
+
+/* Deliberately breakable: a long table has to be allowed to span pages, or the
+   `table-header-group` rule below has nothing to repeat onto. Rows stay whole. */
+.doc table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 1.1em;
+  font-family: var(--font-ui);
+  font-size: 9pt;
+}
+
+/* A table that outgrows a page repeats its header on the next one. Without
+   this, page two of a long table is a grid of unlabelled numbers. */
+.doc thead {
+  display: table-header-group;
+}
+
+.doc th,
+.doc td {
+  border: 1px solid var(--border);
+  padding: 0.45em 0.6em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.doc th {
+  background: var(--bg-surface);
+  font-weight: 600;
+}
+
+.doc tr {
+  break-inside: avoid;
+}
+
+/* -------------------------------------------------------------------- code */
+
+.doc code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  background: var(--bg-surface);
+  border-radius: var(--r-xs);
+  padding: 0.1em 0.28em;
+}
+
+.md-code {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-md);
+  padding: 0.8em 1em;
+  margin: 0 0 1em;
+  font-size: 8.5pt;
+  line-height: 1.5;
+  break-inside: avoid;
+  /* Paper cannot scroll. Long lines wrap, indented, rather than falling off
+     the right edge — the most visible tell of an HTML page sent to a printer. */
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  tab-size: 2;
+}
+
+.md-code code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+.tok-keyword {
+  color: var(--code-keyword);
+}
+.tok-string {
+  color: var(--code-string);
+}
+.tok-number {
+  color: var(--code-number);
+}
+.tok-comment {
+  color: var(--code-comment);
+  font-style: italic;
+}
+.tok-function {
+  color: var(--code-function);
+}
+.tok-type {
+  color: var(--code-type);
+}
+.tok-property {
+  color: var(--code-property);
+}
+.tok-variable {
+  color: var(--code-variable);
+}
+.tok-operator {
+  color: var(--code-operator);
+}
+.tok-link {
+  color: var(--link);
+  text-decoration: underline;
+}
+.tok-invalid {
+  color: var(--code-invalid);
+}
+
+/* --------------------------------------------------- figures, math, embeds */
+
+.doc img {
+  max-width: 100%;
+  height: auto;
+  break-inside: avoid;
+}
+
+.md-figure {
+  margin: 0 0 1.1em;
+  text-align: center;
+  break-inside: avoid;
+}
+
+/* An embedded page, drawn as a bitmap by `renderPdfEmbeds`. */
+.md-pdf {
+  margin: 0 0 1.1em;
+  text-align: center;
+  break-inside: avoid;
+}
+
+.md-pdf img {
+  border: 1px solid var(--border);
+}
+
+.md-pdf figcaption {
+  font-family: var(--font-ui);
+  font-size: 8pt;
+  color: var(--text-faint);
+  margin-top: 0.4em;
+}
+
+/* Nothing was drawn, so the caption is all there is — say what it is. */
+.md-pdf--failed figcaption::before {
+  content: 'PDF: ';
+}
+
+.md-media {
+  max-width: 100%;
+}
+
+.md-mermaid {
+  margin: 0 0 1.1em;
+  text-align: center;
+  break-inside: avoid;
+}
+
+.md-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.md-mermaid--failed pre {
+  text-align: left;
+}
+
+/* A drawing prints like a figure: centred, never split across a page break,
+   and scaled to the column whatever the source declared. */
+.md-svg {
+  margin: 0 0 1.1em;
+  text-align: center;
+  break-inside: avoid;
+}
+
+.md-svg svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Not a drawing after all — its source is still worth printing. */
+.md-svg--failed pre {
+  text-align: left;
+}
+
+.md-svg--drawn pre {
+  display: none;
+}
+
+/*
+ * A program figure — a memory diagram, a tree, an algorithm run. The figure's
+ * own styles come from `viz.css`, which the print window loads too; all that is
+ * needed here is the space around it and a promise not to split it over a page.
+ */
+.md-viz {
+  margin: 0 0 1.1em;
+  break-inside: avoid;
+}
+
+/* A run printed as a strip of stills can be long; only each still is kept
+   whole. */
+.md-viz .viz__film {
+  break-inside: auto;
+}
+
+.md-math--block {
+  margin: 1em 0;
+  text-align: center;
+  break-inside: avoid;
+}
+
+.md-math--error {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--red);
+}
+
+.md-embed {
+  border-left: 2px solid var(--border);
+  padding-left: 1em;
+  margin: 0 0 1em;
+}
+
+.md-embed__from {
+  font-family: var(--font-ui);
+  font-size: 8pt;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 0 0 0.5em;
+}
+
+/* ------------------------------------------------------------ inline marks */
+
+.doc a {
+  color: var(--link);
+  text-decoration: none;
+  border-bottom: 1px solid rgb(51 126 169 / 32%);
+}
+
+/* A wikilink has no destination once the note is on paper, so it is styled as
+   a reference rather than dressed up as something the reader can follow. */
+.wikilink {
+  color: var(--text-strong);
+  border-bottom: 1px dotted var(--text-ghost);
+}
+
+.doc mark {
+  background: var(--yellow-soft);
+  color: inherit;
+  padding: 0 0.15em;
+}
+
+.doc hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 1.8em 0;
+}
+
+.doc del {
+  color: var(--text-faint);
+}
+
+/*
+ * Measuring markers, present only on the pass that is never saved.
+ *
+ * White rather than transparent, which looks like the same thing and is not:
+ * Chromium skips painting fully transparent text, and text it does not paint
+ * does not reach the PDF, which is where the marker has to be readable. Out of
+ * flow, so it cannot move a single line of what is being measured.
+ */
+.page-marker {
+  /*
+   * In normal flow, not absolutely positioned. An out-of-flow marker is laid
+   * out against its heading but paginated on its own, so a heading pushed to
+   * the next page left its marker behind on the previous one and the contents
+   * page was a page out. Zero width with visible overflow keeps it in the
+   * heading's line box — same line, same page — while taking up no space.
+   */
+  display: inline-block;
+  width: 0;
+  overflow: visible;
+  white-space: nowrap;
+  color: #fff;
+  font-size: 4pt;
+  pointer-events: none;
+  user-select: none;
+}

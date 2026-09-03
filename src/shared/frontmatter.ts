@@ -13,14 +13,46 @@ function keyLineRe(key: string): RegExp {
   return new RegExp(`^\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:`)
 }
 
+/**
+ * Values YAML would read as something other than the text that was typed: a
+ * number (`icon: 7`), a boolean, or a line starting with an indicator such as
+ * `#`, `>` or `*`. Page icons run straight into all three, and an unquoted one
+ * comes back from the indexer as 7, as null, or as a parse error.
+ */
+const YAML_INDICATOR_RE = /^[-?:,[\]{}#&*!|>'"%@`]/
+const YAML_NUMBER_RE = /^[+-]?(?:\d[\d_]*(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$|^0[xob]/i
+const YAML_KEYWORD_RE = /^(?:true|false|yes|no|on|off|null|~)$/i
+
+/** Quote a scalar when plain YAML would misread it; otherwise leave it bare. */
+export function yamlScalar(value: string): string {
+  const bare =
+    value.length > 0 &&
+    value === value.trim() &&
+    !YAML_INDICATOR_RE.test(value) &&
+    !YAML_NUMBER_RE.test(value) &&
+    !YAML_KEYWORD_RE.test(value) &&
+    !value.includes(': ') &&
+    !/\s#/.test(value)
+  return bare ? value : `'${value.replace(/'/g, "''")}'`
+}
+
+/** Undo `yamlScalar`, and the plain quoting a hand-edited note might use. */
+function unquote(value: string): string {
+  const quote = value[0]
+  if ((quote === "'" || quote === '"') && value.length > 1 && value.endsWith(quote)) {
+    const inner = value.slice(1, -1)
+    return quote === "'" ? inner.replace(/''/g, "'") : inner
+  }
+  return value
+}
+
 /** Read a single scalar key, or null when absent. */
 export function readFrontmatterKey(raw: string, key: string): string | null {
   const m = BLOCK_RE.exec(raw)
   if (!m) return null
   for (const line of m[2].split(/\r?\n/)) {
     if (keyLineRe(key).test(line)) {
-      const value = line.slice(line.indexOf(':') + 1).trim()
-      return value.replace(/^["']|["']$/g, '') || null
+      return unquote(line.slice(line.indexOf(':') + 1).trim()) || null
     }
   }
   return null

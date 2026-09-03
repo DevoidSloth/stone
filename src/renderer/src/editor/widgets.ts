@@ -1,10 +1,30 @@
-import { WidgetType } from '@codemirror/view'
+import { WidgetType, type EditorView } from '@codemirror/view'
+import { EditorSelection } from '@codemirror/state'
 import katex from 'katex'
+import { sanitizeSvg } from '../lib/svg'
+import { renderViz, type Rendered, type VizKind } from '../viz'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { TaskStatus } from '@shared/types'
-import { embedKind, isExternalUrl, toProtocolUrl } from '@shared/attachments'
+import { embedKind, resolveAssetUrl, withEmbedWidth, type EmbedSpec } from '@shared/attachments'
+import { enqueueRender, openPdf } from '../lib/pdfjs'
 import { EmbeddedQuery } from '../components/EmbeddedQuery'
+import {
+  asModel,
+  deleteColumn,
+  deleteRow,
+  findTable,
+  insertColumn,
+  insertRow,
+  setCell,
+  revealTableSource,
+  setPendingFocus,
+  takePendingFocus,
+  writeTable,
+  type CellAlign,
+  type TableEdit,
+  type TableModel
+} from './table'
 
 /**
  * The block and inline widgets live preview swaps in for raw markdown.
@@ -13,7 +33,29 @@ import { EmbeddedQuery } from '../components/EmbeddedQuery'
  * is only shown while the caret is elsewhere, and `ignoreEvent` returns false so
  * clicks reach the editor's own DOM handlers rather than being swallowed as a
  * selection drag.
+ *
+ * `TableWidget` is the deliberate exception on all three counts — it is edited
+ * in place, so it holds the caret and writes the document itself.
  */
+
+/**
+ * The spacer element every block widget hands to CodeMirror.
+ *
+ * CodeMirror measures a block widget with `getBoundingClientRect()`, and that
+ * does not include margins. A `margin: 12px 0` on a table is 24px of layout the
+ * height map never learns about, and the error compounds down the page: every
+ * click below the table lands lower than it was aimed, and Up shoots to the top
+ * of the note because the coordinate it scans back to is one the editor has no
+ * block for. So the gap between a block and the prose around it is padding on
+ * this shell, and everything with a border, a background or a radius stays on
+ * the element inside it.
+ */
+function blockShell(inner: HTMLElement, gap: 'tight' | 'wide' = 'tight'): HTMLElement {
+  const root = document.createElement('div')
+  root.className = gap === 'wide' ? 'cm-block cm-block--wide' : 'cm-block'
+  root.appendChild(inner)
+  return root
+}
 
 export class CheckboxWidget extends WidgetType {
   constructor(readonly status: TaskStatus) {
@@ -32,6 +74,32 @@ export class CheckboxWidget extends WidgetType {
     box.setAttribute('aria-checked', String(this.status === 'done'))
     box.setAttribute('tabindex', '-1')
     return box
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+
+/**
+ * The arrow an ASCII pair stands for: `->` `<-` `^|` `v|`. The document keeps
+ * the two characters you typed, so the note is still plain markdown anywhere
+ * else — only the drawing is an arrow.
+ */
+export class ArrowWidget extends WidgetType {
+  constructor(readonly glyph: string) {
+    super()
+  }
+
+  eq(other: ArrowWidget): boolean {
+    return other.glyph === this.glyph
+  }
+
+  toDOM(): HTMLElement {
+    const el = document.createElement('span')
+    el.className = 'tok-arrow'
+    el.textContent = this.glyph
+    return el
   }
 
   ignoreEvent(): boolean {
@@ -65,6 +133,10 @@ export class PropsWidget extends WidgetType {
     return other.keys.join() === this.keys.join()
   }
 
+  get estimatedHeight(): number {
+    return 32
+  }
+
   toDOM(): HTMLElement {
     const el = document.createElement('div')
     el.className = 'cm-props'
@@ -89,40 +161,141 @@ export class PropsWidget extends WidgetType {
   }
 }
 
-/** Resolve a vault path or URL to something the renderer is allowed to load. */
-export function resolveAssetUrl(target: string, attachmentsFolder: string): string {
-  const clean = target.trim()
-  if (isExternalUrl(clean)) return clean
-  // A bare filename means the attachments folder; a path means the vault root.
-  const relative = clean.startsWith('/')
-    ? clean.slice(1)
-    : clean.includes('/')
-      ? clean
-      : `${attachmentsFolder}/${clean}`
-  return toProtocolUrl(decodeURIComponent(relative))
+/**
+ * Corner-drag resizing for a block embed.
+ *
+ * The size lives in the document — `![[a.png|420]]` — so a drag has to end in
+ * an edit, not in a style that disappears on the next re-render. During the
+ * drag only the element's own style moves, which is instant and costs nothing;
+ * the transaction is dispatched once, on release, so the undo history gets one
+ * entry for "resized the picture" rather than one per mouse move.
+ *
+ * Double-clicking the handle drops the size again and returns the embed to
+ * whatever its natural width is, which is otherwise oddly hard to get back to.
+ */
+function resizable(
+  view: EditorView,
+  root: HTMLElement,
+  target: HTMLElement,
+  onLive?: (width: number) => void
+): HTMLElement {
+  const handle = document.createElement('span')
+  handle.className = 'cm-embed__grip'
+  handle.title = 'Drag to resize, double-click to reset'
+
+  const write = (width: number | null): void => {
+    // A drag that outlives its widget — the note was reloaded, or an edit
+    // landed from somewhere else — has nothing left to write into.
+    if (!root.isConnected) return
+    const pos = view.posAtDOM(root)
+    if (pos > view.state.doc.length) return
+    const line = view.state.doc.lineAt(pos)
+    const next = withEmbedWidth(line.text, width)
+    if (next === null || next === line.text) return
+    view.dispatch({ changes: { from: line.from, to: line.to, insert: next } })
+  }
+
+  handle.addEventListener('mousedown', (event) => {
+    if (event.button !== 0) return
+    // Without this the editor treats the press as a click into the text and
+    // replaces the widget with its source mid-drag.
+    event.preventDefault()
+    event.stopPropagation()
+
+    const startX = event.clientX
+    const startWidth = target.getBoundingClientRect().width
+    // Never wider than the column it sits in: a picture that overflows the
+    // editor cannot be grabbed again to make it smaller.
+    const max = Math.round(view.contentDOM.getBoundingClientRect().width)
+    let width = Math.round(startWidth)
+
+    const move = (e: MouseEvent): void => {
+      width = Math.round(Math.min(Math.max(startWidth + (e.clientX - startX), MIN_EMBED_WIDTH), max))
+      target.style.width = `${width}px`
+      target.style.height = 'auto'
+      target.style.maxHeight = 'none'
+      onLive?.(width)
+    }
+
+    const up = (): void => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+      root.classList.remove('cm-embed--resizing')
+      if (Math.abs(width - startWidth) >= 2) write(width)
+    }
+
+    root.classList.add('cm-embed--resizing')
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  })
+
+  handle.addEventListener('dblclick', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    write(null)
+  })
+
+  return handle
 }
+
+/** Small enough to be a thumbnail, big enough to still have a grip on it. */
+const MIN_EMBED_WIDTH = 48
 
 export class ImageWidget extends WidgetType {
   constructor(
     readonly src: string,
     readonly alt: string,
-    readonly block: boolean
+    readonly block: boolean,
+    /** From `![[a.png|300]]`; null means the picture's own size. */
+    readonly width: number | null = null,
+    readonly height: number | null = null
   ) {
     super()
   }
 
   eq(other: ImageWidget): boolean {
-    return other.src === this.src && other.alt === this.alt && other.block === this.block
+    return (
+      other.src === this.src &&
+      other.alt === this.alt &&
+      other.block === this.block &&
+      other.width === this.width &&
+      other.height === this.height
+    )
   }
 
-  toDOM(): HTMLElement {
+  /**
+   * A guess for the lines CodeMirror has not drawn yet. It only has to be the
+   * right order of magnitude — a widget assumed to be one line tall throws the
+   * scrollbar and every coordinate below it out by the height of the picture.
+   */
+  get estimatedHeight(): number {
+    if (!this.block) return -1
+    return this.height ?? (this.width ? Math.round(this.width * 0.66) : 260)
+  }
+
+  toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement(this.block ? 'div' : 'span')
     wrap.className = this.block ? 'cm-embed cm-embed--image' : 'cm-embed cm-embed--image-inline'
 
     const img = document.createElement('img')
     img.src = this.src
     img.alt = this.alt
-    img.loading = 'lazy'
+    // A requested size goes on the element rather than in CSS so the box is
+    // reserved before the bytes arrive — otherwise every image on screen
+    // reflows the note underneath it as it decodes.
+    if (this.width) {
+      img.width = this.width
+      img.style.width = `${this.width}px`
+    }
+    if (this.height) {
+      img.height = this.height
+      img.style.height = `${this.height}px`
+    }
+    if (this.width || this.height) wrap.classList.add('cm-embed--sized')
+    // Not `loading="lazy"`. CodeMirror already draws only what is on screen, so
+    // the browser's own deferral buys nothing and costs a widget that reports
+    // zero height until it is scrolled to — which is exactly the kind of lie the
+    // height map cannot recover from.
     img.draggable = false
     // A broken path should say so rather than leave a silent gap.
     img.addEventListener('error', () => {
@@ -130,7 +303,13 @@ export class ImageWidget extends WidgetType {
       wrap.textContent = `Missing: ${this.alt || this.src}`
     })
     wrap.appendChild(img)
-    return wrap
+    if (!this.block) return wrap
+
+    // Only a figure on its own line gets a grip: an embed mid-sentence shares
+    // the line with prose, and the write-back has no unambiguous text to edit.
+    const shell = blockShell(wrap)
+    wrap.appendChild(resizable(view, shell, img))
+    return shell
   }
 
   ignoreEvent(): boolean {
@@ -141,7 +320,7 @@ export class ImageWidget extends WidgetType {
 export class MediaWidget extends WidgetType {
   constructor(
     readonly src: string,
-    readonly kind: 'video' | 'audio' | 'pdf',
+    readonly kind: 'video' | 'audio',
     readonly label: string
   ) {
     super()
@@ -151,29 +330,375 @@ export class MediaWidget extends WidgetType {
     return other.src === this.src && other.kind === this.kind
   }
 
+  get estimatedHeight(): number {
+    return this.kind === 'audio' ? 60 : 280
+  }
+
   toDOM(): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = `cm-embed cm-embed--${this.kind}`
-
-    if (this.kind === 'pdf') {
-      // An <object> keeps Chromium's own PDF viewer, without a plugin.
-      const object = document.createElement('object')
-      object.data = this.src
-      object.type = 'application/pdf'
-      object.className = 'cm-embed__pdf'
-      const fallback = document.createElement('p')
-      fallback.textContent = this.label || 'PDF'
-      object.appendChild(fallback)
-      wrap.appendChild(object)
-      return wrap
-    }
 
     const media = document.createElement(this.kind)
     media.src = this.src
     media.controls = true
     media.className = 'cm-embed__media'
     wrap.appendChild(media)
-    return wrap
+    return blockShell(wrap)
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+
+/**
+ * A recording, embedded in the note it was taken against.
+ *
+ * Not an `<audio controls>`, which is what the generic media embed gives every
+ * other sound file. A lecture is played from the bar at the foot of the window
+ * so that scrolling past the embed — or opening a different note to compare
+ * something — does not stop it, and so that the timestamps scattered down the
+ * note are all seeking the same clock. This card is the handle on that player,
+ * not a second one.
+ */
+export class RecordingWidget extends WidgetType {
+  constructor(
+    readonly target: string,
+    readonly label: string,
+    readonly onPlay: (target: string, seconds: number) => void,
+    readonly onTranscript: (target: string) => void
+  ) {
+    super()
+  }
+
+  eq(other: RecordingWidget): boolean {
+    return other.target === this.target && other.label === this.label
+  }
+
+  get estimatedHeight(): number {
+    return 52
+  }
+
+  toDOM(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'cm-embed cm-embed--recording'
+
+    const play = document.createElement('button')
+    play.type = 'button'
+    play.className = 'cm-recording__play'
+    play.title = 'Play this recording'
+    play.setAttribute('aria-label', 'Play this recording')
+    // Drawn rather than a glyph, so it matches the icon family everywhere else.
+    play.innerHTML =
+      '<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.6v8.8a.6.6 0 0 0 .92.5l7-4.4a.6.6 0 0 0 0-1l-7-4.4A.6.6 0 0 0 5 3.6Z"/></svg>'
+    play.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      this.onPlay(this.target, 0)
+    })
+
+    const name = document.createElement('span')
+    name.className = 'cm-recording__name truncate'
+    name.textContent = decodeSafely(this.label)
+
+    const transcript = document.createElement('button')
+    transcript.type = 'button'
+    transcript.className = 'cm-recording__action'
+    transcript.textContent = 'Transcript'
+    transcript.title = 'Show the transcript, or make one'
+    transcript.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      this.onTranscript(this.target)
+    })
+
+    wrap.append(play, name, transcript)
+    return blockShell(wrap)
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+
+/** A percent-encoded name, shown the way it looks in the Finder. */
+function decodeSafely(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+/**
+ * The clock in front of a stamped line.
+ *
+ * Always replaced, never revealed as raw markdown the way every other marker
+ * is when the caret lands on its line. There is nothing in it a person would
+ * want to edit by hand — the recorder wrote it and the player reads it — and
+ * un-hiding forty characters of link on whichever line is being typed would
+ * make writing during a lecture feel like the text was sliding around. The
+ * marker is registered as an atomic range instead, so the caret steps over it
+ * and one backspace takes the whole thing.
+ */
+export class StampWidget extends WidgetType {
+  constructor(
+    readonly clock: string,
+    readonly seconds: number,
+    readonly target: string,
+    readonly onPlay: (target: string, seconds: number) => void
+  ) {
+    super()
+  }
+
+  eq(other: StampWidget): boolean {
+    return (
+      other.clock === this.clock && other.seconds === this.seconds && other.target === this.target
+    )
+  }
+
+  toDOM(): HTMLElement {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'cm-stamp'
+    button.textContent = this.clock
+    button.title = `Play the recording from ${this.clock}`
+    button.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      this.onPlay(this.target, this.seconds)
+    })
+    return button
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+
+/**
+ * An embedded PDF page.
+ *
+ * Chromium's own viewer would be less code — `<object type="application/pdf">`
+ * and nothing else — but it scrolls the whole document inside a box in the
+ * middle of the note, captures the wheel, and cannot be told to show page four.
+ * An embed is a figure, not a reader: it should show the page the note is
+ * talking about, at the size the note asked for, and hand the reader off to the
+ * real viewer when they want the rest.
+ *
+ * So the page is drawn with the same pdf.js the document pane uses, through the
+ * shared queue — a note that embeds a dozen pages must not start a dozen decodes
+ * on first paint.
+ */
+export class PdfEmbedWidget extends WidgetType {
+  constructor(
+    readonly src: string,
+    readonly page: number,
+    readonly label: string,
+    readonly width: number | null,
+    readonly height: number | null,
+    /** The target as written, which is what the opener needs — not the URL. */
+    readonly target: string,
+    readonly onOpen: (target: string) => void
+  ) {
+    super()
+  }
+
+  eq(other: PdfEmbedWidget): boolean {
+    return (
+      other.src === this.src &&
+      other.page === this.page &&
+      other.label === this.label &&
+      other.width === this.width &&
+      other.height === this.height &&
+      other.target === this.target
+    )
+  }
+
+  get estimatedHeight(): number {
+    // A4 in portrait is the overwhelmingly common case, and being roughly right
+    // keeps the scrollbar honest until the page has actually been measured.
+    return this.height ?? Math.round((this.width ?? PDF_EMBED_WIDTH) * 1.414) + 34
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'cm-embed cm-embed--pdf'
+    if (this.width) wrap.style.maxWidth = `${this.width}px`
+
+    const canvas = document.createElement('canvas')
+    canvas.className = 'cm-embed__page'
+
+    const status = document.createElement('p')
+    status.className = 'cm-embed__status'
+    status.textContent = 'Opening…'
+
+    const bar = document.createElement('div')
+    bar.className = 'cm-embed__bar'
+
+    const name = document.createElement('span')
+    name.className = 'cm-embed__name'
+    name.textContent = this.label
+
+    const open = document.createElement('button')
+    open.type = 'button'
+    open.className = 'cm-embed__open'
+    open.textContent = 'Open'
+    open.addEventListener('mousedown', (event) => {
+      // The editor would otherwise take the click as a caret move, which
+      // replaces this widget with its source before the handler ever runs.
+      event.preventDefault()
+      event.stopPropagation()
+      this.onOpen(this.target)
+    })
+
+    bar.append(name, open)
+    wrap.append(canvas, status, bar)
+
+    // The drag scales the bitmap already drawn, which is instant and slightly
+    // soft; the edit it ends with rebuilds the widget and redraws the page at
+    // the new size, so the softness lasts exactly as long as the drag does.
+    const shell = blockShell(wrap)
+    wrap.appendChild(resizable(view, shell, canvas, (width) => {
+      wrap.style.maxWidth = `${width}px`
+    }))
+
+    enqueueRender(async () => {
+      try {
+        const pdf = await openPdf(this.src)
+        const page = await pdf.getPage(Math.min(this.page, pdf.numPages))
+
+        // Draw at device resolution, then lay the canvas out in CSS pixels, so
+        // the type in the page is as crisp as the type around it.
+        const base = page.getViewport({ scale: 1 })
+        const target = this.width ?? PDF_EMBED_WIDTH
+        const dpr = window.devicePixelRatio || 1
+        const viewport = page.getViewport({ scale: (target / base.width) * dpr })
+
+        canvas.width = viewport.width
+        canvas.height = viewport.height
+        canvas.style.width = `${viewport.width / dpr}px`
+        canvas.style.height = `${viewport.height / dpr}px`
+
+        const context = canvas.getContext('2d')
+        if (!context) throw new Error('no 2d context')
+        await page.render({ canvasContext: context, viewport, canvas }).promise
+
+        status.remove()
+        if (pdf.numPages > 1) {
+          name.textContent = `${this.label} · page ${Math.min(this.page, pdf.numPages)} of ${pdf.numPages}`
+        }
+      } catch (err) {
+        // A PDF that will not draw still has a name and a way in; saying so
+        // beats a blank rectangle the reader cannot act on.
+        canvas.remove()
+        wrap.classList.add('cm-embed--missing')
+        status.textContent = `Could not draw this PDF: ${(err as Error).message}`
+      }
+    })
+
+    return shell
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+
+/** The width an embedded page is drawn at when the note does not say. */
+const PDF_EMBED_WIDTH = 520
+
+/**
+ * The widget for an embed target, whatever it turns out to be.
+ *
+ * Kept in one place because the three call sites — a figure on its own line, an
+ * embed mid-sentence, and markdown `![](…)` syntax — were each deciding this
+ * separately, and drifted: a `.pdf` written with markdown syntax used to render
+ * as a broken `<img>`.
+ */
+export function embedWidget(
+  spec: EmbedSpec,
+  attachmentsFolder: string,
+  block: boolean,
+  handlers: {
+    loadEmbed: (target: string) => Promise<{ title: string; body: string } | null>
+    onOpenWikilink: (target: string) => void
+    onOpenAsset: (target: string) => void
+    onPlayAudio: (target: string, seconds: number) => void
+    onShowTranscript: (target: string) => void
+  }
+): WidgetType {
+  if (spec.kind === 'note') {
+    return new NoteEmbedWidget(spec.target, handlers.loadEmbed, handlers.onOpenWikilink)
+  }
+
+  const src = resolveAssetUrl(spec.target, attachmentsFolder)
+
+  if (spec.kind === 'image') {
+    return new ImageWidget(src, spec.label, block, spec.width, spec.height)
+  }
+  if (spec.kind === 'pdf') {
+    return new PdfEmbedWidget(
+      src,
+      spec.page,
+      spec.label,
+      spec.width,
+      spec.height,
+      spec.target,
+      handlers.onOpenAsset
+    )
+  }
+  if (spec.kind === 'audio') {
+    return new RecordingWidget(
+      spec.target,
+      spec.label,
+      handlers.onPlayAudio,
+      handlers.onShowTranscript
+    )
+  }
+  if (spec.kind === 'video') {
+    return new MediaWidget(src, spec.kind, spec.label)
+  }
+  return new FileEmbedWidget(spec.target, spec.label, handlers.onOpenAsset)
+}
+
+/**
+ * Anything with no viewer of its own — a .zip, a .docx. There is nothing to
+ * draw, so the embed becomes a card that opens it in whatever the OS uses.
+ */
+export class FileEmbedWidget extends WidgetType {
+  constructor(
+    readonly target: string,
+    readonly label: string,
+    readonly onOpen: (target: string) => void
+  ) {
+    super()
+  }
+
+  eq(other: FileEmbedWidget): boolean {
+    return other.target === this.target && other.label === this.label
+  }
+
+  get estimatedHeight(): number {
+    return 44
+  }
+
+  toDOM(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'cm-embed cm-embed--file'
+
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'cm-embed__file'
+    button.textContent = this.label
+    button.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      this.onOpen(this.target)
+    })
+
+    wrap.appendChild(button)
+    return blockShell(wrap)
   }
 
   ignoreEvent(): boolean {
@@ -198,6 +723,10 @@ export class NoteEmbedWidget extends WidgetType {
 
   eq(other: NoteEmbedWidget): boolean {
     return other.target === this.target
+  }
+
+  get estimatedHeight(): number {
+    return 160
   }
 
   toDOM(): HTMLElement {
@@ -238,7 +767,7 @@ export class NoteEmbedWidget extends WidgetType {
       }
     })
 
-    return wrap
+    return blockShell(wrap)
   }
 
   ignoreEvent(): boolean {
@@ -259,6 +788,10 @@ export class MathWidget extends WidgetType {
     return other.source === this.source && other.block === this.block
   }
 
+  get estimatedHeight(): number {
+    return this.block ? 56 : -1
+  }
+
   toDOM(): HTMLElement {
     const el = document.createElement(this.block ? 'div' : 'span')
     el.className = this.block ? 'cm-math cm-math--block' : 'cm-math'
@@ -273,7 +806,7 @@ export class MathWidget extends WidgetType {
       el.classList.add('cm-math--error')
       el.textContent = this.source
     }
-    return el
+    return this.block ? blockShell(el, 'wide') : el
   }
 
   ignoreEvent(): boolean {
@@ -316,6 +849,10 @@ export class MermaidWidget extends WidgetType {
     return other.source === this.source
   }
 
+  get estimatedHeight(): number {
+    return 240
+  }
+
   toDOM(): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'cm-embed cm-embed--mermaid'
@@ -331,11 +868,107 @@ export class MermaidWidget extends WidgetType {
         wrap.textContent = err.message.split('\n')[0] || 'That diagram could not be drawn.'
       })
 
-    return wrap
+    return blockShell(wrap)
   }
 
   ignoreEvent(): boolean {
     return false
+  }
+}
+
+/**
+ * An `svg` block, drawn as the picture it describes.
+ *
+ * The source is scrubbed before it goes anywhere near the document — see
+ * `lib/svg` for what survives and why — and a block that turns out not to be a
+ * drawing at all falls back to the same dashed box a broken diagram gets,
+ * because a note that silently swallows a block is worse than one that says it
+ * could not draw it.
+ */
+export class SvgWidget extends WidgetType {
+  constructor(readonly source: string) {
+    super()
+  }
+
+  eq(other: SvgWidget): boolean {
+    return other.source === this.source
+  }
+
+  get estimatedHeight(): number {
+    return 240
+  }
+
+  toDOM(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'cm-embed cm-embed--svg'
+
+    const drawing = sanitizeSvg(this.source)
+    if (drawing) {
+      wrap.appendChild(drawing)
+    } else {
+      wrap.classList.add('cm-embed--missing')
+      wrap.textContent = 'That is not a drawing this can render.'
+    }
+    return blockShell(wrap)
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+
+/**
+ * A program figure: a `memory`, `tree` or `algo` block.
+ *
+ * The drawing itself lives in `viz/`, so the editor, the print window and the
+ * exporter all get the same picture from the same source. Only two things are
+ * this widget's business.
+ *
+ * The first is teardown. An `algo` block owns an interval while it is playing,
+ * and CodeMirror throws a widget away and builds a new one on any edit that
+ * touches the fence — so a note being typed into next to a running animation
+ * would otherwise leave a timer behind on every keystroke.
+ *
+ * The second is who owns a click. Everywhere else in this file `ignoreEvent`
+ * returns false, because a picture is part of the document and clicking it
+ * should put the caret near it. The transport is not part of the document: a
+ * drag on the scrubber has to be a drag on the scrubber, not the start of a
+ * selection across the note.
+ */
+export class VizWidget extends WidgetType {
+  private figure: Rendered | null = null
+
+  constructor(
+    readonly kind: VizKind,
+    readonly source: string
+  ) {
+    super()
+  }
+
+  eq(other: VizWidget): boolean {
+    return other.kind === this.kind && other.source === this.source
+  }
+
+  get estimatedHeight(): number {
+    return this.kind === 'algo' ? 260 : 200
+  }
+
+  toDOM(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = `cm-embed cm-embed--viz cm-embed--viz-${this.kind}`
+    this.figure = renderViz(this.kind, this.source)
+    wrap.appendChild(this.figure.element)
+    return blockShell(wrap, 'wide')
+  }
+
+  destroy(): void {
+    this.figure?.destroy()
+    this.figure = null
+  }
+
+  ignoreEvent(event: Event): boolean {
+    const target = event.target
+    return target instanceof HTMLElement && target.closest('.viz__transport') !== null
   }
 }
 
@@ -363,12 +996,16 @@ export class QueryWidget extends WidgetType {
     return other.source === this.source
   }
 
+  get estimatedHeight(): number {
+    return 180
+  }
+
   toDOM(): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'cm-embed cm-embed--query'
     this.root = createRoot(wrap)
     this.root.render(createElement(EmbeddedQuery, { source: this.source }))
-    return wrap
+    return blockShell(wrap)
   }
 
   destroy(): void {
@@ -382,7 +1019,7 @@ export class QueryWidget extends WidgetType {
   }
 }
 
-export type CellAlign = 'left' | 'center' | 'right'
+export type { CellAlign }
 
 /**
  * The inline markdown a table cell is allowed to carry.
@@ -432,11 +1069,23 @@ function renderCell(text: string, into: HTMLElement): void {
 }
 
 /**
- * A GFM table, drawn as a real table while the caret is elsewhere.
+ * A GFM table, drawn as a real table and edited in place.
  *
  * Pipes-and-dashes is unreadable at a glance, and it is the one construct where
- * the raw form is materially worse than the rendered one. Putting the caret on
- * any row of the table brings the source straight back.
+ * the raw form is materially worse than the rendered one — so rather than
+ * swapping to source the moment the caret arrives, the cells themselves are
+ * editable and write back to the markdown underneath.
+ *
+ * Three rules make that work:
+ *
+ * - `ignoreEvent` returns true, so CodeMirror never steals a click and never
+ *   moves its caret onto the table's lines — which is what would otherwise flip
+ *   the whole block back to raw source mid-edit.
+ * - The document is written on *boundaries* — blur, Tab, Enter, a structural
+ *   command — never on each keystroke, because a write rebuilds this widget and
+ *   would tear out the very node being typed into.
+ * - A cell edit and the structural change that follows it compose into a single
+ *   write, so Tab off the last cell is one undo step rather than two.
  *
  * Rows are padded to the header's width rather than left ragged: a short row is
  * a typo in the source, and collapsing the table's grid around it hides which
@@ -445,7 +1094,9 @@ function renderCell(text: string, into: HTMLElement): void {
 export class TableWidget extends WidgetType {
   constructor(
     readonly rows: string[][],
-    readonly align: CellAlign[] = []
+    readonly align: CellAlign[] = [],
+    /** First line of the table, used to re-find it in a document that moved. */
+    readonly fromLine = 0
   ) {
     super()
   }
@@ -453,24 +1104,50 @@ export class TableWidget extends WidgetType {
   eq(other: TableWidget): boolean {
     return (
       JSON.stringify(other.rows) === JSON.stringify(this.rows) &&
-      other.align.join() === this.align.join()
+      other.align.join() === this.align.join() &&
+      other.fromLine === this.fromLine
     )
   }
 
-  toDOM(): HTMLElement {
+  get estimatedHeight(): number {
+    return this.rows.length * 34 + 12
+  }
+
+  toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'cm-table'
+    // How `blockAwareMove` finds this table when the caret arrives by keyboard.
+    wrap.dataset.line = String(this.fromLine)
 
     const table = document.createElement('table')
     const [head, ...body] = this.rows
     const width = Math.max(head?.length ?? 0, ...body.map((r) => r.length), this.align.length)
+    const rowCount = this.rows.length
 
-    const cellsInto = (row: string[], parent: HTMLElement, tag: 'th' | 'td'): void => {
+    /** Re-read the table from the document; edits move the lines under us. */
+    const model = (): TableModel | null => findTable(view.state.doc, this.fromLine)
+
+    const cellsInto = (row: string[], parent: HTMLElement, tag: 'th' | 'td', r: number): void => {
       for (let i = 0; i < width; i++) {
         const cell = document.createElement(tag)
         const align = this.align[i] ?? 'left'
         if (align !== 'left') cell.style.textAlign = align
-        renderCell(row[i] ?? '', cell)
+
+        // plaintext-only: pasted rich text would otherwise arrive as HTML that
+        // has to be flattened back into one markdown cell.
+        cell.contentEditable = 'plaintext-only'
+        cell.className = 'cm-table__cell'
+        cell.dataset.row = String(r)
+        cell.dataset.col = String(i)
+
+        // Live preview, at cell granularity: a cell shows `**bold**` rendered
+        // until you put the caret in it, then shows the markdown you have to
+        // edit. Typing against markup that re-renders itself under the caret is
+        // the one thing worse than seeing asterisks.
+        const source = row[i] ?? ''
+        cell.dataset.source = source
+        renderCell(source, cell)
+
         parent.appendChild(cell)
       }
     }
@@ -478,25 +1155,218 @@ export class TableWidget extends WidgetType {
     if (head) {
       const thead = document.createElement('thead')
       const tr = document.createElement('tr')
-      cellsInto(head, tr, 'th')
+      cellsInto(head, tr, 'th', 0)
       thead.appendChild(tr)
       table.appendChild(thead)
     }
 
     const tbody = document.createElement('tbody')
-    for (const row of body) {
+    body.forEach((row, i) => {
       const tr = document.createElement('tr')
-      cellsInto(row, tr, 'td')
+      cellsInto(row, tr, 'td', i + 1)
       tbody.appendChild(tr)
-    }
+    })
     table.appendChild(tbody)
     wrap.appendChild(table)
-    return wrap
+
+    /*
+     * The way back to raw markdown.
+     *
+     * Every other block reveals its source when the caret lands on it; a table
+     * cannot, because the caret landing on it is how you edit a cell. So the
+     * escape hatch is explicit, and it has to exist — alignment colons, a
+     * malformed rule row and an escaped pipe are all things you can only fix in
+     * the source.
+     */
+    const source = document.createElement('button')
+    source.type = 'button'
+    source.className = 'cm-table__source'
+    source.textContent = 'Markdown'
+    source.title = 'Edit this table as markdown. Move the caret out to come back.'
+    source.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      const current = model()
+      if (!current) return
+      const at = view.state.doc.line(current.fromLine).from
+      view.dispatch({
+        selection: EditorSelection.cursor(at),
+        effects: revealTableSource.of(current.fromLine)
+      })
+      view.focus()
+    })
+    wrap.appendChild(source)
+
+    const cellAt = (r: number, c: number): HTMLElement | null =>
+      wrap.querySelector(`[data-row="${r}"][data-col="${c}"]`)
+
+    /**
+     * Write the cell being edited, plus an optional structural change, at once.
+     *
+     * `op` sees the table as it will be *after* the cell is committed, so an
+     * operation never works against stale text. It may return null to decline
+     * — the cell's own edit is still saved.
+     */
+    const apply = (
+      cell: HTMLElement,
+      op?: (staged: TableModel, r: number, c: number) => TableEdit | null
+    ): boolean => {
+      const current = model()
+      if (!current) return false
+
+      const r = Number(cell.dataset.row)
+      const c = Number(cell.dataset.col)
+
+      let edit = setCell(current, r, c, cell.textContent ?? '')
+      if (op) edit = op(asModel(current, edit), r, c) ?? edit
+
+      return writeTable(view, current, edit)
+    }
+
+    /** Move to another cell, saving the one being left. */
+    const moveTo = (cell: HTMLElement, r: number, c: number): void => {
+      if (r < 0 || r >= rowCount || c < 0 || c >= width) return
+      if (apply(cell)) {
+        // The widget is being rebuilt, so the target travels with the write.
+        setPendingFocus(this.fromLine, r, c)
+        return
+      }
+      focusCell(cellAt(r, c))
+    }
+
+    /** Swap a cell back to its rendered form, for when nothing was written. */
+    const rerender = (cell: HTMLElement): void => {
+      cell.textContent = ''
+      renderCell(cell.dataset.source ?? '', cell)
+    }
+
+    wrap.addEventListener('focusin', (event) => {
+      const cell = event.target as HTMLElement
+      if (!cell?.dataset?.row) return
+      cell.textContent = cell.dataset.source ?? ''
+    })
+
+    wrap.addEventListener('focusout', (event) => {
+      const cell = event.target as HTMLElement
+      if (!cell?.dataset?.row) return
+      // Leaving the table, or moving to another cell: either way what was typed
+      // belongs in the document now. If it wrote, this widget is replaced; if
+      // not, the cell goes back to showing rendered markup.
+      if (!apply(cell)) rerender(cell)
+    })
+
+    wrap.addEventListener('keydown', (event) => {
+      const cell = event.target as HTMLElement
+      if (!cell?.dataset?.row) return
+      const r = Number(cell.dataset.row)
+      const c = Number(cell.dataset.col)
+
+      if (event.key === 'Tab') {
+        event.preventDefault()
+        if (event.shiftKey) {
+          if (c > 0) moveTo(cell, r, c - 1)
+          else if (r > 0) moveTo(cell, r - 1, width - 1)
+        } else if (c < width - 1) {
+          moveTo(cell, r, c + 1)
+        } else if (r < rowCount - 1) {
+          moveTo(cell, r + 1, 0)
+        } else {
+          // Tab off the last cell grows the table, the way a spreadsheet does.
+          apply(cell, (staged) => insertRow(staged, staged.rows.length))
+        }
+        return
+      }
+
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault()
+        apply(cell, (staged) => insertRow(staged, r + 1))
+        return
+      }
+
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        apply(cell)
+        view.focus()
+        return
+      }
+
+      /*
+       * Plain Up and Down.
+       *
+       * A cell is a one-line contenteditable, so the browser's own answer to a
+       * vertical arrow inside one is to do nothing at all — which is how a
+       * table became a place the caret could get into and never get out of.
+       * Within the table they step between rows; off either end they hand the
+       * caret back to the document on the line past the table.
+       */
+      if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.altKey && !event.metaKey && !event.ctrlKey) {
+        event.preventDefault()
+        const dir = event.key === 'ArrowDown' ? 1 : -1
+        const next = r + dir
+        if (next >= 0 && next < rowCount) {
+          moveTo(cell, next, c)
+          return
+        }
+        const current = model()
+        if (!current) return
+        const beyond = dir > 0 ? current.toLine + 1 : current.fromLine - 1
+        apply(cell)
+        const doc = view.state.doc
+        const line = Math.min(Math.max(beyond, 1), doc.lines)
+        view.dispatch({
+          selection: EditorSelection.cursor(doc.line(line).from),
+          scrollIntoView: true
+        })
+        view.focus()
+        return
+      }
+
+      // ⌥⌘ arrows add structure relative to the cell you are in; ⌥⌘⌫ removes it.
+      if (!event.altKey || !(event.metaKey || event.ctrlKey)) return
+
+      const ops: Record<string, (staged: TableModel) => TableEdit | null> = {
+        ArrowDown: (staged) => insertRow(staged, r + 1),
+        ArrowUp: (staged) => insertRow(staged, r),
+        ArrowRight: (staged) => insertColumn(staged, c + 1),
+        ArrowLeft: (staged) => insertColumn(staged, c),
+        Backspace: (staged) => (event.shiftKey ? deleteColumn(staged, c) : deleteRow(staged, r))
+      }
+
+      const op = ops[event.key]
+      if (!op) return
+      event.preventDefault()
+      apply(cell, op)
+    })
+
+    // A table that was just rewritten puts the caret back where the user was:
+    // the DOM node they were typing into no longer exists.
+    const restore = takePendingFocus(this.fromLine)
+    if (restore) queueMicrotask(() => focusCell(cellAt(restore.row, restore.col)))
+
+    return blockShell(wrap, 'wide')
   }
 
+  /**
+   * True so CodeMirror leaves this widget's events alone.
+   *
+   * This is what makes the cells editable at all: with the default, a click is
+   * treated as "put the caret here", the selection lands on the table's own
+   * lines, and live preview immediately swaps the grid for raw markdown.
+   */
   ignoreEvent(): boolean {
-    return false
+    return true
   }
+}
+
+/** Focus a cell and put the caret at the end of its text. */
+export function focusCell(cell: HTMLElement | null): void {
+  if (!cell) return
+  cell.focus()
+  const range = document.createRange()
+  range.selectNodeContents(cell)
+  range.collapse(false)
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
 }
 
 /** The twisty on a heading that owns a collapsible section. */
@@ -545,4 +1415,4 @@ export class CollapsedWidget extends WidgetType {
   }
 }
 
-export { embedKind }
+export { embedKind, resolveAssetUrl }

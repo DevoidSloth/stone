@@ -13,11 +13,20 @@
       Calendar access is governed by TCC, not by an entitlement: what actually
       gates it is the NSCalendars*UsageDescription pair in Info.plist plus a
       signature that seals that Info.plist, so macOS can trust the bundle
-      identifier behind the request. The two keys below are App Sandbox
+      identifier behind the request. The keys below are App Sandbox
       entitlements and are inert while the app is unsandboxed; they are kept so
       the grant list stays correct if it is ever sandboxed.
     -->
     <key>com.apple.security.personal-information.calendars</key>
+    <true/>
+    <!--
+      Recording a lecture. Like the calendar keys above this is a sandbox
+      entitlement and inert while the app is unsandboxed — what actually gates
+      the microphone is NSMicrophoneUsageDescription plus a signature over the
+      Info.plist that carries it — but the hardened runtime does enforce it, so
+      it has to be here for a signed build to be allowed to record at all.
+    -->
+    <key>com.apple.security.device.audio-input</key>
     <true/>
     <!-- Vaults commonly live in iCloud Drive or Documents. -->
     <key>com.apple.security.files.user-selected.read-write</key>

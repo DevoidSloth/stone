@@ -25,6 +25,7 @@ import {
   IconTrash,
   IconX
 } from '../ui/icons'
+import { PageIcon } from './PageDressing'
 import { TaskRow } from './TasksView'
 
 /**
@@ -477,7 +478,7 @@ function Cell({
     return (
       <td>
         <span className="dbtable__title">
-          {note.icon && <span className="dbtable__icon">{note.icon}</span>}
+          {note.icon && <PageIcon icon={note.icon} className="dbtable__icon" />}
           {note.title}
         </span>
       </td>
@@ -683,7 +684,7 @@ function BoardShape({
                 onClick={() => void openNote(note.relPath)}
               >
                 <b className="truncate">
-                  {note.icon && <span className="dbtable__icon">{note.icon}</span>}
+                  {note.icon && <PageIcon icon={note.icon} className="dbtable__icon" />}
                   {note.title}
                 </b>
                 {note.excerpt && <span className="board__excerpt">{note.excerpt.slice(0, 110)}</span>}
@@ -711,7 +712,7 @@ function GalleryShape({ rows }: { rows: NoteMeta[] }) {
           onClick={() => void openNote(note.relPath)}
         >
           <span className={`gallery__cover ${note.cover ? `cover--${note.cover}` : ''}`}>
-            {note.icon && <span className="gallery__icon">{note.icon}</span>}
+            {note.icon && <PageIcon icon={note.icon} className="gallery__icon" />}
           </span>
           <b className="truncate">{note.title}</b>
           <span className="gallery__excerpt">{note.excerpt.slice(0, 90)}</span>
@@ -732,7 +733,7 @@ function ListShape({ rows }: { rows: NoteMeta[] }) {
           className="dblist__row"
           onClick={() => void openNote(note.relPath)}
         >
-          <span className="dblist__icon">{note.icon ?? '·'}</span>
+          <PageIcon icon={note.icon ?? '·'} className="dblist__icon" />
           <b className="truncate">{note.title}</b>
           <span className="dblist__meta truncate">{note.excerpt.slice(0, 120)}</span>
           <span className="dblist__date">{relativeDay(new Date(note.mtime).toISOString().slice(0, 10))}</span>
@@ -776,7 +777,7 @@ function TimelineShape({ rows }: { rows: NoteMeta[] }) {
                 className="timeline__item"
                 onClick={() => void openNote(note.relPath)}
               >
-                {note.icon && <span className="dbtable__icon">{note.icon}</span>}
+                {note.icon && <PageIcon icon={note.icon} className="dbtable__icon" />}
                 <b className="truncate">{note.title}</b>
               </button>
             ))}

@@ -130,6 +130,36 @@
   --blue-soft: #d3e5ef;
   --gray-soft: #e3e2e0;
 
+  /*
+   * The same washes as the `*-soft` colours above, mixed rather than baked.
+   *
+   * They tint the inline chips in the editor — code, highlights, tags, dates.
+   * CodeMirror draws the selection in a layer beneath the text, so an opaque
+   * chip punches a hole in a selection dragged across the line; a translucent
+   * one lets the blue through. Over the page they land within a shade or two
+   * of the opaque originals.
+   */
+  --wash-gray: rgb(55 53 47 / 14%);
+  --wash-yellow: rgb(245 190 60 / 28%);
+  --wash-blue: rgb(0 120 200 / 18%);
+  --wash-red: rgb(255 60 50 / 15%);
+
+  /*
+   * Code. A syntax palette has to carry more distinctions than the three UI
+   * accents do, so it gets its own ramp — muted enough to sit on a note page
+   * without turning a fenced block into the loudest thing on it.
+   */
+  --code-keyword: #9065b0;
+  --code-string: #448361;
+  --code-number: #b06f2b;
+  --code-comment: rgb(55 53 47 / 42%);
+  --code-function: #337ea9;
+  --code-type: #0b7285;
+  --code-variable: #37352f;
+  --code-property: #a04a3f;
+  --code-operator: rgb(55 53 47 / 62%);
+  --code-invalid: #d44c47;
+
   --shadow-sm: 0 1px 2px rgb(15 15 15 / 10%);
   --shadow-md: rgb(15 15 15 / 5%) 0 0 0 1px, rgb(15 15 15 / 10%) 0 3px 6px, rgb(15 15 15 / 20%) 0 9px 24px;
   --shadow-lg: rgb(15 15 15 / 5%) 0 0 0 1px, rgb(15 15 15 / 10%) 0 5px 10px, rgb(15 15 15 / 20%) 0 15px 40px;
@@ -179,6 +209,23 @@
   --purple-soft: rgb(154 109 215 / 20%);
   --blue-soft: rgb(82 156 202 / 20%);
   --gray-soft: rgb(255 255 255 / 9%);
+
+  /* Already translucent in the dark palette, so the washes are the softs. */
+  --wash-gray: var(--gray-soft);
+  --wash-yellow: var(--yellow-soft);
+  --wash-blue: var(--blue-soft);
+  --wash-red: var(--red-soft);
+
+  --code-keyword: #b78ce8;
+  --code-string: #74c69d;
+  --code-number: #e8b04b;
+  --code-comment: rgb(255 255 255 / 34%);
+  --code-function: #6bb6e8;
+  --code-type: #56cfd4;
+  --code-variable: rgb(255 255 255 / 81%);
+  --code-property: #f08d7a;
+  --code-operator: rgb(255 255 255 / 55%);
+  --code-invalid: #ff7369;
 
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
   --shadow-md: rgb(15 15 15 / 20%) 0 0 0 1px, rgb(15 15 15 / 40%) 0 3px 6px, rgb(15 15 15 / 60%) 0 9px 24px;

@@ -1,13 +1,17 @@
-import { app, BrowserWindow, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, nativeTheme, session, shell } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import { registerIpc, vault } from './ipc'
+import { closeAllRecordings } from './audio'
 import { loadSettings, peekSettings, saveSettings } from './settings'
 import { CHROME_BG, OVERLAY } from './window-chrome'
 import { registerProtocolHandler, registerProtocolScheme } from './protocol'
 import { handleUrl, registerCapture, teardownCapture, urlFromArgv } from './capture'
 import { stopClipper } from './clipper'
 import { reloadPlugins, shutdownPlugins } from './plugins'
+import { cancelAllRuns } from './run-code'
+import { endAllSessions } from './code-session'
+import { registerSpellingMenu } from './spelling'
 
 const isDev = !app.isPackaged
 
@@ -24,6 +28,10 @@ interface WindowState {
 
 function stateFile(): string {
   return path.join(app.getPath('userData'), 'window-state.json')
+}
+
+function iconFile(): string {
+  return path.join(app.getAppPath(), 'build', 'icon.png')
 }
 
 async function fileExists(p: string): Promise<boolean> {
@@ -62,9 +70,8 @@ async function createWindow(): Promise<BrowserWindow> {
   const theme = settings.theme === 'light' ? 'light' : 'dark'
 
   // macOS takes its icon from the bundle, so setting it here would be ignored.
-  const iconPath = path.join(app.getAppPath(), 'build', 'icon.png')
   const icon =
-    process.platform === 'darwin' || !(await fileExists(iconPath)) ? undefined : iconPath
+    process.platform === 'darwin' || !(await fileExists(iconFile())) ? undefined : iconFile()
 
   const win = new BrowserWindow({
     icon,
@@ -118,6 +125,8 @@ async function createWindow(): Promise<BrowserWindow> {
     if (level >= 2) console.error(`[renderer] ${message} (${sourceId}:${line})`)
   })
 
+  registerSpellingMenu(win.webContents)
+
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
     return { action: 'deny' }
@@ -146,20 +155,57 @@ async function createWindow(): Promise<BrowserWindow> {
   return win
 }
 
+/**
+ * Let the renderer reach the microphone, and nothing else.
+ *
+ * Chromium denies every permission a renderer asks for unless the embedder
+ * says otherwise, and Electron installs no handler by default — so without
+ * this, `getUserMedia` in the recorder fails with NotAllowedError and no
+ * prompt ever appears. The handler is deliberately an allowlist of one: this
+ * app has no reason to want the camera, the screen, or a notification stream
+ * it did not ask for through `Notification` in main.
+ *
+ * On macOS the OS prompt is a second, separate gate. It is triggered here
+ * rather than at launch, because a note-taking app that asks for the
+ * microphone the first time it opens has explained nothing about why.
+ */
+function allowMicrophone(): void {
+  const isMedia = (permission: string): boolean =>
+    permission === 'media' || permission === 'audioCapture'
+
+  session.defaultSession.setPermissionRequestHandler((_contents, permission, callback, details) => {
+    if (!isMedia(permission)) {
+      callback(false)
+      return
+    }
+    // `mediaTypes` is absent on some request shapes; an audio-only request that
+    // does not say so is still audio-only, but a request that names video is not.
+    const types = (details as { mediaTypes?: string[] }).mediaTypes
+    callback(!types || (types.includes('audio') && !types.includes('video')))
+  })
+
+  session.defaultSession.setPermissionCheckHandler((_contents, permission) => isMedia(permission))
+}
+
 app.whenReady().then(async () => {
   app.setAppUserModelId('com.stone.app')
+
+  // A packaged build gets its dock icon from Stone.app; `npm run dev` runs the
+  // stock Electron.app instead, whose icon and name are Electron's. The name is
+  // fixed in the bundle by scripts/patch-dev-electron.mjs — the icon has to be
+  // set here, because macOS caches the one it read from the bundle at launch.
+  if (isDev && process.platform === 'darwin' && (await fileExists(iconFile()))) {
+    app.dock?.setIcon(iconFile())
+  }
 
   const settings = await loadSettings()
   nativeTheme.themeSource = settings.theme === 'system' ? 'system' : settings.theme
 
   // The library roots are read live rather than captured, so adding a folder
   // takes effect without a restart — and removing one revokes access at once.
-  registerProtocolHandler(vault, () => {
-    const roots = peekSettings().libraryFolders.map((f) => f.path)
-    // Thumbnails are cached outside any watched folder but are ours to serve.
-    return [...roots, path.join(app.getPath('userData'), 'thumbnails')]
-  })
+  registerProtocolHandler(vault, () => peekSettings().libraryFolders.map((f) => f.path))
   registerIpc()
+  allowMicrophone()
 
   registerCapture(
     {
@@ -198,9 +244,17 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   void vault.close()
+  // A recording still open is a file handle holding an unflushed tail; closing
+  // it keeps whatever was captured rather than losing the last few seconds.
+  void closeAllRecordings()
   teardownCapture()
   stopClipper()
   shutdownPlugins()
+  // A block still running is a process group of our own making, and it would
+  // outlive the app that has nowhere left to show its output. A notebook's
+  // sessions are the same thing sitting idle: a JVM per note, waiting.
+  cancelAllRuns()
+  endAllSessions()
 })
 
 // A second instance should focus the existing window rather than open a rival vault.

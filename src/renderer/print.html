@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      This page exists to be printed, and nothing else.
+
+      It is stricter than the main renderer's policy: no `frame-src`, because
+      nothing here embeds a viewer, and no network origin of any kind. What it
+      does need is `stone-file:` for images, which is how an embedded picture
+      reaches the page without handing this window the filesystem;
+      `'unsafe-inline'` styles, because KaTeX and Mermaid both write inline
+      style attributes as they render; and `worker-src blob:`, because an
+      embedded PDF page is drawn by pdf.js in its inlined worker.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: stone-file:; media-src 'self' stone-file:; worker-src 'self' blob:; connect-src 'self' stone-file:"
+    />
+    <title>Stone print</title>
+  </head>
+  <body>
+    <main id="page"></main>
+    <script type="module" src="/src/print/index.ts"></script>
+  </body>
+</html>

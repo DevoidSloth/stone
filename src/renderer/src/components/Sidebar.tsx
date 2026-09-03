@@ -1,24 +1,30 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { NoteMeta } from '@shared/types'
-import { useStone } from '../store'
+import type { LibraryDoc, NoteMeta } from '@shared/types'
+import { folderDefinedBy } from '@shared/folder-note'
+import { docTarget, useStone } from '../store'
 import { MONTHS, relativeDay, toISODate } from '../lib/dates'
 import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
+import { exportNoteToPdf } from '../export-note'
 import {
   IconChevronRight,
   IconCopy,
   IconFolder,
+  IconCloud,
   IconHash,
   IconNote,
   IconPlus,
+  IconPrint,
   IconStar,
   IconTrash
 } from '../ui/icons'
+import { PageIcon } from './PageDressing'
 
-type Tab = 'pages' | 'recent' | 'tags'
+type Tab = 'pages' | 'recent' | 'tags' | 'docs'
 
 const DATE_TITLE_RE = /^(\d{4})-(\d{2})-(\d{2})$/
 const COLLAPSED_KEY = 'stone.collapsedFolders'
 const COLLAPSED_TAGS_KEY = 'stone.collapsedTags'
+const COLLAPSED_DOCS_KEY = 'stone.collapsedDocFolders'
 
 /** Daily notes are named by date; the raw ISO string reads as a filename. */
 function displayTitle(note: NoteMeta): string {
@@ -43,13 +49,24 @@ function matches(note: NoteMeta, needle: string): boolean {
 interface Folder {
   name: string
   path: string
+  /** The note that defines this folder, when one has been written. */
+  note: NoteMeta | null
   folders: Folder[]
   notes: NoteMeta[]
 }
 
-/** Rebuild the vault's directory structure from the relative paths. */
-function buildTree(notes: NoteMeta[], allFolders: string[]): Folder {
-  const root: Folder = { name: '', path: '', folders: [], notes: [] }
+/**
+ * Rebuild the vault's directory structure from the relative paths.
+ *
+ * `defining` comes from the *unfiltered* note list so a folder keeps its icon
+ * while you are searching, even when the folder note itself does not match.
+ */
+function buildTree(
+  notes: NoteMeta[],
+  allFolders: string[],
+  defining: Map<string, NoteMeta>
+): Folder {
+  const root: Folder = { name: '', path: '', note: null, folders: [], notes: [] }
 
   const folderAt = (segments: string[]): Folder => {
     let cursor = root
@@ -58,7 +75,13 @@ function buildTree(notes: NoteMeta[], allFolders: string[]): Folder {
       walked = walked ? `${walked}/${part}` : part
       let next = cursor.folders.find((f) => f.name === part)
       if (!next) {
-        next = { name: part, path: walked, folders: [], notes: [] }
+        next = {
+          name: part,
+          path: walked,
+          note: defining.get(walked) ?? null,
+          folders: [],
+          notes: []
+        }
         cursor.folders.push(next)
       }
       cursor = next
@@ -71,6 +94,9 @@ function buildTree(notes: NoteMeta[], allFolders: string[]): Folder {
   for (const folder of allFolders) folderAt(folder.split('/'))
 
   for (const note of notes) {
+    // A folder note is not listed inside its own folder: the folder row *is*
+    // that note, and showing both is the duplicate-looking row Notion avoids.
+    if (folderDefinedBy(note.relPath)) continue
     const parts = note.relPath.split('/')
     parts.pop()
     folderAt(parts).notes.push(note)
@@ -158,7 +184,7 @@ function NoteRow({
     >
       <span className="treerow__twist" />
       <span className="treerow__icon">
-        {note.icon ? <span className="treerow__emoji">{note.icon}</span> : <IconNote size={15} />}
+        {note.icon ? <PageIcon icon={note.icon} className="treerow__emoji" /> : <IconNote size={15} />}
       </span>
       <span className="treerow__label truncate">{displayTitle(note)}</span>
       {favorited && <IconStar size={11} className="treerow__star" />}
@@ -175,6 +201,7 @@ function FolderRows({
   activeRelPath,
   favorites,
   onOpen,
+  onOpenFolder,
   onNoteMenu,
   onFolderMenu,
   onDropNote
@@ -186,6 +213,7 @@ function FolderRows({
   activeRelPath: string | null
   favorites: string[]
   onOpen: (relPath: string, newTab: boolean) => void
+  onOpenFolder: (path: string, newTab: boolean) => void
   onNoteMenu: (event: React.MouseEvent, note: NoteMeta) => void
   onFolderMenu: (event: React.MouseEvent, path: string) => void
   onDropNote: (relPath: string, folder: string) => void
@@ -197,15 +225,16 @@ function FolderRows({
       {folder.folders.map((child) => {
         const isCollapsed = collapsed.has(child.path)
         const count = child.notes.length + child.folders.length
+        // The row is current when its own folder note is the open page, which
+        // is the only way an open folder note shows anywhere in the tree.
+        const current = child.note != null && child.note.relPath === activeRelPath
         return (
           <div key={child.path}>
-            <button
-              type="button"
+            <div
               className="treerow treerow--folder"
               data-drop={dropTarget === child.path}
+              aria-current={current}
               style={{ paddingLeft: 6 + depth * 14 }}
-              aria-expanded={!isCollapsed}
-              onClick={() => toggle(child.path)}
               onContextMenu={(e) => onFolderMenu(e, child.path)}
               onDragOver={(e) => {
                 if (!e.dataTransfer.types.includes('text/stone-note')) return
@@ -221,12 +250,44 @@ function FolderRows({
                 if (relPath) onDropNote(relPath, child.path)
               }}
             >
-              <span className={`treerow__twist ${isCollapsed ? '' : 'treerow__twist--open'}`}>
+              {/*
+               * Twisty and label are separate targets on purpose: a folder is
+               * a page as well as a container, so expanding it and opening it
+               * cannot be the same click.
+               */}
+              <button
+                type="button"
+                className={`treerow__twist treerow__twist--btn ${isCollapsed ? '' : 'treerow__twist--open'}`}
+                aria-expanded={!isCollapsed}
+                aria-label={isCollapsed ? `Expand ${child.name}` : `Collapse ${child.name}`}
+                onClick={() => toggle(child.path)}
+              >
                 <IconChevronRight size={12} />
-              </span>
-              <span className="treerow__label truncate">{child.name}</span>
+              </button>
+              <button
+                type="button"
+                className="treerow__open"
+                title={
+                  child.note
+                    ? `Open ${child.name}`
+                    : `Open ${child.name} — its folder note is written on first open`
+                }
+                onClick={(e) => onOpenFolder(child.path, e.metaKey || e.ctrlKey)}
+                onAuxClick={(e) => {
+                  if (e.button === 1) onOpenFolder(child.path, true)
+                }}
+              >
+                <span className="treerow__icon">
+                  {child.note?.icon ? (
+                    <PageIcon icon={child.note.icon} className="treerow__emoji" />
+                  ) : (
+                    <IconFolder size={14} />
+                  )}
+                </span>
+                <span className="treerow__label truncate">{child.name}</span>
+              </button>
               <span className="treerow__count">{count}</span>
-            </button>
+            </div>
             {!isCollapsed && (
               <FolderRows
                 folder={child}
@@ -236,6 +297,7 @@ function FolderRows({
                 activeRelPath={activeRelPath}
                 favorites={favorites}
                 onOpen={onOpen}
+                onOpenFolder={onOpenFolder}
                 onNoteMenu={onNoteMenu}
                 onFolderMenu={onFolderMenu}
                 onDropNote={onDropNote}
@@ -321,6 +383,244 @@ function TagRows({
   )
 }
 
+/**
+ * Documents, listed beside the notes rather than behind their own screen.
+ *
+ * Grouped by the folder they came from, because that is the distinction a
+ * person actually holds — "my notebooks" against "papers I downloaded" — and it
+ * is the only structure the watched folders give us for free.
+ */
+/** A folder within one watched library folder, keyed by `${libraryFolderId}/sub/path`. */
+interface DocFolderNode {
+  name: string
+  path: string
+  folders: DocFolderNode[]
+  docs: LibraryDoc[]
+}
+
+/** Rebuild a watched folder's on-disk subfolders from each document's `folderPath`. */
+function buildDocTree(docs: LibraryDoc[], keyPrefix: string): DocFolderNode {
+  const root: DocFolderNode = { name: '', path: keyPrefix, folders: [], docs: [] }
+
+  const folderAt = (segments: string[]): DocFolderNode => {
+    let cursor = root
+    let walked = keyPrefix
+    for (const part of segments) {
+      walked = `${walked}/${part}`
+      let next = cursor.folders.find((f) => f.name === part)
+      if (!next) {
+        next = { name: part, path: walked, folders: [], docs: [] }
+        cursor.folders.push(next)
+      }
+      cursor = next
+    }
+    return cursor
+  }
+
+  for (const doc of docs) {
+    const target = doc.folderPath ? folderAt(doc.folderPath.split('/')) : root
+    target.docs.push(doc)
+  }
+
+  const sort = (folder: DocFolderNode): void => {
+    folder.folders.sort((a, b) => a.name.localeCompare(b.name))
+    folder.docs.sort((a, b) => a.name.localeCompare(b.name))
+    folder.folders.forEach(sort)
+  }
+  sort(root)
+  return root
+}
+
+function DocRow({
+  doc,
+  depth,
+  active,
+  onOpen
+}: {
+  doc: LibraryDoc
+  depth: number
+  active: boolean
+  onOpen: (path: string, newTab: boolean) => void
+}) {
+  return (
+    <button
+      type="button"
+      className="treerow"
+      aria-current={active}
+      style={{ paddingLeft: 6 + depth * 14 }}
+      title={`${doc.name} · ${doc.path}`}
+      onClick={(e) => onOpen(doc.path, e.metaKey || e.ctrlKey)}
+      onAuxClick={(e) => {
+        if (e.button === 1) onOpen(doc.path, true)
+      }}
+    >
+      <span className="treerow__twist" />
+      <span className="treerow__icon">
+        <span className="treerow__emoji">◫</span>
+      </span>
+      <span className="treerow__label truncate">{doc.name}</span>
+      {doc.evicted ? (
+        <span className="treerow__count" title="Not downloaded from iCloud">
+          <IconCloud size={11} />
+        </span>
+      ) : (
+        doc.pageCount !== null && (
+          <span className="treerow__count" title={`${doc.pageCount} pages`}>
+            {doc.pageCount}
+          </span>
+        )
+      )}
+    </button>
+  )
+}
+
+function DocFolderRows({
+  folder,
+  depth,
+  collapsed,
+  toggle,
+  activeRelPath,
+  onOpen
+}: {
+  folder: DocFolderNode
+  depth: number
+  collapsed: Set<string>
+  toggle: (path: string) => void
+  activeRelPath: string | null
+  onOpen: (path: string, newTab: boolean) => void
+}) {
+  return (
+    <>
+      {folder.folders.map((child) => {
+        const isCollapsed = collapsed.has(child.path)
+        const count = child.docs.length + child.folders.length
+        return (
+          <div key={child.path}>
+            <button
+              type="button"
+              className="treerow treerow--folder"
+              style={{ paddingLeft: 6 + depth * 14 }}
+              aria-expanded={!isCollapsed}
+              onClick={() => toggle(child.path)}
+            >
+              <span className={`treerow__twist ${isCollapsed ? '' : 'treerow__twist--open'}`}>
+                <IconChevronRight size={12} />
+              </span>
+              <span className="treerow__label truncate">{child.name}</span>
+              <span className="treerow__count">{count}</span>
+            </button>
+            {!isCollapsed && (
+              <DocFolderRows
+                folder={child}
+                depth={depth + 1}
+                collapsed={collapsed}
+                toggle={toggle}
+                activeRelPath={activeRelPath}
+                onOpen={onOpen}
+              />
+            )}
+          </div>
+        )
+      })}
+      {folder.docs.map((doc) => (
+        <DocRow
+          key={doc.id}
+          doc={doc}
+          depth={depth}
+          active={activeRelPath === docTarget(doc.path)}
+          onOpen={onOpen}
+        />
+      ))}
+    </>
+  )
+}
+
+function DocRows({ filter }: { filter: string }) {
+  const documents = useStone((s) => s.documents)
+  const folders = useStone((s) => s.settings?.libraryFolders ?? [])
+  const openDocument = useStone((s) => s.openDocument)
+  const activeRelPath = useStone((s) => s.activeRelPath)
+  const addLibraryFolder = useStone((s) => s.addLibraryFolder)
+
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(COLLAPSED_DOCS_KEY) ?? '[]') as string[])
+    } catch {
+      return new Set()
+    }
+  })
+  useEffect(() => {
+    localStorage.setItem(COLLAPSED_DOCS_KEY, JSON.stringify([...collapsed]))
+  }, [collapsed])
+  const toggle = (path: string): void => {
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
+  const onOpen = (path: string, newTab: boolean): void => {
+    openDocument(path, { newTab })
+  }
+
+  const q = filter.trim().toLowerCase()
+  const shown = q ? documents.filter((d) => d.name.toLowerCase().includes(q)) : documents
+
+  if (folders.length === 0) {
+    return (
+      <div className="sidebar__list">
+        <div className="empty" style={{ padding: 'var(--sp-5) var(--sp-2)' }}>
+          <div className="empty__inner">
+            <p className="empty__body">
+              Point Stone at the folder your PDFs live in and they appear here, searchable and
+              linkable like any note.
+            </p>
+            <button
+              type="button"
+              className="btn btn--outline"
+              onClick={() => void addLibraryFolder('index')}
+            >
+              <IconPlus size={13} />
+              Add a folder
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="sidebar__list">
+      {shown.length === 0 && (
+        <p className="empty__body" style={{ padding: '8px 6px', textAlign: 'left' }}>
+          {q ? 'No documents match that search.' : 'No documents found in your folders yet.'}
+        </p>
+      )}
+
+      {folders.map((folder) => {
+        const mine = shown.filter((d) => d.folderId === folder.id)
+        if (mine.length === 0) return null
+        const tree = buildDocTree(mine, folder.id)
+        return (
+          <div key={folder.id}>
+            <div className="sidebar__group eyebrow">{folder.label}</div>
+            <DocFolderRows
+              folder={tree}
+              depth={0}
+              collapsed={collapsed}
+              toggle={toggle}
+              activeRelPath={activeRelPath}
+              onOpen={onOpen}
+            />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export function Sidebar() {
   const notes = useStone((s) => s.notes)
   const tags = useStone((s) => s.tags)
@@ -332,12 +632,14 @@ export function Sidebar() {
   const openNote = useStone((s) => s.openNote)
   const createNote = useStone((s) => s.createNote)
   const createFromTemplate = useStone((s) => s.createFromTemplate)
+  const openFolderNote = useStone((s) => s.openFolderNote)
   const deleteNote = useStone((s) => s.deleteNote)
   const duplicateNote = useStone((s) => s.duplicateNote)
   const moveNote = useStone((s) => s.moveNote)
   const toggleFavorite = useStone((s) => s.toggleFavorite)
   const refreshVault = useStone((s) => s.refreshVault)
   const toast = useStone((s) => s.toast)
+  const askText = useStone((s) => s.askText)
 
   const [tab, setTab] = useState<Tab>('pages')
   const [filter, setFilter] = useState('')
@@ -396,7 +698,20 @@ export function Sidebar() {
     return list
   }, [notes, filter, tagFilter])
 
-  const tree = useMemo(() => buildTree(filtered, folderList), [filtered, folderList])
+  /** Folder path → the note defining it, from every note rather than the filtered set. */
+  const definingNotes = useMemo(() => {
+    const map = new Map<string, NoteMeta>()
+    for (const note of notes) {
+      const folder = folderDefinedBy(note.relPath)
+      if (folder) map.set(folder, note)
+    }
+    return map
+  }, [notes])
+
+  const tree = useMemo(
+    () => buildTree(filtered, folderList, definingNotes),
+    [filtered, folderList, definingNotes]
+  )
   const tagTree = useMemo(() => buildTagTree(tags), [tags])
   const recent = useMemo(() => filtered.slice(0, 100), [filtered])
   const searching = filter.trim().length > 0
@@ -407,6 +722,10 @@ export function Sidebar() {
 
   const open = (relPath: string, newTab: boolean): void => {
     void openNote(relPath, { newTab })
+  }
+
+  const openFolder = (path: string, newTab: boolean): void => {
+    void openFolderNote(path, { newTab })
   }
 
   const noteMenu = (event: React.MouseEvent, note: NoteMeta): void => {
@@ -442,6 +761,12 @@ export function Sidebar() {
         ]
       },
       {
+        id: 'export-pdf',
+        label: 'Export as PDF',
+        icon: <IconPrint size={13} />,
+        run: () => void exportNoteToPdf(note.relPath)
+      },
+      {
         id: 'reveal',
         label: 'Show in folder',
         run: () => void window.stone.vault.revealInFolder(note.relPath)
@@ -457,8 +782,45 @@ export function Sidebar() {
     openMenu(event, items)
   }
 
+  /**
+   * Create a folder, at the vault root or inside another.
+   *
+   * Both entry points land here — the toolbar button with `''`, the folder
+   * context menu with the folder's path — because they were separate copies of
+   * the same broken `window.prompt` call and only one of them ever got looked
+   * at.
+   */
+  const newFolder = async (parent: string): Promise<void> => {
+    const name = await askText({
+      title: parent ? `New folder inside ${parent.split('/').pop()}` : 'New folder',
+      placeholder: 'Folder name',
+      confirmLabel: 'Create folder'
+    })
+    if (!name) return
+    try {
+      const { relPath } = await window.stone.folders.create(parent ? `${parent}/${name}` : name)
+      await refreshVault()
+      // A new folder inside a collapsed parent would otherwise be invisible.
+      if (parent) setCollapsed((prev) => new Set([...prev].filter((p) => p !== parent)))
+      toast(`Created ${relPath}.`, 'success')
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    }
+  }
+
   const folderMenu = (event: React.MouseEvent, path: string): void => {
     const items: MenuItem[] = [
+      {
+        id: 'folder-note',
+        label: definingNotes.has(path) ? 'Open folder note' : 'Add a folder note',
+        icon: <IconNote size={13} />,
+        run: () => void openFolderNote(path)
+      },
+      {
+        id: 'folder-note-tab',
+        label: 'Open folder note in a new tab',
+        run: () => void openFolderNote(path, { newTab: true })
+      },
       {
         id: 'new-note',
         label: 'New note here',
@@ -469,25 +831,26 @@ export function Sidebar() {
         id: 'new-folder',
         label: 'New folder inside',
         icon: <IconFolder size={13} />,
-        run: () => {
-          const name = window.prompt('Name for the new folder')
-          if (!name?.trim()) return
-          void window.stone.folders
-            .create(`${path}/${name.trim()}`)
-            .then(() => refreshVault())
-            .catch((err: Error) => toast(err.message, 'error'))
-        }
+        run: () => void newFolder(path)
       },
       {
         id: 'rename',
         label: 'Rename folder',
         run: () => {
-          const name = window.prompt('Rename folder', path.split('/').pop() ?? '')
-          if (!name?.trim()) return
-          void window.stone.folders
-            .rename(path, name.trim())
-            .then(() => refreshVault())
-            .catch((err: Error) => toast(err.message, 'error'))
+          void (async () => {
+            const name = await askText({
+              title: 'Rename folder',
+              value: path.split('/').pop() ?? '',
+              confirmLabel: 'Rename'
+            })
+            if (!name) return
+            try {
+              await window.stone.folders.rename(path, name)
+              await refreshVault()
+            } catch (err) {
+              toast((err as Error).message, 'error')
+            }
+          })()
         }
       },
       {
@@ -521,15 +884,24 @@ export function Sidebar() {
         id: 'rename',
         label: 'Rename tag everywhere',
         run: () => {
-          const next = window.prompt(`Rename #${tag} to`, tag)
-          if (!next?.trim() || next.trim() === tag) return
-          void window.stone.vault
-            .renameTag(tag, next.trim())
-            .then((result) => {
-              void refreshVault()
-              toast(`Renamed across ${result.notes} note${result.notes === 1 ? '' : 's'}.`, 'success')
+          void (async () => {
+            const next = await askText({
+              title: `Rename #${tag} to`,
+              value: tag,
+              confirmLabel: 'Rename'
             })
-            .catch((err: Error) => toast(err.message, 'error'))
+            if (!next || next === tag) return
+            try {
+              const result = await window.stone.vault.renameTag(tag, next)
+              await refreshVault()
+              toast(
+                `Renamed across ${result.notes} note${result.notes === 1 ? '' : 's'}.`,
+                'success'
+              )
+            } catch (err) {
+              toast((err as Error).message, 'error')
+            }
+          })()
         }
       }
     ])
@@ -562,7 +934,7 @@ export function Sidebar() {
             aria-label="Search pages"
           />
           <div className="tabs" role="tablist" aria-label="Sidebar mode">
-            {(['pages', 'recent', 'tags'] as Tab[]).map((id) => (
+            {(['pages', 'recent', 'tags', 'docs'] as Tab[]).map((id) => (
               <button
                 key={id}
                 type="button"
@@ -571,7 +943,13 @@ export function Sidebar() {
                 aria-selected={tab === id}
                 onClick={() => setTab(id)}
               >
-                {id === 'pages' ? 'Pages' : id === 'recent' ? 'Recent' : 'Tags'}
+                {id === 'pages'
+                  ? 'Pages'
+                  : id === 'recent'
+                    ? 'Recent'
+                    : id === 'tags'
+                      ? 'Tags'
+                      : 'Docs'}
               </button>
             ))}
           </div>
@@ -587,7 +965,9 @@ export function Sidebar() {
           </div>
         )}
 
-        {tab === 'tags' ? (
+        {tab === 'docs' ? (
+          <DocRows filter={filter} />
+        ) : tab === 'tags' ? (
           <div className="sidebar__list">
             {tags.length === 0 ? (
               <p className="empty__body" style={{ padding: '8px 6px', textAlign: 'left' }}>
@@ -668,6 +1048,7 @@ export function Sidebar() {
                     activeRelPath={activeRelPath}
                     favorites={favorites}
                     onOpen={open}
+                    onOpenFolder={openFolder}
                     onNoteMenu={noteMenu}
                     onFolderMenu={folderMenu}
                     onDropNote={(relPath, folder) => void moveNote(relPath, folder)}
@@ -690,15 +1071,8 @@ export function Sidebar() {
             type="button"
             className="btn btn--sm btn--icon"
             aria-label="New folder"
-            title="New folder"
-            onClick={() => {
-              const name = window.prompt('Name for the new folder')
-              if (!name?.trim()) return
-              void window.stone.folders
-                .create(name.trim())
-                .then(() => refreshVault())
-                .catch((err: Error) => toast(err.message, 'error'))
-            }}
+            title="New folder at the top of the vault"
+            onClick={() => void newFolder('')}
           >
             <IconFolder size={13} />
           </button>

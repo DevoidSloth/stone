@@ -3,6 +3,10 @@ import { useStone } from '../store'
 import { KeybindingSettings } from './KeybindingSettings'
 import { CaptureSettings } from './CaptureSettings'
 import { ExtensionSettings } from './ExtensionSettings'
+import { ClaudeSettings } from './ClaudeSettings'
+import { AudioSettings } from './AudioSettings'
+import { CodeSettings } from './CodeSettings'
+import { PdfSettings } from './PdfSettings'
 import { IconCloud, IconPlus, IconRefresh, IconTrash, IconX } from '../ui/icons'
 
 const FEED_COLORS = ['#e0a94a', '#45c79a', '#8891ff', '#ee6b6b', '#4fa8d8', '#b07ce0']
@@ -35,6 +39,8 @@ export function SettingsModal() {
   const accounts = useStone((s) => s.accounts)
   const errors = useStone((s) => s.calendarErrors)
   const updateSettings = useStone((s) => s.updateSettings)
+  const addLibraryFolder = useStone((s) => s.addLibraryFolder)
+  const removeLibraryFolder = useStone((s) => s.removeLibraryFolder)
   const refreshAccounts = useStone((s) => s.refreshAccounts)
   const loadCalendar = useStone((s) => s.loadCalendar)
   const refreshVault = useStone((s) => s.refreshVault)
@@ -239,6 +245,21 @@ export function SettingsModal() {
 
             <div className="row" style={{ marginTop: 'var(--sp-3)' }}>
               <div className="row__label">
+                <b>Show Canvas in the view bar</b>
+                <span>
+                  Off by default. The palette and {window.stone.platform === 'darwin' ? '⌘7' : 'Ctrl 7'}{' '}
+                  still open it either way.
+                </span>
+              </div>
+              <Toggle
+                label="Show Canvas"
+                checked={settings.showCanvas}
+                onChange={(next) => void updateSettings({ showCanvas: next })}
+              />
+            </div>
+
+            <div className="row" style={{ marginTop: 'var(--sp-3)' }}>
+              <div className="row__label">
                 <b>Week starts on Monday</b>
                 <span>Affects the month grid and week view.</span>
               </div>
@@ -307,6 +328,22 @@ export function SettingsModal() {
           <div className="divider" />
 
           <ExtensionSettings />
+
+          <div className="divider" />
+
+          <ClaudeSettings />
+
+          <div className="divider" />
+
+          <AudioSettings />
+
+          <div className="divider" />
+
+          <CodeSettings />
+
+          <div className="divider" />
+
+          <PdfSettings />
 
           <div className="divider" />
 
@@ -463,6 +500,71 @@ export function SettingsModal() {
                 Choose a folder
               </button>
             </div>
+          </section>
+
+          <div className="divider" />
+
+          {/* ------------------------------------------------------ documents */}
+          <section>
+            <div className="eyebrow" style={{ marginBottom: 'var(--sp-3)' }}>
+              Documents
+            </div>
+
+            <div className="row">
+              <div className="row__label">
+                <b>Watched folders</b>
+                <span>
+                  Folders of PDFs Stone indexes. They appear under Docs in the sidebar, answer to{' '}
+                  <code>[[wikilinks]]</code>, and their text turns up in search. Nothing is moved or
+                  rewritten.
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => void addLibraryFolder('index')}
+                >
+                  <IconPlus size={13} />
+                  Watch a folder
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  title="Copy anything new into the vault's attachments folder, so the vault stays self-contained"
+                  onClick={() => void addLibraryFolder('copy')}
+                >
+                  Import a folder
+                </button>
+              </div>
+            </div>
+
+            {settings.libraryFolders.length === 0 ? (
+              <p className="hint" style={{ marginTop: 'var(--sp-3)' }}>
+                No folders yet.
+              </p>
+            ) : (
+              <div style={{ marginTop: 'var(--sp-3)' }}>
+                {settings.libraryFolders.map((folder) => (
+                  <div key={folder.id} className="row" style={{ marginTop: 'var(--sp-2)' }}>
+                    <div className="row__label">
+                      <b>{folder.label}</b>
+                      <span className="mono truncate">{folder.path}</span>
+                    </div>
+                    <span className="hint">{folder.mode === 'copy' ? 'copies in' : 'in place'}</span>
+                    <button
+                      type="button"
+                      className="btn btn--ghost btn--icon btn--sm"
+                      aria-label={`Stop watching ${folder.label}`}
+                      title="Stop watching this folder. The files themselves are left alone."
+                      onClick={() => void removeLibraryFolder(folder.id)}
+                    >
+                      <IconTrash size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
           <div className="divider" />

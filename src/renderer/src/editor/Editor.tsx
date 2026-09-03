@@ -17,7 +17,12 @@ import {
   type CompletionContext,
   type CompletionResult
 } from '@codemirror/autocomplete'
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import {
+  deleteMarkupBackward,
+  insertNewlineContinueMarkup,
+  markdown,
+  markdownLanguage
+} from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
 import {
   bracketMatching,
@@ -29,11 +34,19 @@ import { tags } from '@lezer/highlight'
 import { vim } from '@replit/codemirror-vim'
 import type { NoteMeta } from '@shared/types'
 import { cycleStatus, isTaskLine, parseTaskLine, setStatusOnLine } from '@shared/task-syntax'
+import { assetPathOf, isExternalUrl } from '@shared/attachments'
 import { isFoldable, livePreview, toggleFold } from './live-preview'
 import { blockHandles } from './blocks'
+import { notePathFacet } from './run-code'
 import { slashMenu } from './slash'
-import { wrapSelection } from './format'
+import { insertMath, linkPastedUrl, makeLink, wrapSelection } from './format'
+import { continueTask, removeListMarkup } from './lists'
 import { selectionToolbar } from './selection-toolbar'
+import { fontMetrics, widgetHeights } from './measure'
+import { blockInsertion, clearActiveEditor, setActiveEditor, trackFocus } from './insert'
+import { stamps } from './stamps'
+import { seekPlayer } from '../audio/player'
+import { useStone } from '../store'
 
 /**
  * CodeMirror injects its own base styles at a specificity plain CSS cannot beat,
@@ -86,19 +99,39 @@ const stoneTheme = EditorView.theme({
   '.cm-fat-cursor': { backgroundColor: 'var(--accent) !important', color: 'var(--accent-ink) !important' }
 })
 
-/** Code-block syntax colours, tuned to the same three-accent rule as the UI. */
+/**
+ * Code-block syntax colours.
+ *
+ * These used to name `--iris`, `--jade` and `--citrine`, none of which exist in
+ * the token sheet — so every rule was an invalid `color` declaration the browser
+ * dropped, and fenced code rendered in flat body text. They come from the
+ * `--code-*` ramp now, and cover the tags a mixed vault actually hits rather
+ * than the handful the first pass listed.
+ */
 const codeHighlight = HighlightStyle.define([
-  { tag: tags.keyword, color: 'var(--iris)' },
-  { tag: [tags.string, tags.special(tags.string)], color: 'var(--jade)' },
-  { tag: [tags.number, tags.bool, tags.null], color: 'var(--citrine)' },
-  { tag: tags.comment, color: 'var(--text-ghost)', fontStyle: 'italic' },
+  { tag: [tags.keyword, tags.moduleKeyword, tags.controlKeyword], color: 'var(--code-keyword)' },
   {
-    tag: [tags.function(tags.variableName), tags.definition(tags.variableName)],
-    color: 'var(--citrine-bright)'
+    tag: [tags.string, tags.special(tags.string), tags.regexp, tags.escape],
+    color: 'var(--code-string)'
   },
-  { tag: [tags.typeName, tags.className], color: 'var(--iris)' },
-  { tag: tags.operator, color: 'var(--text-muted)' },
-  { tag: tags.propertyName, color: 'var(--text)' }
+  { tag: [tags.number, tags.bool, tags.null, tags.atom], color: 'var(--code-number)' },
+  { tag: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment], color: 'var(--code-comment)', fontStyle: 'italic' },
+  {
+    tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.definition(tags.variableName), tags.macroName],
+    color: 'var(--code-function)'
+  },
+  {
+    tag: [tags.typeName, tags.className, tags.namespace, tags.standard(tags.typeName), tags.definition(tags.typeName)],
+    color: 'var(--code-type)'
+  },
+  { tag: [tags.propertyName, tags.attributeName], color: 'var(--code-property)' },
+  { tag: [tags.variableName, tags.labelName], color: 'var(--code-variable)' },
+  { tag: [tags.operator, tags.punctuation, tags.separator, tags.bracket, tags.derefOperator], color: 'var(--code-operator)' },
+  { tag: [tags.tagName, tags.angleBracket], color: 'var(--code-keyword)' },
+  { tag: tags.self, color: 'var(--code-keyword)', fontStyle: 'italic' },
+  { tag: [tags.meta, tags.processingInstruction], color: 'var(--code-comment)' },
+  { tag: tags.link, color: 'var(--link)', textDecoration: 'underline' },
+  { tag: tags.invalid, color: 'var(--code-invalid)' }
 ])
 
 function toggleTaskAtCursor(view: EditorView): boolean {
@@ -192,6 +225,17 @@ export function Editor({
   const view = useRef<EditorView | null>(null)
   const emitted = useRef(value)
 
+  // The update listener is baked into `extensions`, which only rebuilds when the
+  // editor itself must change shape. Reading the callback from a ref keeps a
+  // note switch from writing the new note's text to the old note's path.
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
+
+  // Which note this view is showing, for the player to follow. In a ref like
+  // the rest: `extensions` is deliberately not rebuilt when the note changes.
+  const docKeyRef = useRef(docKey)
+  docKeyRef.current = docKey
+
   // Kept in refs so completion sources see fresh data without rebuilding the view.
   const notesRef = useRef(notes)
   const tagsRef = useRef(vaultTags)
@@ -262,11 +306,40 @@ export function Editor({
         }
       }
       if (snippets.length === 0) return
-      const insert = snippets.join('\n')
+
+      // An embed is a figure, and a figure needs its own line. Dropped into the
+      // middle of a sentence it would otherwise render inline at thumbnail size
+      // — or, worse, cut the sentence in half at the exact pixel the pointer
+      // was over. The same spacing rules every other inserted block uses put it
+      // under the line instead, with one blank line either side.
+      const { at: pos, insert } = blockInsertion(view_.state, snippets.join('\n\n'), at)
+
       view_.dispatch({
-        changes: { from: at, to: at, insert },
-        selection: EditorSelection.cursor(at + insert.length)
+        changes: { from: pos, to: pos, insert },
+        selection: EditorSelection.cursor(pos + insert.length),
+        scrollIntoView: true
       })
+      view_.focus()
+    }
+
+    /**
+     * Whether a drag is carrying files.
+     *
+     * Dragging text inside the note also fires these events, and lighting the
+     * whole editor up for a word being moved four characters would be noise.
+     */
+    const carriesFiles = (event: DragEvent): boolean =>
+      Boolean(event.dataTransfer?.types.includes('Files'))
+
+    /**
+     * `dragenter`/`dragleave` fire for every element the pointer crosses, so a
+     * drag moving over the text is a stream of leaves and enters. Counting them
+     * is what keeps the highlight steady instead of flickering line by line.
+     */
+    let dragDepth = 0
+    const setDropping = (view_: EditorView, on: boolean): void => {
+      dragDepth = on ? dragDepth : 0
+      view_.dom.classList.toggle('cm-dropping', on)
     }
 
     const fileHandlers = EditorView.domEventHandlers({
@@ -276,23 +349,56 @@ export function Editor({
           .filter((item) => item.kind === 'file')
           .map((item) => item.getAsFile())
           .filter((f): f is File => Boolean(f))
-        if (files.length === 0) return false
+
+        if (files.length === 0) {
+          // A URL pasted over selected text links the text rather than
+          // replacing it. Anything else falls through to a normal paste.
+          const text = event.clipboardData?.getData('text/plain') ?? ''
+          if (linkPastedUrl(view_, text)) {
+            event.preventDefault()
+            return true
+          }
+          return false
+        }
+
         event.preventDefault()
         void insertFiles(view_, files, view_.state.selection.main.head)
         return true
       },
 
       drop(event, view_) {
+        setDropping(view_, false)
         const files = [...(event.dataTransfer?.files ?? [])]
         if (files.length === 0) return false
         event.preventDefault()
+        // Where the pointer let go, falling back to the end of the note rather
+        // than the caret: a drop aimed below the last line should land there.
         const pos = view_.posAtCoords({ x: event.clientX, y: event.clientY })
-        void insertFiles(view_, files, pos ?? view_.state.selection.main.head)
+        void insertFiles(view_, files, pos ?? view_.state.doc.length)
         return true
       },
 
-      dragover(event) {
-        if (event.dataTransfer?.types.includes('Files')) event.preventDefault()
+      dragenter(event, view_) {
+        if (!carriesFiles(event)) return false
+        dragDepth++
+        setDropping(view_, true)
+        return false
+      },
+
+      dragleave(event, view_) {
+        if (!carriesFiles(event)) return false
+        dragDepth = Math.max(0, dragDepth - 1)
+        if (dragDepth === 0) setDropping(view_, false)
+        return false
+      },
+
+      dragover(event, view_) {
+        if (!carriesFiles(event)) return false
+        // Saying "copy" is what turns the cursor from a no-entry sign into a
+        // plus, which is the only feedback the OS gives before the drop.
+        event.preventDefault()
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+        if (!view_.dom.classList.contains('cm-dropping')) setDropping(view_, true)
         return false
       }
     })
@@ -331,23 +437,80 @@ export function Editor({
         },
         onSelectTag: (tag) => handlers.current.onSelectTag(tag),
         loadEmbed: (target) => handlers.current.loadEmbed?.(target) ?? Promise.resolve(null),
+        // An embedded file, opened from its own card. A web address goes to the
+        // browser; anything else is a path in the vault, and only main can turn
+        // that into something the OS will launch.
+        onOpenAsset: (target) => {
+          if (isExternalUrl(target)) {
+            void window.stone.shell.openExternal(target)
+            return
+          }
+          const folder = handlers.current.attachmentsFolder ?? 'Attachments'
+          void window.stone.attachments
+            .open(assetPathOf(target, folder))
+            .catch((err: Error) => console.error('[stone] could not open embed', err))
+        },
+        // A recording is played from the bar at the foot of the window, so both
+        // the embed's play button and every timestamp down the note reach the
+        // same element rather than starting a second copy of the lecture.
+        onPlayAudio: (target, seconds) => {
+          const folder = handlers.current.attachmentsFolder ?? 'Attachments'
+          const audio = assetPathOf(target, folder)
+          const store = useStone.getState()
+          // Already loaded: seek the element directly, which is instant and
+          // keeps playing. Otherwise the position rides along with the open and
+          // the player applies it as soon as it knows how long the file is.
+          if (store.playback?.audio === audio && seekPlayer(seconds)) return
+          void store.openPlayer(audio, docKeyRef.current, { at: seconds, play: true })
+        },
+        onShowTranscript: (target) => {
+          const folder = handlers.current.attachmentsFolder ?? 'Attachments'
+          const audio = assetPathOf(target, folder)
+          const store = useStone.getState()
+          void store.openPlayer(audio, docKeyRef.current)
+          store.setSidePanel('transcript')
+        },
         attachmentsFolder: () => handlers.current.attachmentsFolder ?? 'Attachments',
         onHoverLink: (target, rect) => handlers.current.onHoverLink?.(target, rect),
         onHoverEnd: () => handlers.current.onHoverEnd?.()
       }),
       selectionToolbar(),
+      ...stamps(),
+      trackFocus,
+      widgetHeights,
+      fontMetrics,
       ...blockHandles(),
       fileHandlers,
       keymap.of([
         { key: 'Mod-b', run: (v) => wrapSelection(v, '**') },
         { key: 'Mod-i', run: (v) => wrapSelection(v, '*') },
+        // Markdown has no underline, so this writes the `<u>` tag the exporter
+        // and every other renderer already understand.
+        { key: 'Mod-u', run: (v) => wrapSelection(v, '<u>') },
         // Not Mod-Shift-h, which already collapses the section below.
         { key: 'Mod-Shift-m', run: (v) => wrapSelection(v, '==') },
+        // Not Mod-k: that is the command palette, and shadowing it in the one
+        // place the user spends most of their time is worse than a shortcut
+        // that takes an extra modifier.
+        { key: 'Mod-Shift-k', run: makeLink },
         { key: 'Mod-`', run: (v) => wrapSelection(v, '`') },
+        // E for equation. Mod-m is the highlight key's neighbour and Mod-Shift-m
+        // is already taken by it.
+        { key: 'Mod-Shift-e', run: insertMath },
         { key: 'Mod-Enter', run: toggleTaskAtCursor },
         { key: 'Mod-Shift-h', run: toggleFoldAtCursor },
         ...closeBracketsKeymap,
+        // Above the list keys: Enter belongs to the open completion menu first.
         ...completionKeymap,
+        // A list keeps itself going. Stone's own task handling runs first, then
+        // the markdown package's for plain bullets, numbers and quotes, and
+        // both fall through to a plain newline when the caret is not in a list.
+        // Shift-Enter never reaches them, so it stays the way to break a line
+        // inside an item.
+        { key: 'Enter', run: continueTask },
+        { key: 'Enter', run: insertNewlineContinueMarkup },
+        { key: 'Backspace', run: removeListMarkup },
+        { key: 'Backspace', run: deleteMarkupBackward },
         ...searchKeymap,
         ...historyKeymap,
         ...defaultKeymap,
@@ -357,10 +520,12 @@ export function Editor({
         if (!update.docChanged) return
         const next = update.state.doc.toString()
         emitted.current = next
-        onChange(next)
+        onChangeRef.current(next)
       })
     ]
-    // onChange is stable via the store; rebuilding on every render would drop focus.
+    // Callbacks and vault data are read through refs, so this only needs to
+    // rebuild when the editor's own configuration changes; rebuilding on every
+    // render would drop focus.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vimMode, spellcheck])
 
@@ -369,14 +534,21 @@ export function Editor({
     const instance = new EditorView({
       state: EditorState.create({
         doc: value,
-        extensions,
+        // The note's path is state, not configuration: the view is rebuilt when
+        // it changes anyway, and a run needs it both for its working directory
+        // and to keep one note's output off another note's blocks.
+        extensions: [extensions, notePathFacet.of(docKey)],
         selection: { anchor: Math.min(bodyStart(value), value.length) }
       }),
       parent: host.current
     })
     view.current = instance
     emitted.current = value
+    // Claude's insertions go to the last editor focused; a note that has just
+    // opened has not been clicked yet, so claim it now and let focus correct it.
+    setActiveEditor(instance)
     return () => {
+      clearActiveEditor(instance)
       instance.destroy()
       view.current = null
     }

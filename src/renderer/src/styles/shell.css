@@ -417,12 +417,53 @@
   font-size: var(--t-base);
   color: var(--text-strong);
   pointer-events: auto;
+  text-align: left;
   animation: lift var(--dur-slow) var(--ease-out);
 }
 
 :root[data-theme='light'] .toast {
   background: #373530;
   color: rgb(255 255 255 / 90%);
+}
+
+/* The message is the one part of a toast worth selecting, so it is the only
+   part that allows it. */
+.toast__message {
+  user-select: text;
+  cursor: text;
+  flex: 1;
+  min-width: 0;
+}
+
+.toast__action {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-hair);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--t-2xs);
+  cursor: pointer;
+}
+
+.toast__action:hover {
+  color: var(--text-strong);
+  border-color: var(--border);
+}
+
+.toast__close {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text-ghost);
+  cursor: pointer;
+}
+
+.toast__close:hover {
+  color: var(--text-strong);
 }
 
 .toast__dot {
@@ -546,6 +587,29 @@
   font-size: var(--t-base);
 }
 
+/* The letters the query actually matched, in the go-to-file picker. */
+.palette__hit {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.palette__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 6px var(--sp-4);
+  border-top: 1px solid var(--border-hair);
+  font-size: var(--t-xs);
+  color: var(--text-ghost);
+  flex: none;
+}
+
+.palette__foot kbd {
+  font: inherit;
+  color: var(--text-faint);
+  margin-right: 3px;
+}
+
 /* ----------------------------------------------------------------- modals */
 
 .modal {
@@ -583,6 +647,179 @@
   gap: var(--sp-5);
 }
 
+/* The one-line prompt: a modal with one field, sized to it rather than to a
+   settings screen. */
+.modal--prompt {
+  width: min(420px, 92vw);
+}
+
+.modal--prompt .modal__body {
+  padding: var(--sp-4);
+}
+
+.modal--prompt .field {
+  width: 100%;
+}
+
+/* The ask-Claude dialog: a palette-shaped box, near the top of the window, so
+   the note stays visible behind the thing being written into it. */
+.modal--claude {
+  width: min(560px, 92vw);
+}
+
+.claude__mark {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex: none;
+}
+
+.claude__modes {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-sm);
+  background: var(--bg-surface);
+}
+
+.claude__modes button {
+  padding: 3px var(--sp-2);
+  border-radius: 4px;
+  font-size: var(--t-xs);
+  color: var(--text-muted);
+}
+
+.claude__modes button[data-on='true'] {
+  background: var(--bg-page);
+  color: var(--text-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.claude__modes button:disabled {
+  opacity: 0.4;
+}
+
+/* The context row's segmented control sits in a line of text rather than at
+   the end of the header, so it gives up the auto margin. */
+.claude__modes--inline {
+  margin-left: 0;
+}
+
+.claude__body {
+  gap: var(--sp-3);
+}
+
+/* `.field` is sized for one line of input; a textarea needs its own box back. */
+.claude__field {
+  width: 100%;
+  height: auto;
+  min-height: 66px;
+  padding: var(--sp-2);
+  resize: vertical;
+  line-height: 1.5;
+  font-family: inherit;
+  font-size: var(--t-base);
+}
+
+.claude__context {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--t-sm);
+  color: var(--text-muted);
+}
+
+/* Agent mode is a conversation rather than a single answer, so the box is
+   taller and the thread takes the height the one-shot modes do not need. */
+.modal--claude-agent {
+  width: min(680px, 94vw);
+}
+
+.claude__thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-height: 44vh;
+  overflow: auto;
+}
+
+.claude__turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+/* The question, set apart from its answer the way a quoted line is. */
+.claude__asked {
+  padding-left: var(--sp-3);
+  border-left: 2px solid var(--border);
+  font-size: var(--t-sm);
+  color: var(--text-muted);
+}
+
+.claude__out--turn {
+  max-height: none;
+  color: var(--text);
+}
+
+/* What the agent is doing while it does it. A tail rather than a log: the
+   interesting question during a run is only ever "is it still moving". */
+.claude__activity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--t-xs);
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+}
+
+.claude__activity li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claude__activity b {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* The reply as it streams. Capped: a long answer should not push the buttons
+   off the bottom of a modal the user is waiting on. */
+.claude__out {
+  max-height: 260px;
+  overflow: auto;
+  padding: var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.claude__note {
+  font-size: var(--t-sm);
+  color: var(--text-muted);
+}
+
+.claude__note--warn {
+  color: var(--red);
+}
+
+.claude__hint {
+  margin-right: auto;
+  font-size: var(--t-xs);
+  color: var(--text-ghost);
+}
+
 .modal__foot {
   padding: var(--sp-3) var(--sp-4);
   border-top: 1px solid var(--border-hair);
@@ -616,6 +853,39 @@
   font-size: var(--t-sm);
   color: var(--text-faint);
   line-height: 1.5;
+}
+
+/*
+ * The per-language command table in Settings.
+ *
+ * A grid rather than a stack of `.row`s: sixteen labels of wildly different
+ * lengths would otherwise leave the fields ragged, and the whole point of the
+ * list is scanning down the commands.
+ */
+.run-commands {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  margin-top: var(--sp-3);
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: var(--sp-2);
+}
+
+.run-commands__row {
+  display: contents;
+}
+
+.run-commands__name {
+  font-size: var(--t-sm);
+  color: var(--text-muted);
+}
+
+.run-commands .field {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  min-width: 0;
 }
 
 .switch {

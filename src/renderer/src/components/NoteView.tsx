@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { readFrontmatterKey, setFrontmatterKey } from '@shared/frontmatter'
+import { readFrontmatterKey, setFrontmatterKey, yamlScalar } from '@shared/frontmatter'
+import { ancestorFolders, folderDefinedBy, folderName } from '@shared/folder-note'
 import { useStone } from '../store'
 import { Editor } from '../editor/Editor'
+import { activeEditor } from '../editor/insert'
+import { insertPickedFiles } from '../editor/slash'
 import {
   IconArrowLeft,
   IconArrowRight,
+  IconChevronDown,
   IconCopy,
   IconDownload,
   IconFolder,
@@ -15,9 +19,10 @@ import {
   IconStar,
   IconTrash
 } from '../ui/icons'
-import { CoverBand, CoverPicker, IconPicker } from './PageDressing'
+import { CoverBand, CoverPicker, IconPicker, PageIcon } from './PageDressing'
 import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
 import { HoverPreview } from './SidePanels'
+import { exportNoteToPdf } from '../export-note'
 import { formatLongDate, relativeDay, toISODate } from '../lib/dates'
 
 function basename(relPath: string): string {
@@ -40,17 +45,22 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
   const renameNote = useStone((s) => s.renameNote)
   const deleteNote = useStone((s) => s.deleteNote)
   const moveNote = useStone((s) => s.moveNote)
+  const openFolderNote = useStone((s) => s.openFolderNote)
   const duplicateNote = useStone((s) => s.duplicateNote)
   const toggleFavorite = useStone((s) => s.toggleFavorite)
   const patchNoteMeta = useStone((s) => s.patchNoteMeta)
   const goBack = useStone((s) => s.goBack)
   const goForward = useStone((s) => s.goForward)
+  const setQuickOpen = useStone((s) => s.setQuickOpen)
   const toast = useStone((s) => s.toast)
 
   const [title, setTitle] = useState('')
   const [picker, setPicker] = useState<'icon' | 'cover' | null>(null)
   const [hover, setHover] = useState<{ target: string; rect: DOMRect } | null>(null)
+  /** True in a split too narrow for the folder trail to be worth its width. */
+  const [narrow, setNarrow] = useState(false)
   const titleRef = useRef<HTMLInputElement>(null)
+  const headRef = useRef<HTMLDivElement>(null)
   const { menu, open: openMenu, close: closeMenu } = useContextMenu()
 
   const note = useMemo(() => notes.find((n) => n.relPath === relPath) ?? null, [notes, relPath])
@@ -60,6 +70,20 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
     setPicker(null)
     setHover(null)
   }, [relPath])
+
+  /*
+   * Below this the folder trail shrinks to a row of two-pixel stubs, which is
+   * worse than not being there — so it isn't. The file's own name, the status,
+   * and the picker all survive at any width, and the picker is the way back to
+   * anywhere the trail would have led.
+   */
+  useEffect(() => {
+    const el = headRef.current
+    if (!el) return
+    const observer = new ResizeObserver(([entry]) => setNarrow(entry.contentRect.width < 560))
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   if (!doc) return null
 
@@ -96,6 +120,9 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
         : ''
 
   const folder = relPath.includes('/') ? relPath.slice(0, relPath.lastIndexOf('/')) : 'Vault root'
+  /** Enclosing folders, outermost first. A folder note skips the folder it defines. */
+  const crumbs = ancestorFolders(relPath)
+  const defines = folderDefinedBy(relPath)
   const measure = { '--measure': `${settings?.editorWidth ?? 720}px` } as React.CSSProperties
   const editedOn = note ? toISODate(new Date(note.mtime)) : toISODate(new Date())
   const favorited = settings?.favorites.includes(relPath) ?? false
@@ -108,14 +135,20 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
   const icon = readFrontmatterKey(doc.content, 'icon')
   const cover = readFrontmatterKey(doc.content, 'cover')
 
-  /** Icon and cover live in frontmatter, so both are one surgical line edit. */
+  /**
+   * Icon and cover live in frontmatter, so both are one surgical line edit.
+   * The value is quoted on the way in: an icon of `7` or `#` is text here, but
+   * bare YAML would hand the indexer a number, or a comment, or nothing.
+   */
   const setKey = (key: 'icon' | 'cover', value: string | null): void => {
-    setDoc(relPath, setFrontmatterKey(doc.content, key, value))
+    setDoc(relPath, setFrontmatterKey(doc.content, key, value === null ? null : yamlScalar(value)))
     // Patch the sidebar's copy too, so the tree row updates in the same frame.
     patchNoteMeta(relPath, key === 'icon' ? { icon: value } : { cover: value })
   }
 
-  const exportAs = async (kind: 'markdown' | 'html' | 'pdf'): Promise<void> => {
+  // PDF goes through `exportNoteToPdf`, which also flushes unsaved edits; this
+  // covers the two formats that do not need the print window.
+  const exportAs = async (kind: 'markdown' | 'html'): Promise<void> => {
     try {
       const saved = await window.stone.exporter[kind](relPath)
       if (!saved) return
@@ -154,9 +187,17 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
     },
     {
       id: 'insert-file',
-      label: 'Insert a file…',
+      label: 'Embed an image or a PDF…',
       icon: <IconImage size={13} />,
       run: () => {
+        // Through the editor when there is one, so it lands at the caret and
+        // can be undone. Appending to the end is the fallback for a note that
+        // is open but not focused, where there is no caret to land at.
+        const view = activeEditor()
+        if (view) {
+          void insertPickedFiles(view)
+          return
+        }
         void window.stone.attachments.pick().then((picked) => {
           if (picked.length === 0) return
           setDoc(relPath, `${doc.content.replace(/\s*$/, '')}\n\n${picked.map((p) => p.markdown).join('\n')}\n`)
@@ -170,7 +211,7 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
       children: [
         { id: 'export-md', label: 'Markdown', run: () => void exportAs('markdown') },
         { id: 'export-html', label: 'HTML', run: () => void exportAs('html') },
-        { id: 'export-pdf', label: 'PDF', run: () => void exportAs('pdf') }
+        { id: 'export-pdf', label: 'PDF', run: () => void exportNoteToPdf(relPath) }
       ]
     },
     {
@@ -207,7 +248,7 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
               aria-label="Change page icon"
               onClick={() => setPicker(picker === 'icon' ? null : 'icon')}
             >
-              {icon}
+              <PageIcon icon={icon} />
             </button>
           )}
 
@@ -236,8 +277,9 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
 
           {picker === 'icon' && (
             <IconPicker
-              onPick={(emoji) => {
-                setKey('icon', emoji)
+              current={icon}
+              onPick={(next) => {
+                setKey('icon', next)
                 setPicker(null)
               }}
               onClear={() => {
@@ -274,6 +316,7 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
             value={title}
             placeholder="Untitled"
             aria-label="Note title"
+            spellCheck={settings?.spellcheck ?? true}
             onChange={(e) => setTitle(e.target.value)}
             onBlur={commitTitle}
             onKeyDown={(e) => {
@@ -329,7 +372,7 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
 
   return (
     <div className={`note ${fontClass}`} data-focused={paneIndex === activePane}>
-      <div className="note__head">
+      <div className="note__head" ref={headRef}>
         <div className="note__nav">
           <button
             type="button"
@@ -351,9 +394,52 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
           </button>
         </div>
 
-        <div className="note__crumbs">
+        {/*
+         * The trail back to each enclosing folder's note. Nothing about it is
+         * stored in the file — it is read straight off the path, so it can
+         * never disagree with where the note actually sits.
+         *
+         * It reads like an address bar, so it behaves like one: the folders are
+         * links, and the row as a whole opens the go-to-file picker for *this*
+         * pane, which is the fastest way to put something else in the split you
+         * are looking at.
+         */}
+        <div
+          className="note__crumbs"
+          data-narrow={narrow}
+          onClick={() => setQuickOpen(paneIndex)}
+        >
           <IconFolder size={13} />
-          <b>{folder}</b>
+          {crumbs.length === 0 ? (
+            <b>{defines ? 'Vault root' : folder}</b>
+          ) : (
+            crumbs.map((crumb) => (
+              <span key={crumb} className="note__crumb">
+                <button
+                  type="button"
+                  className="note__crumb-link truncate"
+                  title={`Open the folder note for ${crumb}`}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void openFolderNote(crumb)
+                  }}
+                >
+                  {folderName(crumb)}
+                </button>
+                <span className="note__crumb-sep">/</span>
+              </span>
+            ))
+          )}
+          <button
+            type="button"
+            className="note__crumb-file"
+            aria-label="Open another file in this pane"
+            title={`Open another file in this pane (${window.stone.platform === 'darwin' ? '⌘P' : 'Ctrl P'})`}
+          >
+            <span className="truncate">{name}</span>
+            <IconChevronDown size={11} />
+          </button>
+          {defines && <span className="note__crumb-self">folder note</span>}
         </div>
 
         <div className="note__status">
@@ -390,7 +476,12 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
       <div
         className="note__scroll"
         onContextMenu={(e) => {
-          // Let the editor keep its own context menu for text selections.
+          // Text being edited gets the native menu instead: spelling
+          // suggestions and a working Cut/Paste can only come from the main
+          // process, and Electron raises that menu only when nothing here
+          // calls preventDefault. The page menu keeps the margins, the
+          // header, and the ••• button.
+          if ((e.target as HTMLElement).closest('.cm-content, input, textarea')) return
           if (window.getSelection()?.toString()) return
           openMenu(e, pageMenu)
         }}

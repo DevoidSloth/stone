@@ -51,14 +51,15 @@ jobs:
       # every release — generating a fresh one per build is no better than
       # shipping unsigned.
       #
-      # Export the local certificate once and store it as a repository secret:
+      # To set it up, run this locally and follow what it prints:
       #
-      #   security export -t identities -f pkcs12 \
-      #     -k ~/Library/Keychains/login.keychain-db \
-      #     -o stone-signing.p12 -P '<password>'
-      #   base64 -i stone-signing.p12 | pbcopy
+      #   ./scripts/make-signing-cert.sh --export
       #
-      # then set MACOS_SIGNING_CERT (the base64) and MACOS_SIGNING_CERT_PASSWORD.
+      # It sets MACOS_SIGNING_CERT (base64 of the PKCS#12) and
+      # MACOS_SIGNING_CERT_PASSWORD from the copy kept when the certificate was
+      # generated. Don't reach for `security export -t identities` instead: it
+      # exports *every* identity in the keychain, so unrelated private keys
+      # would end up in this repository's secrets.
       - name: Import signing certificate
         # `secrets` can't be read from an `if:` — it isn't resolved yet when
         # that's evaluated — so the presence check happens in the script below
@@ -68,10 +69,28 @@ jobs:
           MACOS_SIGNING_CERT: ${{ secrets.MACOS_SIGNING_CERT }}
           MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
         run: |
-          if [ -z "$MACOS_SIGNING_CERT" ]; then
-            echo "No MACOS_SIGNING_CERT secret set; skipping certificate import."
+          set -euo pipefail
+
+          # scripts/build-mac.mjs refuses to build without a certificate unless
+          # it is told to, so the absence of the secret has to be turned into
+          # that instruction here — loudly, because an unsigned release is the
+          # bug the certificate exists to prevent.
+          if [ -z "${MACOS_SIGNING_CERT:-}" ]; then
+            echo "STONE_ALLOW_UNSIGNED=1" >> "$GITHUB_ENV"
+            echo "::warning title=macOS build will be unsigned::MACOS_SIGNING_CERT is not set. Calendar access will reset for every user on this update."
+            {
+              echo "### ⚠ The macOS build is unsigned"
+              echo
+              echo "\`MACOS_SIGNING_CERT\` is not set on this repository, so the app was"
+              echo "packaged without a certificate. macOS pins each user's calendar"
+              echo "permission to the exact binary, so installing this build silently"
+              echo "revokes the access the previous one was granted."
+              echo
+              echo "Set the secret as described in \`.github/workflows/release.yml\`."
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+
           KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
           PASSWORD="$(uuidgen)"
           security create-keychain -p "$PASSWORD" "$KEYCHAIN"
@@ -83,17 +102,43 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$PASSWORD" "$KEYCHAIN" >/dev/null
           # The signing script reads the default search list, so the new
-          # keychain has to join it rather than replace it.
-          security list-keychains -d user -s "$KEYCHAIN" \
-            $(security list-keychains -d user | tr -d '"')
+          # keychain has to join it rather than replace it. Read into an array
+          # rather than splitting a command substitution: `-s` *replaces* the
+          # whole list, so a path that splits wrong doesn't fail loudly, it
+          # quietly drops keychains — and the last thing this step should do is
+          # damage the search list it is trying to extend.
+          EXISTING=()
+          while IFS= read -r entry; do
+            entry="${entry#"${entry%%[![:space:]]*}"}"
+            entry="${entry#\"}"
+            entry="${entry%\"}"
+            [ -n "$entry" ] && EXISTING+=("$entry")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$KEYCHAIN" ${EXISTING[@]+"${EXISTING[@]}"}
+
           rm -f "$RUNNER_TEMP/cert.p12"
 
+          # An import can succeed while leaving nothing codesign can actually
+          # use — a certificate with no private key, or one without the
+          # codeSigning extension. Better to find out now than after a
+          # ten-minute universal build.
+          if ! security find-identity -p codesigning | grep -qE 'Developer ID Application|Stone Local Signing'; then
+            echo "::error title=No usable signing identity::The certificate imported but codesign cannot see an identity from it. Re-export it as a PKCS#12 that includes the private key."
+            security find-identity -p codesigning
+            exit 1
+          fi
+
+      # On macOS this runs scripts/build-mac.mjs, which packages, signs, and
+      # then verifies the result — including the app inside the dmg — so a build
+      # that signed with the wrong thing fails here instead of shipping.
       - name: Build and package
         run: npm run ${{ matrix.script }}
         env:
           # Signing is done by scripts/sign-mac.mjs, not by electron-builder, so
           # its own identity discovery stays off.
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          # Already run as its own step above, so the mac build doesn't repeat it.
+          STONE_SKIP_TYPECHECK: 1
 
       - uses: actions/upload-artifact@v4
         with:
@@ -106,6 +151,11 @@ jobs:
   release:
     name: Publish release
     needs: build
+    # The build matrix sets fail-fast: false so one platform's failure doesn't
+    # sink the other, which only means anything if the release still publishes
+    # what did build. Without this, `needs:` skips the release whenever either
+    # leg fails.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -133,12 +183,15 @@ jobs:
           | Windows x64 | `Stone-*-x64.exe` |
           | Windows ARM64 | `Stone-*-arm64.exe` |
 
-          These builds are **unsigned** — there is no Apple Developer ID or
-          Windows code-signing certificate behind them.
+          Neither build carries a certificate an operating system will vouch
+          for — there is no Apple Developer ID and no Windows code-signing
+          certificate — so both will be challenged on first launch.
 
-          - **macOS:** Gatekeeper will refuse the first launch. Right-click the
-            app in Applications and choose Open, or run
+          - **macOS:** signed with Stone's own certificate. That is what keeps
+            your calendar permission alive across updates, but it does not
+            satisfy Gatekeeper, which will still refuse the first launch:
+            right-click the app in Applications and choose Open, or run
             `xattr -dr com.apple.quarantine /Applications/Stone.app`.
-          - **Windows:** SmartScreen shows "Windows protected your PC". Choose
-            More info, then Run anyway.
+          - **Windows:** unsigned. SmartScreen shows "Windows protected your
+            PC". Choose More info, then Run anyway.
           NOTES

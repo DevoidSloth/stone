@@ -223,8 +223,8 @@ export interface SavedView {
 /**
  * A folder of documents Stone watches.
  *
- * `index` leaves the files where they are — the iCloud folder GoodNotes already
- * writes to, a Downloads folder — and only reads them. `copy` imports anything
+ * `index` leaves the files where they are — an iCloud folder, a Downloads
+ * folder — and only reads them. `copy` imports anything
  * new into the vault's attachments folder, so the vault stays self-contained.
  * Both are legitimate: one keeps a single copy, the other keeps the vault
  * portable, and which matters is not something the app can decide.
@@ -236,7 +236,7 @@ export interface LibraryFolder {
   mode: 'index' | 'copy'
 }
 
-export type DocumentKind = 'pdf' | 'goodnotes' | 'epub' | 'other'
+export type DocumentKind = 'pdf' | 'epub' | 'other'
 
 export interface LibraryDoc {
   /** Absolute path for an indexed file; vault-relative for a copied one. */
@@ -247,6 +247,13 @@ export interface LibraryDoc {
   folderId: string
   /** Set when the file lives inside the vault and can use `stone-file://`. */
   relPath: string | null
+  /**
+   * Path, relative to the watched folder's root, of the directory holding this
+   * document — '/' separated, empty when it sits directly inside the watched
+   * folder. It is what lets a folder's own structure reappear in Stone rather
+   * than dumping every file into one flat list.
+   */
+  folderPath: string
   size: number
   mtime: number
   pageCount: number | null
@@ -254,8 +261,9 @@ export interface LibraryDoc {
   evicted: boolean
   /** Extraction problems worth telling the user about, rather than hiding. */
   warning: string | null
-  /** Notes that link to this document. */
   hasText: boolean
+  /** True when Stone has pages it can actually display. */
+  renderable: boolean
 }
 
 // ------------------------------------------------------------------ canvas
@@ -397,6 +405,12 @@ export interface Settings {
   editorFont: 'serif' | 'sans' | 'mono'
   editorWidth: number
   showStrataRail: boolean
+  /**
+   * Show Canvas in the view bar. Off by default — it is a surface people either
+   * live in or never open, and an unused tab costs everyone attention. The
+   * command palette and its chord still reach it either way.
+   */
+  showCanvas: boolean
   weekStartsOn: 0 | 1
   /** Vim keybindings in the editor. */
   vimMode: boolean
@@ -433,7 +447,90 @@ export interface Settings {
   activeTheme: string | null
   /** Plugin ids the user has switched on. */
   enabledPlugins: string[]
-  /** Folders of PDFs and GoodNotes documents Stone indexes. */
+
+  // ----------------------------------------------------------- pdf export
+  /** Paper the PDF export is laid out for. */
+  pdfPageSize: 'A4' | 'Letter' | 'Legal' | 'A3' | 'A5'
+  /** Page margin in millimetres, applied on all four sides. */
+  pdfMargin: number
+  /** Open with a cover page carrying the title, author and date. */
+  pdfCoverPage: boolean
+  /** Include a table of contents. Skipped anyway when there is little to list. */
+  pdfToc: boolean
+  /** Running header and footer with the note title and a page number. */
+  pdfHeaderFooter: boolean
+  /** Name printed on the cover. Blank falls back to the vault's name. */
+  pdfAuthor: string
+
+  // -------------------------------------------------------------- claude
+  /** Model the headless CLI is asked for: an alias like `sonnet`, or a full id. */
+  claudeModel: string
+  /** Path to the `claude` binary, when the usual places are the wrong ones. */
+  claudeCommand: string | null
+  /** The mode the ask dialog opens in, remembered from last time. */
+  claudeMode: ClaudeMode
+  /**
+   * What the agent may do beyond reading the vault.
+   *
+   * Reading is not listed because it is the mode: an agent that cannot open a
+   * note cannot answer anything about the vault, and opening one is the same
+   * act as the search the user could have run themselves. Writing, the web and
+   * the shell are each a further promise, so each is its own switch.
+   */
+  claudeTools: ClaudeTools
+  // ---------------------------------------------------------------- code
+  /**
+   * Command lines for running a fenced block, keyed by language id.
+   *
+   * Only the ones the user has changed are stored; everything else falls back
+   * to the table in `@shared/code-langs`. A key that is not in that table adds
+   * a language Stone ships no runner for.
+   */
+  codeRunners: Record<string, string>
+  /** Seconds a block may run before it is stopped. */
+  codeRunTimeout: number
+  /** Set the first time the user agrees to run code from a note. */
+  codeRunConfirmed: boolean
+  /**
+   * Whether a note's blocks share one running session per language, the way
+   * the cells of a notebook do: what the third block declares, the fourth can
+   * use, without the third being run again.
+   *
+   * A note overrides this with a `notebook:` key in its frontmatter, so a page
+   * of unrelated snippets can keep each block to itself in a vault where the
+   * rest are notebooks, and the other way round.
+   */
+  codeNotebook: boolean
+
+  // --------------------------------------------------------------- audio
+  /**
+   * Path to a Whisper command line, when the usual places are the wrong ones.
+   * Auto-detected exactly the way `claudeCommand` is.
+   */
+  whisperCommand: string | null
+  /**
+   * The model to transcribe with.
+   *
+   * whisper.cpp wants a path to a `ggml-*.bin`; the Python and MLX front ends
+   * want a name like `base.en` or `mlx-community/whisper-small`. Which of the
+   * two it is follows from the binary, so one field covers both.
+   */
+  whisperModel: string
+  /** BCP-47-ish language hint, or `auto` to let the model decide. */
+  whisperLanguage: string
+  /** Folder inside the vault where recordings are written. */
+  audioFolder: string
+  /**
+   * Stamp each new block written while recording with the time it was started.
+   * Off means only the marks the user asks for, from the recorder or its chord.
+   */
+  audioAutoStamp: boolean
+  /** Start transcribing as soon as a recording is stopped. */
+  audioTranscribeOnStop: boolean
+  /** Scroll the note to the line being spoken while a recording plays back. */
+  audioFollow: boolean
+
+  /** Folders of documents Stone indexes. */
   libraryFolders: LibraryFolder[]
   /** Notes pinned to the top of the sidebar. */
   favorites: string[]
@@ -441,6 +538,212 @@ export interface Settings {
   calendars: CalendarAccount[]
   icsSubscriptions: { id: string; name: string; url: string; color: string }[]
   firstRunComplete: boolean
+}
+
+/**
+ * What `exportPdf` needs to lay out a page.
+ *
+ * Passed in rather than read from `settings` inside the exporter, so the module
+ * stays a pure function of its arguments — the same shape `claude.ts` follows.
+ */
+export interface PdfExportOptions {
+  pageSize: Settings['pdfPageSize']
+  /** Millimetres. */
+  margin: number
+  coverPage: boolean
+  toc: boolean
+  headerFooter: boolean
+  author: string
+}
+
+/**
+ * Everything the print window needs to lay out one note.
+ *
+ * Main resolves the vault-dependent parts — embeds, the author, the edit date —
+ * before sending, so the print window never needs vault access of its own.
+ */
+export interface PrintPayload {
+  title: string
+  icon: string | null
+  relPath: string
+  markdown: string
+  /** `![[note]]` targets resolved to their markdown, keyed as written. */
+  embeds: Record<string, string>
+  /** Where a bare `![[shot.png]]` lives, so the print window can find it. */
+  attachmentsFolder: string
+  /** Frontmatter `subtitle` or `description`, for the cover. */
+  subtitle: string | null
+  author: string
+  vaultName: string
+  /** Last edit, already formatted for the reader's locale. */
+  edited: string
+  options: PdfExportOptions
+  /**
+   * Page number per heading id, learned from the measuring pass. Absent on the
+   * first pass, when the contents page is drawn with placeholders instead.
+   */
+  pageNumbers?: Record<string, number>
+}
+
+/**
+ * What Claude is being asked for.
+ *
+ * The first five are one-shot: a prompt goes out, a block of markdown comes
+ * back, and the process dies. `agent` is the odd one — it keeps a session, is
+ * allowed tools, and answers over several turns. `lecture` is not offered in
+ * the dialog; it is what the transcript panel asks with.
+ */
+export type ClaudeMode = 'diagram' | 'drawing' | 'structure' | 'code' | 'text' | 'agent' | 'lecture'
+
+/** How much of the note goes out with the prompt. */
+export type ClaudeContext = 'none' | 'selection' | 'note'
+
+/**
+ * What the agent is allowed to touch. Reading the vault is implied by the mode;
+ * everything here is off until it is turned on, because a note can arrive from
+ * the web clipper and a prompt inside one is a prompt like any other.
+ */
+export interface ClaudeTools {
+  /** Create and edit notes in the vault. */
+  write: boolean
+  /** Search and fetch the web. */
+  web: boolean
+  /** Run shell commands in the vault. */
+  shell: boolean
+}
+
+export interface ClaudeStatus {
+  available: boolean
+  /** The resolved path, for the settings screen to show. */
+  binary: string | null
+}
+
+/** A tool call, as the dialog shows it while the agent works. */
+export interface ClaudeActivity {
+  /** `Read`, `Grep`, `Bash`… */
+  tool: string
+  /** The interesting argument — a path, a pattern, a command — already cut down. */
+  detail: string
+}
+
+export interface ClaudeRunResult {
+  text: string
+  /**
+   * The CLI's session id, when there is one to resume. Present for agent runs
+   * and null for the one-shot modes, which persist nothing.
+   */
+  sessionId: string | null
+}
+
+/**
+ * One utterance, as Whisper heard it.
+ *
+ * Seconds rather than milliseconds because that is what every Whisper front
+ * end emits and what `<audio>.currentTime` is measured in; converting twice on
+ * the way through would only be a chance to be off by a thousand.
+ */
+export interface TranscriptSegment {
+  start: number
+  end: number
+  text: string
+}
+
+/** A finished transcript, cached against the recording it came from. */
+export interface Transcript {
+  /** Vault-relative path of the audio, which is also the cache key. */
+  audio: string
+  /** ISO 8601. */
+  createdAt: string
+  /** What the model reported, or what was asked for. */
+  language: string
+  /** The command line that produced it, for a transcript that reads oddly. */
+  engine: string
+  durationSeconds: number
+  segments: TranscriptSegment[]
+}
+
+/** Which Whisper front end the resolved binary is, since their flags differ. */
+export type WhisperFlavor = 'whisper-cpp' | 'openai' | 'mlx' | 'faster'
+
+export interface WhisperStatus {
+  available: boolean
+  binary: string | null
+  flavor: WhisperFlavor | null
+  /**
+   * `ggml-*.bin` files found in the usual whisper.cpp model directories, so the
+   * settings screen can offer them instead of asking for a path.
+   */
+  models: string[]
+}
+
+/** Progress from a transcription in flight, pushed on `audio:progress`. */
+export interface TranscribeProgress {
+  id: string
+  /** What the run is doing now, in words fit to show. */
+  stage: string
+  /** 0–1, or null while the run cannot say. */
+  progress: number | null
+  /** Segments decoded so far, for a transcript that fills in as it goes. */
+  segments: TranscriptSegment[]
+}
+
+/** A recording being written to disk, as the renderer streams it in. */
+export interface AudioSink {
+  id: string
+  relPath: string
+}
+
+/** How the audio bar remembers where a note's player was. */
+export interface AudioSession {
+  /** Vault-relative path of the recording. */
+  audio: string
+  /** The note it was recorded against or last opened from. */
+  note: string
+}
+
+/** How a run of a fenced code block ended. */
+export interface CodeRunResult {
+  /** The exit status, or null when a signal ended it. */
+  code: number | null
+  signal: string | null
+  /** Stopped at `codeRunTimeout` rather than finishing. */
+  timedOut: boolean
+  /** Stopped from the note's stop button. */
+  cancelled: boolean
+  ms: number
+  /** Whether the block ran in the note's shared session rather than on its own. */
+  session: boolean
+  /**
+   * Which run this was in that session, counting from one — the `[3]` beside
+   * the block, and the only way to tell at a glance what a note's blocks have
+   * actually seen. Null for a block that ran on its own.
+   */
+  count: number | null
+  /**
+   * Something worth saying that the exit code does not: that the session was
+   * restarted out from under the block, or that Stone called a `main` for it.
+   */
+  note: string | null
+}
+
+/** Where a run has got to, before it has any output to show for itself. */
+export interface CodeRunPhase {
+  id: string
+  /**
+   * `queued` — the session is busy with an earlier block.
+   * `starting` — the session process is coming up, which for a JVM is a second.
+   * `running` — the block is in.
+   */
+  phase: 'queued' | 'starting' | 'running'
+}
+
+/** A live per-note language session, as the note's blocks need to see it. */
+export interface CodeSessionInfo {
+  notePath: string
+  langId: string
+  label: string
+  /** Blocks run into it so far. */
+  count: number
 }
 
 export interface VaultStats {

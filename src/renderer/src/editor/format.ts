@@ -11,7 +11,19 @@ import type { EditorView } from '@codemirror/view'
  */
 
 /** Markers that wrap a run of text, longest first so `**` beats `*`. */
-export type InlineMarker = '**' | '*' | '~~' | '==' | '`' | '_'
+export type InlineMarker = '**' | '*' | '~~' | '==' | '`' | '_' | '<u>' | '$'
+
+/**
+ * The closing half of a marker.
+ *
+ * Every markdown marker closes with itself. Underline has none — CommonMark
+ * deliberately leaves it out, and `__text__` is bold — so it borrows the HTML
+ * tag that Obsidian, GitHub and this app's own exporter all pass through, and
+ * that one closes differently.
+ */
+function closerOf(marker: InlineMarker): string {
+  return marker === '<u>' ? '</u>' : marker
+}
 
 /** Trailing and leading whitespace inside a selection is not part of the word. */
 function trimmedRange(text: string, from: number): { from: number; to: number; text: string } {
@@ -30,10 +42,12 @@ function wrapState(
   view: EditorView,
   from: number,
   to: number,
-  marker: string
+  marker: InlineMarker
 ): 'inside' | 'outside' | 'none' {
   const { state } = view
   const text = state.sliceDoc(from, to)
+  const open = marker
+  const close = closerOf(marker)
 
   /**
    * `**bold**` is not italic. A one-character probe would otherwise match half
@@ -43,17 +57,17 @@ function wrapState(
   const halfOfADouble = (leftOf: string, rightOf: string): boolean =>
     marker.length === 1 && (leftOf === marker || rightOf === marker)
 
-  if (text.length > marker.length * 2 && text.startsWith(marker) && text.endsWith(marker)) {
-    if (!halfOfADouble(text[marker.length], text[text.length - marker.length - 1])) return 'inside'
+  if (text.length > open.length + close.length && text.startsWith(open) && text.endsWith(close)) {
+    if (!halfOfADouble(text[open.length], text[text.length - close.length - 1])) return 'inside'
   }
 
-  const before = state.sliceDoc(Math.max(0, from - marker.length), from)
-  const after = state.sliceDoc(to, Math.min(state.doc.length, to + marker.length))
-  if (before === marker && after === marker) {
-    const outerLeft = state.sliceDoc(Math.max(0, from - marker.length * 2), Math.max(0, from - marker.length))
+  const before = state.sliceDoc(Math.max(0, from - open.length), from)
+  const after = state.sliceDoc(to, Math.min(state.doc.length, to + close.length))
+  if (before === open && after === close) {
+    const outerLeft = state.sliceDoc(Math.max(0, from - open.length * 2), Math.max(0, from - open.length))
     const outerRight = state.sliceDoc(
-      Math.min(state.doc.length, to + marker.length),
-      Math.min(state.doc.length, to + marker.length * 2)
+      Math.min(state.doc.length, to + close.length),
+      Math.min(state.doc.length, to + close.length * 2)
     )
     if (!halfOfADouble(outerLeft, outerRight)) return 'outside'
   }
@@ -70,12 +84,15 @@ export function isWrapped(view: EditorView, marker: InlineMarker): boolean {
 
 /** Wrap the selection in a marker, or unwrap it when it is already wrapped. */
 export function wrapSelection(view: EditorView, marker: InlineMarker): boolean {
+  const open = marker
+  const close = closerOf(marker)
+
   const changes = view.state.changeByRange((range) => {
     // With no selection, drop an empty pair and put the caret between them.
     if (range.empty) {
       return {
-        changes: { from: range.from, insert: `${marker}${marker}` },
-        range: EditorSelection.cursor(range.from + marker.length)
+        changes: { from: range.from, insert: `${open}${close}` },
+        range: EditorSelection.cursor(range.from + open.length)
       }
     }
 
@@ -83,7 +100,7 @@ export function wrapSelection(view: EditorView, marker: InlineMarker): boolean {
     const state = wrapState(view, inner.from, inner.to, marker)
 
     if (state === 'inside') {
-      const bare = inner.text.slice(marker.length, -marker.length)
+      const bare = inner.text.slice(open.length, -close.length)
       return {
         changes: { from: inner.from, to: inner.to, insert: bare },
         range: EditorSelection.range(inner.from, inner.from + bare.length)
@@ -93,20 +110,46 @@ export function wrapSelection(view: EditorView, marker: InlineMarker): boolean {
     if (state === 'outside') {
       return {
         changes: [
-          { from: inner.from - marker.length, to: inner.from },
-          { from: inner.to, to: inner.to + marker.length }
+          { from: inner.from - open.length, to: inner.from },
+          { from: inner.to, to: inner.to + close.length }
         ],
-        range: EditorSelection.range(inner.from - marker.length, inner.to - marker.length)
+        range: EditorSelection.range(inner.from - open.length, inner.to - open.length)
       }
     }
 
     return {
-      changes: { from: inner.from, to: inner.to, insert: `${marker}${inner.text}${marker}` },
-      range: EditorSelection.range(inner.from, inner.to + marker.length * 2)
+      changes: { from: inner.from, to: inner.to, insert: `${open}${inner.text}${close}` },
+      range: EditorSelection.range(inner.from, inner.to + open.length + close.length)
     }
   })
 
   view.dispatch(changes)
+  view.focus()
+  return true
+}
+
+/**
+ * Maths, from one key.
+ *
+ * With text selected, or with the caret in the middle of a sentence, this is
+ * plain inline `$…$`. On a line of its own there is nothing to wrap and the
+ * user is almost certainly after a centred equation, so it opens the `$$` block
+ * form instead and drops the caret inside it — otherwise pressing the key on an
+ * empty line would leave a bare `$$` sitting there, which reads as the *start*
+ * of a display block and swallows everything below it until the next one.
+ */
+export function insertMath(view: EditorView): boolean {
+  const range = view.state.selection.main
+  if (!range.empty) return wrapSelection(view, '$')
+
+  const line = view.state.doc.lineAt(range.head)
+  if (line.text.trim() !== '') return wrapSelection(view, '$')
+
+  const insert = '$$\n\n$$'
+  view.dispatch({
+    changes: { from: line.from, to: line.to, insert },
+    selection: EditorSelection.cursor(line.from + 3)
+  })
   view.focus()
   return true
 }
@@ -267,6 +310,34 @@ export function makeLink(view: EditorView): boolean {
   return true
 }
 
+/**
+ * Wrap a selection in a link when a URL is pasted over it.
+ *
+ * Every editor people arrive from does this, and without it pasting a URL onto
+ * a phrase you deliberately highlighted destroys the phrase — the one outcome
+ * nobody wants. Returns false when this is an ordinary paste, so the caller
+ * lets the default behaviour run.
+ */
+export function linkPastedUrl(view: EditorView, pasted: string): boolean {
+  const url = pasted.trim()
+  if (!URL_LIKE.test(url)) return false
+
+  const { from, to } = view.state.selection.main
+  if (from === to) return false
+
+  const text = view.state.sliceDoc(from, to)
+  // A selection that is already markup is not a label; replacing it wholesale
+  // is what the user asked for.
+  if (/[[\]()]/.test(text)) return false
+
+  const insert = `[${text}](${url})`
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: EditorSelection.cursor(from + insert.length)
+  })
+  return true
+}
+
 /** `[[Selection]]`, so highlighted text can become a note link in one step. */
 export function makeWikilink(view: EditorView): boolean {
   const { from, to } = view.state.selection.main
@@ -298,6 +369,7 @@ export function clearFormatting(view: EditorView): boolean {
     .replace(/(\*|_)(.*?)\1/g, '$2')
     .replace(/~~(.*?)~~/g, '$1')
     .replace(/==(.*?)==/g, '$1')
+    .replace(/<u>([\s\S]*?)<\/u>/gi, '$1')
     .replace(/`([^`]*)`/g, '$1')
     .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target: string, alias?: string) =>
       (alias ?? target).trim()

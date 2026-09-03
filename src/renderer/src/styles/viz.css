@@ -1,0 +1,457 @@
+/*
+ * Program figures: the `memory`, `tree` and `algo` fences.
+ *
+ * Everything here is drawn in SVG by `viz/`, which computes its geometry from
+ * the mono advance width — so the one rule this file must never break is that
+ * text inside a figure is set in the mono face at the size the layout asked
+ * for. Change the family and every box in every note is the wrong width.
+ *
+ * Colour is all tokens, never literals. A figure written on a white page is
+ * read on a black one, and a diagram is worth nothing if half of it disappears
+ * in the other theme. Where a fence names a colour, it arrives as `--viz-accent`
+ * on the group it applies to, and everything under it picks that up.
+ */
+
+.viz {
+  --viz-accent: var(--accent);
+  --viz-line: var(--border-strong);
+  --viz-face: var(--bg-surface);
+  display: block;
+  margin: 0;
+  font-family: var(--font-ui);
+}
+
+.viz__stage {
+  overflow-x: auto;
+  text-align: center;
+  padding: 2px 0;
+}
+
+.viz__svg {
+  display: inline-block;
+  vertical-align: top;
+  max-width: 100%;
+  height: auto;
+  /* The layout arithmetic in `viz/svg.ts` is a mono advance grid. */
+  font-family: var(--font-mono);
+  overflow: visible;
+}
+
+.viz__title {
+  font-size: var(--t-xs);
+  font-weight: 600;
+  letter-spacing: var(--track-snug);
+  color: var(--text);
+  text-align: center;
+  padding-bottom: var(--sp-1);
+}
+
+.viz__caption {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-xs);
+  color: var(--text-faint);
+  text-align: center;
+}
+
+/* ------------------------------------------------------------- the drawing */
+
+/* `context-stroke` is what makes an accented wire end in an accented head: a
+   marker sits in `<defs>`, so it inherits nothing from the path that uses it,
+   and the colour has to be pulled across explicitly. */
+.viz-arrowhead {
+  fill: var(--viz-line);
+  fill: context-stroke;
+  stroke: none;
+}
+
+.viz-arrowhead--open {
+  fill: none;
+  stroke: var(--viz-line);
+  stroke: context-stroke;
+  stroke-width: 1.4;
+}
+
+/* Nodes — a tree, or a node in an animated traversal. */
+
+.viz-node__shape {
+  fill: var(--viz-face);
+  stroke: var(--viz-line);
+  stroke-width: 1.25;
+  transition: fill var(--dur-base) linear, stroke var(--dur-base) linear;
+}
+
+.viz-node__label {
+  fill: var(--text);
+  font-weight: 500;
+}
+
+.viz-node__sub {
+  fill: var(--text-faint);
+}
+
+.viz-node__hole {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1.25;
+  stroke-dasharray: 2 2;
+}
+
+.viz-edge {
+  stroke: var(--viz-line);
+  stroke-width: 1.25;
+  fill: none;
+}
+
+.viz-badge__disc {
+  fill: var(--accent);
+  stroke: var(--bg-page);
+  stroke-width: 1.5;
+}
+
+.viz-badge__text {
+  fill: var(--accent-ink);
+  font-weight: 600;
+}
+
+/* Boxes — a stack frame, a heap object, a globals block. */
+
+.viz-box__shape {
+  fill: var(--bg-page);
+  stroke: var(--viz-line);
+  stroke-width: 1.25;
+}
+
+.viz-box--stack .viz-box__shape,
+.viz-box--globals .viz-box__shape {
+  fill: var(--bg-surface);
+}
+
+.viz-box__rule {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.viz-box__title {
+  fill: var(--text);
+  font-weight: 600;
+}
+
+.viz-box__type {
+  fill: var(--text-ghost);
+}
+
+/* The element count above a list's rows. Set like a value, not a heading — it
+   is a fact about the object, the same as any other row. */
+.viz-box__count {
+  fill: var(--text);
+}
+
+/* A variable's name sits outside its box: the box is the storage, the name is
+   what the storage is called, and putting the name inside would read as the
+   box holding that string. */
+.viz-var__name {
+  fill: var(--text-muted);
+}
+
+.viz-row__name {
+  fill: var(--text-muted);
+}
+
+.viz-row__value {
+  fill: var(--text);
+}
+
+.viz-row__stud {
+  fill: var(--viz-line);
+}
+
+.viz-row__nil {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.viz-row__strike {
+  stroke: var(--text-ghost);
+  stroke-width: 1;
+}
+
+.viz-row__wash {
+  fill: var(--viz-accent);
+  opacity: 0.12;
+}
+
+.viz-wire {
+  fill: none;
+  stroke: var(--viz-line);
+  stroke-width: 1.4;
+}
+
+.viz-wire__tail {
+  fill: var(--viz-line);
+}
+
+.viz-wire.is-marked {
+  stroke: var(--viz-accent);
+  stroke-width: 2;
+}
+
+.viz-region {
+  fill: none;
+  stroke: var(--border-hair);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+}
+
+.viz-region__label {
+  fill: var(--text-ghost);
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+/* Cells — an array in a memory box, or a slot in an animation. */
+
+.viz-cell__shape {
+  fill: var(--bg-page);
+  stroke: var(--viz-line);
+  stroke-width: 1.25;
+  transition: fill var(--dur-base) linear, stroke var(--dur-base) linear;
+}
+
+.viz-cell__value {
+  fill: var(--text);
+}
+
+.viz-cell__index {
+  fill: var(--text-ghost);
+}
+
+.viz-lane__end {
+  fill: var(--text-ghost);
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+}
+
+.viz-link {
+  stroke: var(--viz-line);
+  stroke-width: 1.25;
+}
+
+.viz-pointer__stem {
+  stroke: var(--accent);
+  stroke-width: 1.4;
+  fill: none;
+}
+
+.viz-pointer__label {
+  fill: var(--accent);
+  font-weight: 600;
+}
+
+.viz-range__bar {
+  fill: none;
+  stroke: var(--text-ghost);
+  stroke-width: 1.25;
+}
+
+.viz-range__label {
+  fill: var(--text-faint);
+}
+
+/*
+ * A value slides to its new slot rather than being redrawn there. This one
+ * declaration is what makes a swap read as a swap; without it the figure is a
+ * slideshow of arrays and shows nothing a table would not.
+ */
+.viz-cell,
+.viz-pointer,
+.viz-range {
+  transition:
+    transform var(--dur-slow) var(--ease-out),
+    opacity var(--dur-base) linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viz-cell,
+  .viz-pointer,
+  .viz-range {
+    transition: none;
+  }
+}
+
+/* ------------------------------------------------------------------ states */
+
+.is-marked > .viz-node__shape,
+.is-marked > .viz-cell__shape {
+  stroke: var(--viz-accent);
+  fill: color-mix(in srgb, var(--viz-accent) 14%, var(--bg-page));
+}
+
+.is-active > .viz-node__shape,
+.is-active > .viz-cell__shape {
+  stroke: var(--accent);
+  stroke-width: 2.25;
+  fill: var(--accent-soft);
+}
+
+.is-marked.is-active > .viz-node__shape,
+.is-marked.is-active > .viz-cell__shape {
+  stroke: var(--viz-accent);
+  stroke-width: 2.25;
+}
+
+.viz-box.is-marked > .viz-box__shape {
+  stroke: var(--viz-accent);
+  stroke-width: 2;
+}
+
+.is-dim {
+  opacity: 0.42;
+}
+
+.is-gone {
+  pointer-events: none;
+}
+
+/* --------------------------------------------------------------- transport */
+
+.viz__note {
+  margin: var(--sp-1) 0 0;
+  min-height: 1.35em;
+  font-size: var(--t-xs);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.viz__transport {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-full);
+  background: var(--bg-surface);
+}
+
+.viz__btn {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-full);
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--t-xs);
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--dur-fast) linear, color var(--dur-fast) linear;
+}
+
+.viz__btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.viz__btn:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+.viz__btn--play {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.viz__btn--play:hover:not(:disabled) {
+  background: var(--accent-hover);
+  color: var(--accent-ink);
+}
+
+.viz__scrub {
+  flex: 1 1 auto;
+  min-width: 60px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.viz__counter {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--t-2xs);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.viz__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  justify-content: center;
+  margin-top: var(--sp-2);
+}
+
+.viz__key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--t-2xs);
+  color: var(--text-faint);
+}
+
+.viz__swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--viz-accent) 24%, var(--bg-page));
+  border: 1px solid var(--viz-accent);
+}
+
+/* ------------------------------------------------------- printed and broken */
+
+/*
+ * A run, printed. Paper cannot play, so the frames that carry a note are laid
+ * out as a strip of stills — which is how a textbook prints one anyway.
+ */
+.viz__film {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--sp-3);
+}
+
+.viz__frame {
+  break-inside: avoid;
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-md);
+  padding: var(--sp-2);
+}
+
+.viz__frame .viz__note {
+  margin-top: var(--sp-1);
+  min-height: 0;
+}
+
+.viz--broken {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+}
+
+.viz__error {
+  margin: 0;
+  font-size: var(--t-xs);
+  color: var(--red);
+}
+
+.viz__source {
+  margin: var(--sp-2) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-2xs);
+  color: var(--text-faint);
+  white-space: pre-wrap;
+  overflow-x: auto;
+}

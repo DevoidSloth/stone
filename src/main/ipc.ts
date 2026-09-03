@@ -5,6 +5,9 @@ import type {
   CalEvent,
   CalendarAccount,
   CanvasData,
+  ClaudeMode,
+  LibraryDoc,
+  LibraryFolder,
   Priority,
   SearchOptions,
   Settings,
@@ -27,21 +30,42 @@ import { detectCloudTargets, syncAdvice } from './cloud'
 import { applyThemeChrome } from './window-chrome'
 import { loadSettings, saveSettings } from './settings'
 import { readNote, toAbsPath } from './vault/fs'
-import { exportHtml, exportMarkdown, exportPdf, exportVault, revealExport } from './export'
+import {
+  configureExport,
+  exportHtml,
+  exportMarkdown,
+  exportPdf,
+  exportVault,
+  revealExport
+} from './export'
+import { configurePrintHost } from './print'
 import { runImport, type ImportKind } from './import'
 import { addComment, listComments, removeComment, updateComment } from './comments'
 import { checkReminders, startReminders, stopReminders } from './notify'
 import { toDocumentUrl, toProtocolUrl } from './protocol'
 import {
   documentText,
-  documentThumbnail,
+  downloadDocument,
   importDocument,
   listDocuments,
   loadCache,
+  renderablePath,
   scanLibrary,
   searchDocuments
 } from './library'
 import { setCaptureShortcut, setTrayEnabled } from './capture'
+import * as claude from './claude'
+import * as audio from './audio'
+import * as whisper from './transcribe'
+import { cancelRun, runCode } from './run-code'
+import {
+  cancelSessionRun,
+  listSessions,
+  restartSession,
+  runInSession,
+  sessionPlan,
+  watchSessions
+} from './code-session'
 import { listThemes, readTheme } from './themes'
 import { createCanvas, deleteCanvas, listCanvases, readCanvas, writeCanvas } from './canvas'
 import {
@@ -165,12 +189,29 @@ export function registerIpc(): void {
     }
   })
 
+  configurePrintHost({
+    preloadPath: path.join(__dirname, '../preload/print.js'),
+    loadPage: async (win) => {
+      const devUrl = process.env.ELECTRON_RENDERER_URL
+      if (devUrl) await win.loadURL(`${devUrl}/print.html`)
+      else await win.loadFile(path.join(__dirname, '../renderer/print.html'))
+    }
+  })
+
+  configureExport({
+    readEmbed: async (target) => {
+      const relPath = vault.resolveLink(target)
+      return relPath ? ((await vault.getNote(relPath))?.content ?? null) : null
+    },
+    vaultName: () => (vault.vaultPath ? path.basename(vault.vaultPath) : 'Stone')
+  })
+
 
   void loadSettings().then(async (settings) => {
     vault.snapshotsEnabled = settings.snapshotsEnabled
 
     // The library is scanned in the background: extraction reads whole files,
-    // and a first run over a large GoodNotes folder takes long enough that
+    // and a first run over a large document folder takes long enough that
     // doing it before the window paints would look like a hang.
     if (settings.libraryFolders.length > 0) {
       await loadCache()
@@ -388,6 +429,13 @@ export function registerIpc(): void {
     return result
   })
 
+  /** The folder's defining note, written the first time it is asked for. */
+  handle('folders:note', async (relPath: string) => {
+    const result = await vault.ensureFolderNote(relPath)
+    if ('error' in result) throw new Error(result.error)
+    return result
+  })
+
   handle('folders:delete', async (relPath: string) => {
     const result = await vault.deleteFolder(relPath)
     if (!result.ok) throw new Error(result.error ?? 'That folder could not be moved to the trash.')
@@ -431,6 +479,26 @@ export function registerIpc(): void {
 
   /** Turn a vault-relative path into a URL the renderer is allowed to load. */
   handle('attachments:url', (relPath: string) => toProtocolUrl(relPath))
+
+  /**
+   * Open an embedded file in whatever app owns it.
+   *
+   * An embedded PDF is a figure, not a reader — sooner or later the reader
+   * wants the whole document. The path is resolved and checked against the
+   * vault the same way every other write is, so a crafted `../` in a note
+   * cannot make Stone launch something outside it.
+   */
+  handle('attachments:open', async (relPath: string) => {
+    if (!vault.vaultPath) throw new Error('No vault is open.')
+    const absolute = toAbsPath(vault.vaultPath, relPath)
+    const root = path.resolve(vault.vaultPath)
+    if (absolute !== root && !absolute.startsWith(root + path.sep)) {
+      throw new Error('That file is outside the vault.')
+    }
+    const failure = await shell.openPath(absolute)
+    if (failure) throw new Error(failure)
+    return true
+  })
 
   handle('attachments:pick', async () => {
     const settings = await loadSettings()
@@ -503,7 +571,15 @@ export function registerIpc(): void {
   handle('export:pdf', async (relPath: string) => {
     const note = await vault.getNote(relPath)
     if (!note) throw new Error('That note is no longer in the vault.')
-    return exportPdf(note)
+    const settings = await loadSettings()
+    return exportPdf(note, {
+      pageSize: settings.pdfPageSize,
+      margin: settings.pdfMargin,
+      coverPage: settings.pdfCoverPage,
+      toc: settings.pdfToc,
+      headerFooter: settings.pdfHeaderFooter,
+      author: settings.pdfAuthor
+    })
   })
 
   handle('export:vault', () => {
@@ -589,7 +665,15 @@ export function registerIpc(): void {
 
   handle('library:list', () => listDocuments())
 
-  handle('library:scan', async () => {
+  /**
+   * Walk the watched folders and rebuild the index.
+   *
+   * Shared by the Rescan button and by adding a folder, because "the folder is
+   * in settings" and "its documents are in the list" have to happen together —
+   * a folder that is watched but unscanned looks to the user like nothing
+   * happened at all.
+   */
+  const runScan = async (): Promise<LibraryDoc[]> => {
     const settings = await loadSettings()
     const found = await scanLibrary(settings.libraryFolders)
 
@@ -608,16 +692,32 @@ export function registerIpc(): void {
       }
     }
     return found
-  })
+  }
+
+  handle('library:scan', () => runScan())
 
   handle('library:search', (query: string) => searchDocuments(query))
   handle('library:text', (id: string) => documentText(id))
 
   handle('library:url', (absPath: string) => toDocumentUrl(absPath))
 
-  handle('library:thumbnail', (id: string) => {
-    const file = documentThumbnail(id)
+  /** The URL a viewer should load. Null when there is nothing renderable. */
+  handle('library:renderUrl', async (id: string) => {
+    const file = await renderablePath(id)
     return file ? toDocumentUrl(file) : null
+  })
+
+  handle('library:download', async (absPath: string) => {
+    const settings = await loadSettings()
+    const resolved = path.resolve(absPath)
+    const inWatched = settings.libraryFolders.some((f) => {
+      const root = path.resolve(f.path)
+      return resolved === root || resolved.startsWith(root + path.sep)
+    })
+    if (!inWatched) throw new Error('That file is outside your watched folders.')
+
+    await downloadDocument(resolved)
+    return scanLibrary(settings.libraryFolders)
   })
 
   /**
@@ -648,39 +748,72 @@ export function registerIpc(): void {
   })
 
   handle('library:open', async (absPath: string) => {
-    // Hands a GoodNotes document back to GoodNotes, which is the only thing
+    // Hands the document to whichever app owns it, which is the only thing
     // that can actually edit one.
     await shell.openPath(await assertOpenable(absPath))
     return true
   })
 
+  /**
+   * Add a folder to the library.
+   *
+   * Main is the only writer here. It picks the folder, saves it, scans it and
+   * pushes the documents out — so a caller only has to take the settings back.
+   * Having the renderer save the list too was how a folder could be added
+   * twice, or added and then never read.
+   */
   handle('library:addFolder', async (mode: 'index' | 'copy') => {
     const win = BrowserWindow.getFocusedWindow()
     const options: Electron.OpenDialogOptions = {
       title: 'Choose a folder of documents',
-      properties: ['openDirectory']
+      buttonLabel: 'Watch this folder',
+      properties: ['openDirectory', 'createDirectory']
     }
     const picked = win
       ? await dialog.showOpenDialog(win, options)
       : await dialog.showOpenDialog(options)
     if (picked.canceled || picked.filePaths.length === 0) return null
 
+    const chosen = path.resolve(picked.filePaths[0])
     const settings = await loadSettings()
-    const folder = {
+
+    // A folder already watched, or sitting inside one, would be scanned twice
+    // and listed twice — with two ids, so removing one would not remove it.
+    const clash = settings.libraryFolders.find((f) => {
+      const root = path.resolve(f.path)
+      return chosen === root || chosen.startsWith(root + path.sep)
+    })
+    if (clash) {
+      throw new Error(
+        chosen === path.resolve(clash.path)
+          ? `${clash.label} is already in your library.`
+          : `That folder is already covered by ${clash.label}.`
+      )
+    }
+
+    const folder: LibraryFolder = {
       id: `lib-${Date.now().toString(36)}`,
-      path: picked.filePaths[0],
-      label: path.basename(picked.filePaths[0]),
+      path: chosen,
+      label: path.basename(chosen) || chosen,
       mode
     }
-    await saveSettings({ libraryFolders: [...settings.libraryFolders, folder] })
-    return folder
+
+    const libraryFolders = [...settings.libraryFolders, folder]
+    await saveSettings({ libraryFolders })
+
+    // The cache is only loaded at boot when there was already a folder to
+    // scan, so the very first one added has to load it before scanning.
+    if (settings.libraryFolders.length === 0) await loadCache()
+    broadcast('library:scanned', await runScan())
+
+    return { folder, libraryFolders }
   })
 
   handle('library:removeFolder', async (id: string) => {
     const settings = await loadSettings()
     const libraryFolders = settings.libraryFolders.filter((f) => f.id !== id)
     await saveSettings({ libraryFolders })
-    await scanLibrary(libraryFolders)
+    broadcast('library:scanned', await scanLibrary(libraryFolders))
     return libraryFolders
   })
 
@@ -1030,6 +1163,226 @@ export function registerIpc(): void {
       graph.completeSignIn(clientId, deviceCode, interval, expiresIn)
   )
   handle('graph:signOut', () => graph.signOut())
+
+  // ---------------------------------------------------------------- claude
+
+  handle('claude:status', async () => claude.status((await loadSettings()).claudeCommand))
+
+  handle(
+    'claude:run',
+    async (request: {
+      id: string
+      mode: ClaudeMode
+      prompt: string
+      context: string | null
+      sessionId?: string | null
+    }) => {
+      const settings = await loadSettings()
+      return await claude.run({
+        id: request.id,
+        mode: request.mode,
+        prompt: request.prompt,
+        context: request.context,
+        sessionId: request.sessionId ?? null,
+        // Read straight from settings on every run rather than trusted from the
+        // renderer: what the agent may do is the user's standing decision, and
+        // it should not be something a message can widen.
+        tools: settings.claudeTools,
+        model: settings.claudeModel,
+        binaryOverride: settings.claudeCommand,
+        // The vault. For the one-shot modes that only means a CLAUDE.md beside
+        // the notes is picked up; for the agent it is also the root its file
+        // tools are confined to.
+        cwd: vault.vaultPath,
+        onChunk: (partial) => broadcast('claude:chunk', { id: request.id, text: partial }),
+        onActivity: (activity) => broadcast('claude:activity', { id: request.id, activity })
+      })
+    }
+  )
+
+  handle('claude:cancel', (id: string) => claude.cancel(id))
+
+  // ----------------------------------------------------------------- audio
+
+  /**
+   * Recording is a stream, not a file upload.
+   *
+   * MediaRecorder hands the renderer a chunk every few seconds and each one is
+   * written straight through. Holding an hour of Opus in a renderer array and
+   * posting it across in one go would work right up until the moment it
+   * mattered — a crash, a reload, a laptop lid — and lose the whole lecture.
+   */
+  /** The macOS gate, asked for on the first press of record. */
+  handle('audio:requestMicrophone', () => audio.askForMicrophone())
+
+  handle('audio:startRecording', async (label: string) => {
+    if (!vault.vaultPath) throw new Error('No vault is open.')
+    const settings = await loadSettings()
+    return audio.startRecording(vault.vaultPath, settings.audioFolder, label)
+  })
+
+  handle('audio:appendRecording', (id: string, chunk: Uint8Array) =>
+    audio.appendRecording(id, chunk)
+  )
+
+  handle('audio:finishRecording', async (id: string) => {
+    if (!vault.vaultPath) throw new Error('No vault is open.')
+    const done = await audio.finishRecording(vault.vaultPath, id)
+    // The recordings folder is inside the vault, so the watcher will notice on
+    // its own; this only makes the file show up without waiting for the debounce.
+    broadcast('vault:event', { type: 'reindexed', count: 0 })
+    return done
+  })
+
+  handle('audio:cancelRecording', (id: string) => audio.cancelRecording(id))
+
+  /** The decoded 16 kHz mono WAV Whisper is fed, streamed the same way. */
+  handle('audio:openPcm', (id: string) => audio.openPcm(id))
+  handle('audio:writePcm', (id: string, chunk: Uint8Array) => audio.writePcm(id, chunk))
+  handle('audio:closePcm', (id: string) => audio.closePcm(id))
+  handle('audio:discardPcm', (id: string) => audio.discardPcm(id))
+
+  handle('audio:whisperStatus', async () => whisper.status((await loadSettings()).whisperCommand))
+
+  handle(
+    'audio:transcribe',
+    async (request: { id: string; audio: string; durationSeconds: number }) => {
+      if (!vault.vaultPath) throw new Error('No vault is open.')
+      const settings = await loadSettings()
+      const wav = await audio.closePcm(request.id)
+      if (!wav) throw new Error('The audio was not decoded. Try transcribing again.')
+
+      try {
+        const transcript = await whisper.run({
+          id: request.id,
+          wav,
+          audio: request.audio,
+          durationSeconds: request.durationSeconds,
+          binaryOverride: settings.whisperCommand,
+          model: settings.whisperModel,
+          language: settings.whisperLanguage,
+          onProgress: (segments, progress, stage) =>
+            broadcast('audio:progress', { id: request.id, segments, progress, stage })
+        })
+        await audio.writeTranscript(vault.vaultPath, transcript)
+        return transcript
+      } finally {
+        await audio.discardPcm(request.id)
+      }
+    }
+  )
+
+  handle('audio:cancelTranscribe', (id: string) => whisper.cancel(id))
+
+  handle('audio:transcript', (audioRelPath: string) => {
+    if (!vault.vaultPath) return null
+    return audio.readTranscript(vault.vaultPath, audioRelPath)
+  })
+
+  handle('audio:transcripts', () => {
+    if (!vault.vaultPath) return []
+    return audio.listTranscripts(vault.vaultPath)
+  })
+
+  handle('audio:deleteTranscript', async (audioRelPath: string) => {
+    if (!vault.vaultPath) throw new Error('No vault is open.')
+    await audio.deleteTranscript(vault.vaultPath, audioRelPath)
+    return true
+  })
+
+  /**
+   * How long a recording is, without decoding it.
+   *
+   * The renderer needs this to size the scrubber, and a WebM from MediaRecorder
+   * carries no duration in its header — `<audio>.duration` reads Infinity until
+   * the whole file has been seeked through. The transcript knows, so when there
+   * is one it answers; otherwise the player measures it the slow way, once.
+   */
+  handle('audio:duration', async (audioRelPath: string) => {
+    if (!vault.vaultPath) return null
+    const transcript = await audio.readTranscript(vault.vaultPath, audioRelPath)
+    return transcript?.durationSeconds ?? null
+  })
+
+  // ------------------------------------------------------------ code blocks
+
+  /**
+   * A note that is a notebook runs its blocks in one session per language, so
+   * that the fourth block can use what the second declared. Whether this block
+   * can join that session is decided here rather than in the renderer, because
+   * it depends on the block's own contents — a Java block with a package in it
+   * cannot — and a block that cannot still runs, on its own, with a line in its
+   * status saying why.
+   */
+  handle(
+    'code:run',
+    async (request: {
+      id: string
+      lang: string
+      code: string
+      notePath: string | null
+      session: boolean
+    }) => {
+      const settings = await loadSettings()
+      // The note's own folder, so a script can read the file sitting next to
+      // it. Falls back to the vault, and then to the home directory in main.
+      const cwd =
+        vault.vaultPath && request.notePath
+          ? path.dirname(toAbsPath(vault.vaultPath, request.notePath))
+          : vault.vaultPath
+      const timeoutMs = Math.max(1, settings.codeRunTimeout) * 1000
+      const onChunk = (stream: 'out' | 'err', text: string): void =>
+        broadcast('code:chunk', { id: request.id, stream, text })
+
+      let aside: string | null = null
+      if (request.session && request.notePath) {
+        const plan = sessionPlan(request.lang, request.code, settings.codeRunners)
+        if (!('reason' in plan)) {
+          return await runInSession({
+            id: request.id,
+            lang: request.lang,
+            code: request.code,
+            notePath: request.notePath,
+            cwd,
+            timeoutMs,
+            overrides: settings.codeRunners,
+            onChunk,
+            onPhase: (phase) => broadcast('code:phase', { id: request.id, phase })
+          })
+        }
+        // An empty reason is "there is no runner for this at all", which the
+        // one-shot path reports far better than a note in the status line.
+        aside = plan.reason || null
+        // The block asked for a session and is not getting one, so nothing else
+        // will move it off "waiting for the block above".
+        broadcast('code:phase', { id: request.id, phase: 'running' })
+      }
+
+      return await runCode({
+        id: request.id,
+        lang: request.lang,
+        code: request.code,
+        cwd,
+        timeoutMs,
+        overrides: settings.codeRunners,
+        note: aside,
+        onChunk
+      })
+    }
+  )
+
+  handle('code:cancel', (id: string) => cancelSessionRun(id) || cancelRun(id))
+
+  /** Throws away a note's sessions, so the next block starts from nothing. */
+  handle('code:session:restart', (request: { notePath: string; langId: string | null }) =>
+    restartSession(request.notePath, request.langId)
+  )
+
+  handle('code:sessions', () => listSessions())
+
+  // The blocks in a note show which session they belong to and how many blocks
+  // have been through it, so the renderer is told whenever that changes.
+  watchSessions(() => broadcast('code:sessions', listSessions()))
 
   // ------------------------------------------------------------ app shell
 

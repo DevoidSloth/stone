@@ -21,7 +21,9 @@ import type {
   VaultEvent,
   VaultStats
 } from '@shared/types'
+import { embedKind } from '@shared/attachments'
 import { RESERVED_KEYS, inferProperties, relationTargets } from '@shared/properties'
+import { folderDefinedBy, folderNotePath, homeFolder } from '@shared/folder-note'
 import { parseNote, countWords, type ParsedNote } from './parse'
 import {
   appendLine,
@@ -352,6 +354,17 @@ goes back to being an ordinary note.
     this.relationEdges = []
 
     for (const [relPath, meta] of this.notes) {
+      // Containment *is* a link. Every note in a folder, and every folder note
+      // one level down, points back at the folder note that defines the folder
+      // — without a line of it being written into the file. That is what makes
+      // a folder note's Links panel list its contents the way Notion lists a
+      // page's children.
+      const folderNote = this.homeFolderNote(relPath)
+      if (folderNote) {
+        if (!this.backlinkMap.has(folderNote)) this.backlinkMap.set(folderNote, new Set())
+        this.backlinkMap.get(folderNote)!.add(relPath)
+      }
+
       // Embeds count as backlinks: a note that transcludes another is every
       // bit as much a reference to it as one that merely points at it.
       for (const link of [...meta.links, ...meta.embeds]) {
@@ -775,6 +788,79 @@ goes back to being an ordinary note.
 
   // ----------------------------------------------------------------- writes
 
+  /** Non-empty, trimmed lines — the shape of a note, ignoring reflow. */
+  private static bodyLines(text: string): string[] {
+    const out = new Set<string>()
+    for (const raw of text.split('\n')) {
+      const line = raw.trim()
+      if (line.length > 0) out.add(line)
+    }
+    return [...out]
+  }
+
+  /** Fraction of `a`'s distinct lines that also appear in `b`. */
+  private static lineOverlap(a: string[], b: string[]): number {
+    if (a.length === 0) return 0
+    const pool = new Set(b)
+    let hit = 0
+    for (const line of a) if (pool.has(line)) hit++
+    return hit / a.length
+  }
+
+  /**
+   * Catch a save that would silently destroy a note.
+   *
+   * Editing shrinks a note gradually; it does not replace the whole body, in one
+   * write, with text that is already sitting in a different note. That pattern is
+   * the signature of a stale editor still bound to the path it had before the
+   * user switched notes, and it is invisible when it happens — the note simply
+   * becomes a copy of its neighbour.
+   *
+   * Both halves have to hold: most of the note is discarded, *and* what replaces
+   * it is nearly all of another note. Deleting a big section trips the first and
+   * not the second, so ordinary editing is untouched. The comparison is fuzzy
+   * because the incoming text is mid-edit — the keystroke that exposed the stale
+   * binding is already in it — so byte equality would miss the very case this
+   * exists to catch.
+   *
+   * Reading candidates from disk is affordable because the size filter keeps the
+   * set tiny and nothing reaches this point unless a note is about to be gutted.
+   *
+   * Returns the note the incoming content belongs to, or null to allow the save.
+   */
+  private async detectClobber(
+    relPath: string,
+    previous: string | null,
+    next: string
+  ): Promise<string | null> {
+    // Nothing to destroy: a new file, or a save that changes nothing.
+    if (previous === null || previous === next) return null
+
+    // Short notes are cheap to retype and noisy to guard; a stub legitimately
+    // gets replaced wholesale by a template or a paste.
+    if (previous.length < 400) return null
+
+    // Gradual editing, not a wholesale replacement.
+    if (next.length > previous.length / 2) return null
+
+    const nextLines = Vault.bodyLines(next)
+    // Too little structure left to say whose text this is.
+    if (nextLines.length < 3) return null
+
+    // Byte size vs UTF-16 length differ under emoji; err wide, the cost is a
+    // couple of extra reads on a path that almost never runs.
+    const tolerance = Math.max(64, Math.round(next.length * 0.15))
+
+    for (const [otherPath, meta] of this.notes) {
+      if (otherPath === relPath) continue
+      if (Math.abs(meta.size - next.length) > tolerance) continue
+      const other = await readNote(meta.path).catch(() => null)
+      if (other === null) continue
+      if (Vault.lineOverlap(nextLines, Vault.bodyLines(other)) >= 0.8) return otherPath
+    }
+    return null
+  }
+
   async saveNote(relPath: string, content: string, expectedHash?: string): Promise<
     { ok: true; hash: string } | { ok: false; error: string }
   > {
@@ -783,13 +869,23 @@ goes back to being an ordinary note.
     assertInsideVault(this.vaultPath, absPath)
 
     try {
+      const previous = await readNote(absPath).catch(() => null)
+
+      const clobbered = await this.detectClobber(relPath, previous, content)
+      if (clobbered) {
+        return {
+          ok: false,
+          error:
+            `Refusing to save: this would replace "${relPath}" with the contents of ` +
+            `"${clobbered}", discarding what the note held. If you meant to copy that ` +
+            `note, duplicate it instead.`
+        }
+      }
+
       // Snapshot the version being replaced, not the one being written — the
       // point of recovery is to get back what you had before the save.
-      if (this.snapshotsEnabled) {
-        const previous = await readNote(absPath).catch(() => null)
-        if (previous !== null && previous !== content) {
-          await writeSnapshot(this.vaultPath, relPath, previous).catch(() => {})
-        }
+      if (this.snapshotsEnabled && previous !== null && previous !== content) {
+        await writeSnapshot(this.vaultPath, relPath, previous).catch(() => {})
       }
 
       const result = await writeNoteAtomic(absPath, content, expectedHash)
@@ -846,8 +942,21 @@ goes back to being an ordinary note.
     const meta = this.notes.get(relPath)
     if (!meta) return { error: 'Note not found.' }
 
+    // Renaming a folder note renames the folder it defines: the two share a
+    // name by definition, and letting them drift apart is what leaves a folder
+    // silently undefined. `renameFolder` carries the note along.
+    const defines = folderDefinedBy(relPath)
+    if (defines) {
+      const result = await this.renameFolder(defines, nextTitle)
+      if ('error' in result) return result
+      const moved = folderNotePath(result.relPath)
+      return moved ? { relPath: moved } : { error: 'That folder note could not be renamed.' }
+    }
+
     const dir = path.dirname(meta.path)
-    const nextPath = await uniquePath(dir, sanitizeFilename(nextTitle))
+    // The note's own file is not a collision — that is what a case-only rename
+    // looks like on macOS.
+    const nextPath = await uniquePath(dir, sanitizeFilename(nextTitle), meta.path)
     assertInsideVault(this.vaultPath, nextPath)
     await fs.rename(meta.path, nextPath)
 
@@ -1022,6 +1131,56 @@ goes back to being an ordinary note.
     return this.createNote(folder, title, filled)
   }
 
+  // ---------------------------------------------------------- folder notes
+
+  /**
+   * The folder note a given note belongs under, if that note exists.
+   *
+   * A folder note belongs to its *grandparent* folder, not to the folder it
+   * defines — otherwise `Projects/Q3/Q3.md` would be its own parent and the
+   * breadcrumb would loop.
+   */
+  private homeFolderNote(relPath: string): string | null {
+    const target = folderNotePath(homeFolder(relPath))
+    if (!target || target === relPath) return null
+    return this.notes.has(target) ? target : null
+  }
+
+  /** The note defining a folder, or null when the folder has none yet. */
+  folderNote(folderRel: string): string | null {
+    const target = folderNotePath(folderRel)
+    if (!target) return null
+    return this.notes.has(target) ? target : null
+  }
+
+  /**
+   * Open a folder's note, writing a starter one the first time.
+   *
+   * Created on demand rather than eagerly for every folder in the vault: a
+   * folder you have never opened does not need a file, and manufacturing one
+   * per directory on first scan would be a sizeable unrequested commit to
+   * somebody's synced vault.
+   */
+  async ensureFolderNote(folderRel: string): Promise<{ relPath: string } | { error: string }> {
+    if (!this.vaultPath) return { error: 'No vault is open.' }
+    const target = folderNotePath(folderRel)
+    if (!target) return { error: 'The vault root cannot have a folder note.' }
+    if (this.notes.has(target)) return { relPath: target }
+
+    const absPath = toAbsPath(this.vaultPath, target)
+    assertInsideVault(this.vaultPath, absPath)
+    if (await exists(absPath)) {
+      await this.reloadFile(absPath)
+      return { relPath: target }
+    }
+
+    await ensureDir(path.dirname(absPath))
+    const name = folderRel.split('/').pop() ?? folderRel
+    await writeNoteAtomic(absPath, `# ${name}\n\n`)
+    await this.reloadFile(absPath)
+    return { relPath: target }
+  }
+
   // --------------------------------------------------------------- folders
 
   folders(): string[] {
@@ -1037,12 +1196,38 @@ goes back to being an ordinary note.
 
   async createFolder(relPath: string): Promise<{ relPath: string } | { error: string }> {
     if (!this.vaultPath) return { error: 'No vault is open.' }
-    const dir = toAbsPath(this.vaultPath, relPath)
+
+    // The leaf here is whatever the user typed, so every segment is sanitised
+    // the way a note title is. Without it a name holding a colon or a slash
+    // makes a folder the vault can list but not reliably address again.
+    const clean = relPath
+      .split('/')
+      .filter((segment) => segment.length > 0)
+      .map((segment) => sanitizeFilename(segment))
+      .join('/')
+    if (!clean) return { error: 'That name cannot be used for a folder.' }
+
+    const dir = toAbsPath(this.vaultPath, clean)
     assertInsideVault(this.vaultPath, dir)
     if (await exists(dir)) return { error: 'A folder with that name already exists.' }
+
+    // Which segments this call actually brings into being. `Projects/Q3` typed
+    // into an empty vault creates both; typed into a vault that already has a
+    // `Projects` it creates only the leaf — and an existing folder is not ours
+    // to drop a note into unasked.
+    const segments = clean.split('/')
+    const fresh: string[] = []
+    for (let i = 0; i < segments.length; i++) {
+      const step = segments.slice(0, i + 1).join('/')
+      if (!(await exists(toAbsPath(this.vaultPath, step)))) fresh.push(step)
+    }
+
     await ensureDir(dir)
+    // A folder you just made is one you are about to describe, so it gets its
+    // defining note straight away rather than on first open.
+    for (const step of fresh) await this.ensureFolderNote(step)
     await this.refreshFolders()
-    return { relPath }
+    return { relPath: clean }
   }
 
   /**
@@ -1053,12 +1238,72 @@ goes back to being an ordinary note.
   async movePath(fromRel: string, toRel: string): Promise<{ relPath: string } | { error: string }> {
     if (!this.vaultPath) return { error: 'No vault is open.' }
     try {
+      // Captured before the move: once the folder is gone from the index there
+      // is no honest way to tell which `[[Q3 Launch]]` meant the folder note
+      // and which meant some unrelated note of the same name.
+      const carry = this.planFolderNoteCarry(fromRel, toRel)
       const moved = await movePath(this.vaultPath, fromRel, toRel)
+      if (carry) await this.carryFolderNote(carry, fromRel, moved)
       await this.reindex()
       await this.refreshFolders()
       return { relPath: moved }
     } catch (err) {
       return { error: (err as Error).message }
+    }
+  }
+
+  /**
+   * A folder note is named after its folder, so renaming the folder has to
+   * rename the note too — otherwise `Archive/Q3 Launch.md` is left sitting in
+   * a folder called `Archive` and stops defining anything.
+   */
+  private planFolderNoteCarry(
+    fromRel: string,
+    toRel: string
+  ): { oldName: string; newName: string; sources: string[] } | null {
+    const oldName = fromRel.split('/').pop() ?? ''
+    const newName = toRel.split('/').pop() ?? ''
+    if (!oldName || oldName === newName) return null
+
+    const noteRel = folderNotePath(fromRel)
+    if (!noteRel || !this.notes.has(noteRel)) return null
+
+    return { oldName, newName, sources: this.backlinks(noteRel).map((n) => n.relPath) }
+  }
+
+  private async carryFolderNote(
+    carry: { oldName: string; newName: string; sources: string[] },
+    fromRel: string,
+    toRel: string
+  ): Promise<void> {
+    if (!this.vaultPath) return
+    const dir = toAbsPath(this.vaultPath, toRel)
+    const from = path.join(dir, `${carry.oldName}.md`)
+    const to = path.join(dir, `${carry.newName}.md`)
+    // On a case-insensitive volume `to` "exists" during a case-only rename —
+    // it is the very file being renamed. Comparing case-folded tells them apart.
+    if ((await exists(to)) && from.toLowerCase() !== to.toLowerCase()) return
+    if (!(await exists(from))) return
+    await fs.rename(from, to)
+
+    const pattern = new RegExp(
+      `\\[\\[${escapeRegex(carry.oldName)}((?:#|\\|)[^\\]]*)?\\]\\]`,
+      'g'
+    )
+    for (const source of carry.sources) {
+      // A source inside the folder just moved with it, so its path has shifted.
+      const relPath =
+        source === fromRel || source.startsWith(`${fromRel}/`)
+          ? `${toRel}${source.slice(fromRel.length)}`
+          : source
+      const absPath = toAbsPath(this.vaultPath, relPath)
+      try {
+        const raw = await readNote(absPath)
+        const updated = raw.replace(pattern, `[[${carry.newName}$1]]`)
+        if (updated !== raw) await writeNoteAtomic(absPath, updated)
+      } catch {
+        // A backlink we cannot rewrite is not a reason to undo the rename.
+      }
     }
   }
 
@@ -1134,11 +1379,15 @@ goes back to being an ordinary note.
     if (!this.vaultPath) return { error: 'No vault is open.' }
     try {
       const relPath = await saveAttachment(this.vaultPath, folder, data, name)
-      const isImage = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(relPath)
       const encoded = relPath.split('/').map(encodeURIComponent).join('/')
+      // Anything the editor can draw is embedded; anything it cannot is linked.
+      // A dropped PDF used to come in as a bare link, which looked like a
+      // decision and was really just the image check being the only one there.
+      const embeddable = embedKind(relPath) !== 'file'
+      const label = path.basename(name)
       return {
         relPath,
-        markdown: isImage ? `![${path.basename(name)}](/${encoded})` : `[${path.basename(name)}](/${encoded})`
+        markdown: embeddable ? `![${label}](/${encoded})` : `[${label}](/${encoded})`
       }
     } catch (err) {
       return { error: (err as Error).message }

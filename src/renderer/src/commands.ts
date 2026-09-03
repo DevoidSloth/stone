@@ -15,27 +15,38 @@
 import type { ReactElement } from 'react'
 import type { Settings } from '@shared/types'
 import { useStone } from './store'
+import { exportNoteToPdf } from './export-note'
+import { activeEditor } from './editor/insert'
+import { insertPickedFiles } from './editor/slash'
+import { noteSessions, notePathFacet, restartSession, runFenceAtCursor, runFences } from './editor/run-code'
+import { markNow } from './editor/stamps'
 import { today } from './lib/dates'
 import { normaliseChord } from './lib/keys'
 import {
   IconBoard,
   IconCalendar,
   IconDownload,
+  IconPrint,
   IconFolder,
   IconGraph,
+  IconImage,
   IconLayers,
+  IconMic,
   IconNote,
   IconOutline,
+  IconPlay,
   IconPlus,
   IconProperties,
   IconRefresh,
   IconSearch,
   IconSettings,
+  IconSparkle,
   IconSplit,
   IconSun,
   IconTable,
   IconTasks,
   IconTrash,
+  IconWaveform,
   IconX
 } from './ui/icons'
 
@@ -74,6 +85,14 @@ export const COMMANDS: CommandDef[] = [
     defaultKeys: ['Mod+K'],
     paletteHidden: true,
     run: () => s().setPalette(true)
+  },
+  {
+    id: 'go-to-file',
+    label: 'Go to a file',
+    group: 'Navigation',
+    icon: IconNote,
+    defaultKeys: ['Mod+P'],
+    run: () => s().setQuickOpen(s().activePane)
   },
   {
     id: 'search',
@@ -149,11 +168,21 @@ export const COMMANDS: CommandDef[] = [
   },
   {
     id: 'view-library',
-    label: 'Go to documents',
+    // Documents open in panes like notes; this is the gallery for browsing them
+    // and for managing which folders are watched.
+    label: 'Browse all documents',
     group: 'Navigation',
     icon: IconFolder,
     defaultKeys: ['Mod+8'],
     run: () => s().setView('library')
+  },
+  {
+    id: 'library-add-folder',
+    label: 'Add a document folder',
+    group: 'Navigation',
+    icon: IconFolder,
+    defaultKeys: [],
+    run: () => void s().addLibraryFolder('index')
   },
   {
     id: 'view-trash',
@@ -168,7 +197,10 @@ export const COMMANDS: CommandDef[] = [
     label: 'Back',
     group: 'Navigation',
     icon: IconLayers,
-    defaultKeys: ['Mod+[', 'Alt+ArrowLeft'],
+    // Not ⌥← as well: the global handler preventDefaults whatever it matches,
+    // even mid-edit, and ⌥← is how macOS moves the caret a word left. Binding
+    // it here took a system-wide text gesture away everywhere in the app.
+    defaultKeys: ['Mod+['],
     paletteHidden: true,
     run: () => s().goBack()
   },
@@ -177,7 +209,8 @@ export const COMMANDS: CommandDef[] = [
     label: 'Forward',
     group: 'Navigation',
     icon: IconLayers,
-    defaultKeys: ['Mod+]', 'Alt+ArrowRight'],
+    // See Back: ⌥→ belongs to the text cursor.
+    defaultKeys: ['Mod+]'],
     paletteHidden: true,
     run: () => s().goForward()
   },
@@ -199,6 +232,149 @@ export const COMMANDS: CommandDef[] = [
     icon: IconTasks,
     defaultKeys: ['Mod+J'],
     run: () => s().setQuickAdd(true)
+  },
+  {
+    id: 'claude',
+    label: (ctx) =>
+      ctx.query.trim() ? `Ask Claude to draw "${ctx.query.trim()}"` : 'Ask Claude for a diagram',
+    group: 'Create',
+    icon: IconSparkle,
+    // ⌘⇧A, next to nothing else: the editor owns ⌘⇧K, M and H, and this has to
+    // work from inside a note, which is the only place its answer can land.
+    defaultKeys: ['Mod+Shift+A'],
+    run: (ctx) => s().setClaude(true, ctx.query.trim())
+  },
+  {
+    id: 'record',
+    label: () => (s().recording ? 'Stop recording' : 'Record a lecture into this note'),
+    group: 'Create',
+    icon: IconMic,
+    // ⌘⇧R, free in both the editor's keymap and the window's. The toggle is one
+    // command rather than two because it is one button on the bar, and because
+    // "stop" is the thing you reach for in a hurry.
+    defaultKeys: ['Mod+Shift+R'],
+    run: () => {
+      const state = s()
+      if (state.recording) void state.stopRecording()
+      else void state.startRecording()
+    }
+  },
+  {
+    id: 'record-mark',
+    label: 'Mark this moment in the recording',
+    group: 'Editor',
+    icon: IconWaveform,
+    // Not ⌘⇧M: the editor already owns that for highlighting.
+    defaultKeys: ['Mod+Shift+L'],
+    run: () => {
+      const result = markNow()
+      if (result === 'not-recording') s().toast('Nothing is recording.', 'info')
+      if (result === 'no-editor') s().toast('Put the caret in a note first.', 'error')
+    }
+  },
+  {
+    id: 'record-transcribe',
+    label: 'Transcribe the recording that is playing',
+    group: 'Note',
+    icon: IconWaveform,
+    defaultKeys: [],
+    run: () => {
+      const playback = s().playback
+      if (!playback) {
+        s().toast('Play a recording first.', 'info')
+        return
+      }
+      void s().transcribe(playback.audio)
+    }
+  },
+  {
+    id: 'record-transcript-panel',
+    label: 'Show the transcript',
+    group: 'Note',
+    icon: IconWaveform,
+    defaultKeys: [],
+    run: () => s().setSidePanel('transcript')
+  },
+  {
+    id: 'run-code-block',
+    label: 'Run the code block at the cursor',
+    group: 'Editor',
+    icon: IconPlay,
+    // ⇧⌘⏎, next to the ⌘⏎ that makes a task. Bound here rather than in the
+    // editor's own keymap: CodeMirror does not stop the event reaching the
+    // window handler, so a chord in both places would run the block and then
+    // immediately stop it.
+    defaultKeys: ['Mod+Shift+Enter'],
+    run: () => {
+      const view = activeEditor()
+      if (!view) return
+      if (!runFenceAtCursor(view)) {
+        s().toast('Put the cursor in a code block Stone knows how to run.', 'info')
+      }
+    }
+  },
+  {
+    id: 'run-code-above',
+    label: 'Run every code block down to the cursor',
+    group: 'Editor',
+    icon: IconPlay,
+    defaultKeys: [],
+    run: () => {
+      const view = activeEditor()
+      if (!view) return
+      const ran = runFences(view, 'above')
+      if (ran === 0) s().toast('No code blocks above the cursor.', 'info')
+    }
+  },
+  {
+    id: 'run-code-all',
+    label: 'Run every code block in the note',
+    group: 'Editor',
+    icon: IconPlay,
+    defaultKeys: [],
+    run: () => {
+      const view = activeEditor()
+      if (!view) return
+      const ran = runFences(view, 'all')
+      if (ran === 0) s().toast('This note has no code blocks Stone can run.', 'info')
+    }
+  },
+  {
+    id: 'restart-code-session',
+    label: 'Restart the note’s code session',
+    group: 'Editor',
+    icon: IconPlay,
+    defaultKeys: [],
+    run: () => {
+      const view = activeEditor()
+      if (!view) return
+      const notePath = view.state.facet(notePathFacet)
+      const live = noteSessions(notePath)
+      if (live.length === 0) {
+        s().toast('This note has no code session running.', 'info')
+        return
+      }
+      restartSession(notePath, null)
+      s().toast(
+        `Restarted the ${live.map((session) => session.label).join(' and ')} session${live.length > 1 ? 's' : ''}. The next block starts from nothing.`,
+        'info'
+      )
+    }
+  },
+  {
+    id: 'insert-file',
+    label: 'Embed an image or a PDF',
+    group: 'Editor',
+    icon: IconImage,
+    defaultKeys: [],
+    run: () => {
+      const view = activeEditor()
+      if (!view) {
+        s().toast('Open a note first — an embed has to go somewhere.', 'info')
+        return
+      }
+      void insertPickedFiles(view)
+    }
   },
   {
     id: 'new-weekly',
@@ -271,17 +447,10 @@ export const COMMANDS: CommandDef[] = [
     id: 'export-pdf',
     label: 'Export this note as a PDF',
     group: 'Note',
-    icon: IconDownload,
-    defaultKeys: [],
+    icon: IconPrint,
+    defaultKeys: ['Mod+Shift+P'],
     run: () => {
-      const relPath = s().activeRelPath
-      if (!relPath) {
-        s().toast('Open a note first.', 'error')
-        return
-      }
-      void window.stone.exporter.pdf(relPath).then((saved) => {
-        if (saved) s().toast(`Exported to ${saved}.`, 'success')
-      })
+      void exportNoteToPdf(s().activeRelPath)
     }
   },
   {

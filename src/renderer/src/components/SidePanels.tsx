@@ -9,7 +9,9 @@ import {
   setFrontmatterList
 } from '@shared/frontmatter'
 import { RESERVED_KEYS } from '@shared/properties'
+import { folderDefinedBy, homeFolder } from '@shared/folder-note'
 import { useStone, type SidePanel } from '../store'
+import { TranscriptPanel } from './TranscriptPanel'
 import {
   IconComment,
   IconGraph,
@@ -21,6 +23,7 @@ import {
   IconRelation,
   IconRestore,
   IconTrash,
+  IconWaveform,
   IconX
 } from '../ui/icons'
 
@@ -39,7 +42,8 @@ const PANELS: { id: SidePanel; label: string; icon: (p: { size?: number }) => Re
   { id: 'relations', label: 'Relations', icon: IconRelation },
   { id: 'comments', label: 'Comments', icon: IconComment },
   { id: 'localgraph', label: 'Local graph', icon: IconGraph },
-  { id: 'history', label: 'Versions', icon: IconHistory }
+  { id: 'history', label: 'Versions', icon: IconHistory },
+  { id: 'transcript', label: 'Transcript', icon: IconWaveform }
 ]
 
 // ---------------------------------------------------------------- relations
@@ -192,6 +196,18 @@ function LinksPanel() {
       activeRelPath.split('/').pop()!.replace(/\.md$/, ''))
     : ''
 
+  /** The folder this note defines, when it is a folder note. */
+  const defines = activeRelPath ? folderDefinedBy(activeRelPath) : null
+  const [contents, mentioned] = useMemo(() => {
+    if (defines === null) return [[] as NoteMeta[], backlinks]
+    const inside: NoteMeta[] = []
+    const rest: NoteMeta[] = []
+    for (const source of backlinks) {
+      ;(homeFolder(source.relPath) === defines ? inside : rest).push(source)
+    }
+    return [inside, rest]
+  }, [backlinks, defines])
+
   /** Turn a plain mention into a real `[[wikilink]]` in the mentioning note. */
   const link = async (relPath: string, line: number, text: string): Promise<void> => {
     const needle = new RegExp(`(?<!\\[)\\b${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b(?!\\])`, 'i')
@@ -216,25 +232,42 @@ function LinksPanel() {
     }
   }
 
+  const row = (source: NoteMeta): ReactElement => (
+    <button
+      key={source.relPath}
+      type="button"
+      className="panelrow"
+      onClick={() => void openNote(source.relPath)}
+    >
+      <b className="truncate">{source.title}</b>
+      <span className="panelrow__sub">{source.excerpt}</span>
+    </button>
+  )
+
   return (
     <>
+      {/*
+       * On a folder note the folder's own contents arrive as backlinks — they
+       * are linked to it by containment. Listing them as "mentions" would be a
+       * lie about where that link came from, so they get their own section.
+       */}
+      {defines !== null && (
+        <>
+          <div className="panel__section eyebrow">
+            {contents.length} inside this folder
+          </div>
+          {contents.length === 0 && <p className="panel__empty">This folder is empty.</p>}
+          {contents.map(row)}
+        </>
+      )}
+
       <div className="panel__section eyebrow">
-        {backlinks.length} linked {backlinks.length === 1 ? 'mention' : 'mentions'}
+        {mentioned.length} linked {mentioned.length === 1 ? 'mention' : 'mentions'}
       </div>
-      {backlinks.length === 0 && (
+      {mentioned.length === 0 && (
         <p className="panel__empty">Nothing links here yet.</p>
       )}
-      {backlinks.map((source) => (
-        <button
-          key={source.relPath}
-          type="button"
-          className="panelrow"
-          onClick={() => void openNote(source.relPath)}
-        >
-          <b className="truncate">{source.title}</b>
-          <span className="panelrow__sub">{source.excerpt}</span>
-        </button>
-      ))}
+      {mentioned.map(row)}
 
       <div className="panel__section eyebrow">
         {mentions.length} unlinked {mentions.length === 1 ? 'mention' : 'mentions'}
@@ -726,6 +759,7 @@ export function SidePanels() {
             {panel === 'comments' && <CommentsPanel />}
             {panel === 'localgraph' && <LocalGraphPanel />}
             {panel === 'history' && <HistoryPanel />}
+            {panel === 'transcript' && <TranscriptPanel />}
           </div>
         </div>
       )}

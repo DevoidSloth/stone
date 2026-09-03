@@ -6,15 +6,14 @@ import { IconCloud, IconFolder, IconRefresh, IconSearch, IconX } from '../ui/ico
 /**
  * The library.
  *
- * PDFs and GoodNotes notebooks, indexed where they already live. The point is
- * not to become a document manager — it is that a paper you annotated and a
- * note you wrote about it should turn up in the same search, and that linking
- * one to the other should not mean pasting a file path.
+ * Documents, indexed where they already live. The point is not to become a
+ * document manager — it is that a paper you annotated and a note you wrote
+ * about it should turn up in the same search, and that linking one to the other
+ * should not mean pasting a file path.
  *
  * Rendering a PDF is Chromium's job, through the sandboxed scheme, so the
- * viewer here is an iframe and not a reimplementation of a PDF engine. A
- * GoodNotes document cannot be rendered by anything but GoodNotes, so it shows
- * what was extracted — cover, page count, recognised text — and hands off.
+ * viewer here is an iframe and not a reimplementation of a PDF engine. Anything
+ * else shows the text that was extracted, which is what makes it searchable.
  */
 
 function formatSize(bytes: number): string {
@@ -24,25 +23,9 @@ function formatSize(bytes: number): string {
 }
 
 function Thumbnail({ doc }: { doc: LibraryDoc }) {
-  const [url, setUrl] = useState<string | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void window.stone.library
-      .thumbnail(doc.id)
-      .then((next) => {
-        if (alive) setUrl(next)
-      })
-      .catch(() => undefined)
-    return () => {
-      alive = false
-    }
-  }, [doc.id])
-
-  if (url) return <img className="libcard__cover" src={url} alt="" loading="lazy" />
   return (
     <div className="libcard__cover libcard__cover--blank" aria-hidden="true">
-      {doc.kind === 'pdf' ? 'PDF' : doc.kind === 'goodnotes' ? '✎' : '◻'}
+      {doc.kind === 'pdf' ? 'PDF' : doc.kind === 'epub' ? 'EPUB' : '◻'}
     </div>
   )
 }
@@ -50,7 +33,8 @@ function Thumbnail({ doc }: { doc: LibraryDoc }) {
 export function LibraryView() {
   const settings = useStone((s) => s.settings)
   const toast = useStone((s) => s.toast)
-  const updateSettings = useStone((s) => s.updateSettings)
+  const addLibraryFolder = useStone((s) => s.addLibraryFolder)
+  const removeLibraryFolder = useStone((s) => s.removeLibraryFolder)
 
   const [docs, setDocs] = useState<LibraryDoc[]>([])
   const [query, setQuery] = useState('')
@@ -116,15 +100,10 @@ export function LibraryView() {
     }
   }
 
+  // Main saves the folder and scans it, and the scan is broadcast — so this
+  // only has to pick up the resulting documents.
   const addFolder = async (mode: 'index' | 'copy'): Promise<void> => {
-    try {
-      const folder = await window.stone.library.addFolder(mode)
-      if (!folder) return
-      await updateSettings({ libraryFolders: [...folders, folder] })
-      await scan()
-    } catch (err) {
-      toast((err as Error).message, 'error')
-    }
+    if (await addLibraryFolder(mode)) setDocs(await window.stone.library.list())
   }
 
   if (folders.length === 0) {
@@ -133,9 +112,8 @@ export function LibraryView() {
         <div className="empty__inner">
           <p className="empty__title">No document folders yet</p>
           <p className="empty__body">
-            Point Stone at the folders your PDFs and GoodNotes notebooks already live in — the
-            iCloud folder GoodNotes writes to, say. It reads them where they are, pulls out the
-            text so they turn up in search, and never moves or rewrites anything.
+            Point Stone at the folders your PDFs already live in. It reads them where they are,
+            pulls out the text so they turn up in search, and never moves or rewrites anything.
           </p>
           <div className="empty__actions">
             <button type="button" className="btn btn--primary" onClick={() => void addFolder('index')}>
@@ -188,10 +166,9 @@ export function LibraryView() {
               type="button"
               aria-label={`Stop watching ${folder.label}`}
               onClick={() => {
-                void window.stone.library.removeFolder(folder.id).then((next) => {
-                  void updateSettings({ libraryFolders: next })
-                  void window.stone.library.list().then(setDocs)
-                })
+                void removeLibraryFolder(folder.id).then(async () =>
+                  setDocs(await window.stone.library.list())
+                )
               }}
             >
               <IconX size={10} />
@@ -226,7 +203,7 @@ export function LibraryView() {
                   </>
                 ) : (
                   [
-                    doc.kind === 'goodnotes' ? 'GoodNotes' : doc.kind.toUpperCase(),
+                    doc.kind.toUpperCase(),
                     doc.pageCount ? `${doc.pageCount} pages` : '',
                     formatSize(doc.size)
                   ]
@@ -251,7 +228,7 @@ export function LibraryView() {
                 className="btn btn--ghost btn--sm"
                 onClick={() => void window.stone.library.openExternally(open.path)}
               >
-                Open in{open.kind === 'goodnotes' ? ' GoodNotes' : ' default app'}
+                Open in default app
               </button>
               <button
                 type="button"
@@ -276,17 +253,13 @@ export function LibraryView() {
               // Chromium's own PDF viewer, over the scheme that is fenced to the
               // watched folders. No PDF engine of our own, and no file:// URL.
               <iframe className="library__frame" src={openUrl} title={open.name} />
-            ) : open.kind === 'goodnotes' ? (
-              <div className="library__text">
-                <p className="hint">
-                  GoodNotes documents can only be edited in GoodNotes. This is what Stone could
-                  read out of the package, which is what makes it searchable here.
-                </p>
-                {openText ? <pre>{openText.slice(0, 20000)}</pre> : <p className="hint">No text.</p>}
-              </div>
             ) : (
               <div className="library__text">
-                <p className="hint">Nothing to preview.</p>
+                <p className="hint">
+                  There is nothing here that can draw this one. This is the text Stone read out of
+                  it, which is what makes it searchable.
+                </p>
+                {openText ? <pre>{openText.slice(0, 20000)}</pre> : <p className="hint">No text.</p>}
               </div>
             )}
 

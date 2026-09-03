@@ -86,6 +86,13 @@ const ITEMS: Item[] = [
     ...inline('*')
   },
   {
+    id: 'underline',
+    label: 'Underline',
+    shortcut: '⌘U',
+    paths: ['M4.4 2.8v4.6a3.6 3.6 0 0 0 7.2 0V2.8', 'M3.6 13.2h8.8'],
+    ...inline('<u>')
+  },
+  {
     id: 'strike',
     label: 'Strikethrough',
     paths: ['M11 3.4H6.6a2 2 0 0 0-1.5 3.3', 'M9 8.6a2.6 2.6 0 0 1-.4 4H4.6', 'M2.5 8h11'],
@@ -106,8 +113,18 @@ const ITEMS: Item[] = [
     ...inline('`')
   },
   {
+    id: 'math',
+    label: 'Maths',
+    shortcut: '⌘⇧E',
+    // A glyph, not an outline: no 16px line drawing says "equation" as plainly
+    // as the sigma does, and the toolbar already draws H1 and Tx this way.
+    text: '∑',
+    ...inline('$')
+  },
+  {
     id: 'link',
     label: 'Link',
+    shortcut: '⌘⇧K',
     divide: true,
     paths: [
       'M6.6 9.4a2.6 2.6 0 0 0 3.7 0l2.2-2.2a2.6 2.6 0 0 0-3.7-3.7l-.9.9',

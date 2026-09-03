@@ -44,6 +44,28 @@
   transform: rotate(90deg);
 }
 
+/*
+ * A folder row carries two targets — twisty to expand, label to open the
+ * folder note — so the twisty needs its own hover to say it is clickable.
+ */
+.treerow__twist--btn:hover {
+  background: var(--bg-active, var(--bg-hover));
+  color: var(--text-muted);
+}
+
+/* Stretches so the whole rest of the row opens the folder note, not just the text. */
+.treerow__open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+}
+
 .treerow__icon {
   width: 17px;
   flex: none;
@@ -55,6 +77,11 @@
 .treerow__emoji {
   font-size: 14px;
   line-height: 1;
+}
+
+.treerow__emoji.pageicon--glyph {
+  width: 17px;
+  color: var(--text-faint);
 }
 
 .treerow__label {
@@ -154,6 +181,38 @@
   margin-top: -74px;
 }
 
+/* ------------------------------------------------------------- page icons */
+
+/*
+ * An icon is either a picture or a character. Emoji bring their own colour and
+ * are left exactly as they are; a number, a monogram or a symbol is set in the
+ * UI face and shrinks as it lengthens, so two or three characters occupy the
+ * same square one emoji would and a row of mixed icons still lines up.
+ */
+.pageicon {
+  line-height: 1;
+}
+
+.pageicon--glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 0.92em;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--track-tight);
+  color: var(--text-muted);
+}
+
+.pageicon--glyph[data-len='2'] {
+  font-size: 0.76em;
+}
+
+.pageicon--glyph[data-len='3'] {
+  font-size: 0.6em;
+}
+
 .page__icon {
   font-size: 66px;
   line-height: 1;
@@ -168,6 +227,27 @@
 
 .page__icon:hover {
   background: var(--bg-hover);
+}
+
+/*
+ * At page size a bare glyph would float in 66px of whitespace and read as a
+ * failed image. A tile gives it the mass the emoji beside it have.
+ */
+.page__icon .pageicon--glyph {
+  width: 66px;
+  height: 66px;
+  border-radius: var(--r-xl);
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: 34px;
+}
+
+.page__icon .pageicon--glyph[data-len='2'] {
+  font-size: 27px;
+}
+
+.page__icon .pageicon--glyph[data-len='3'] {
+  font-size: 20px;
 }
 
 .page__addrow {
@@ -231,6 +311,60 @@
   background: var(--bg-hover);
 }
 
+.picker__emoji[aria-pressed='true'] {
+  background: var(--accent-soft);
+}
+
+.picker__emoji .pageicon--glyph {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-sm);
+}
+
+.picker__emoji:hover .pageicon--glyph {
+  color: var(--text);
+}
+
+/* Anything the sets do not cover is typed here, so the field leads the popover. */
+.picker__entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 8px;
+}
+
+.picker__use {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  font-size: 17px;
+  border-radius: var(--r-sm);
+  background: var(--bg-input);
+  box-shadow: inset 0 0 0 1px var(--border-hair);
+  transition: background var(--dur-base) var(--ease-out);
+}
+
+.picker__use:not(:disabled):hover {
+  background: var(--bg-hover);
+}
+
+.picker__use-hint {
+  font-size: var(--t-xs);
+  font-weight: 500;
+  color: var(--text-ghost);
+}
+
+.picker__tabs {
+  padding: 0 4px 6px;
+}
+
+.picker__tabs .segmented__btn {
+  height: 24px;
+  font-size: var(--t-xs);
+}
+
 .picker__covers {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -256,24 +390,47 @@
 
 /* ============================================================== callouts */
 
+/*
+ * The tint sits on a pseudo-element below the selection layer, for the same
+ * reason the code plate does — see `.cm-line.tok-line-code` in editor.css. It
+ * is `::after` here because `::before` is already the callout's glyph.
+ */
 .cm-line.tok-line-callout {
-  background: var(--callout-bg, var(--bg-surface));
   border-left: none;
   padding-left: var(--sp-5);
   padding-right: var(--sp-4);
   position: relative;
 }
 
+.cm-line.tok-line-callout::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -10;
+  background: var(--callout-bg, var(--bg-surface));
+  pointer-events: none;
+}
+
+/*
+ * Padding, not margin. A line's height reaches CodeMirror through
+ * `getBoundingClientRect()`, which does not include margins — so a margin on a
+ * callout is height the editor never accounts for, and every coordinate below
+ * it drifts. The breathing room sits inside the tint instead.
+ */
 .cm-line.tok-line-callout-first {
+  padding-top: calc(var(--sp-3) + var(--sp-2));
+}
+
+.cm-line.tok-line-callout-first::after {
   border-radius: var(--r-sm) var(--r-sm) 0 0;
-  padding-top: var(--sp-3);
-  margin-top: var(--sp-2);
 }
 
 .cm-line.tok-line-callout-last {
+  padding-bottom: calc(var(--sp-3) + var(--sp-2));
+}
+
+.cm-line.tok-line-callout-last::after {
   border-radius: 0 0 var(--r-sm) var(--r-sm);
-  padding-bottom: var(--sp-3);
-  margin-bottom: var(--sp-2);
 }
 
 /* The glyph sits in the padding gutter the callout reserves on the left. */

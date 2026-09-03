@@ -1,26 +1,22 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import crypto from 'node:crypto'
 import { app } from 'electron'
 import MiniSearch from 'minisearch'
 import type { DocumentKind, LibraryDoc, LibraryFolder } from '@shared/types'
 import { extractPdfText } from './lib/pdf-text'
-import { readGoodNotes } from './lib/goodnotes'
 
 /**
  * The document library.
  *
  * Notes are markdown and Stone owns them. Documents are not: a PDF is somebody
- * else's file and a GoodNotes notebook is somebody else's format, and both are
- * already sitting in iCloud where their own app put them. So the library is a
- * separate index rather than a second kind of note — it watches folders you
- * name, reads what it can out of each file, and makes them searchable and
- * linkable without moving or rewriting anything.
+ * else's file, already sitting in iCloud where its own app put it. So the
+ * library is a separate index rather than a second kind of note — it watches
+ * folders you name, reads what it can out of each file, and makes them
+ * searchable and linkable without moving or rewriting anything.
  *
- * Extraction is expensive — inflating a 200MB notebook to find a thumbnail is
- * not something to repeat on every launch — so results are cached under
- * `userData` and keyed on the file's size and mtime. A file that has not
- * changed is never read twice.
+ * Extraction is expensive — reading a 200MB PDF's text is not something to
+ * repeat on every launch — so results are cached under `userData` and keyed on
+ * the file's size and mtime. A file that has not changed is never read twice.
  *
  * iCloud is the complication that shapes the rest. A folder that has been
  * offloaded contains `.name.ext.icloud` placeholders rather than files, and the
@@ -31,8 +27,6 @@ import { readGoodNotes } from './lib/goodnotes'
 
 const DOC_EXTENSIONS: Record<string, DocumentKind> = {
   '.pdf': 'pdf',
-  '.goodnotes': 'goodnotes',
-  '.note': 'goodnotes',
   '.epub': 'epub'
 }
 
@@ -44,15 +38,30 @@ interface CacheEntry {
   stamp: string
   text: string
   pageCount: number | null
-  thumbnail: string | null
   warning: string | null
 }
 
 interface Extracted {
   text: string
   pageCount: number | null
-  thumbnail: string | null
   warning: string | null
+}
+
+/**
+ * True for an iCloud file whose contents are not on this machine.
+ *
+ * This matters more than it sounds. macOS materialises a dataless file on first
+ * read, transparently and *synchronously* — opening one during a scan blocks
+ * until the download finishes, which on a folder of documents means the app
+ * hangs for minutes and then fills the disk. Measured on a real library: two
+ * minutes for a single 13MB file.
+ *
+ * `st_blocks` is the tell. A dataless file reports its full logical size but
+ * has no blocks allocated, and Node surfaces that on `Stats.blocks` — so the
+ * check costs nothing and, crucially, never touches the file's contents.
+ */
+function isDataless(stat: import('node:fs').Stats): boolean {
+  return stat.size > 0 && stat.blocks === 0
 }
 
 let cache = new Map<string, CacheEntry>()
@@ -61,10 +70,6 @@ let index: MiniSearch<{ id: string; name: string; body: string }> | null = null
 
 function cacheFile(): string {
   return path.join(app.getPath('userData'), 'library-cache.json')
-}
-
-function thumbDir(): string {
-  return path.join(app.getPath('userData'), 'thumbnails')
 }
 
 export async function loadCache(): Promise<void> {
@@ -96,36 +101,13 @@ async function extract(absPath: string, kind: DocumentKind): Promise<Extracted> 
     return {
       text: pdf.text,
       pageCount: pdf.pages || null,
-      thumbnail: null,
       warning: pdf.text
         ? null
         : 'No text could be read from this PDF — it is probably scanned. It is searchable by name only.'
     }
   }
 
-  if (kind === 'goodnotes') {
-    const doc = await readGoodNotes(absPath)
-    let thumbnail: string | null = null
-    if (doc.thumbnail) {
-      // Thumbnails are cached as files rather than inline, so the cache JSON
-      // stays small enough to parse on every launch.
-      await fs.mkdir(thumbDir(), { recursive: true })
-      const name = `${crypto.createHash('sha1').update(absPath).digest('hex')}.${
-        doc.thumbnailType === 'image/png' ? 'png' : 'jpg'
-      }`
-      const target = path.join(thumbDir(), name)
-      await fs.writeFile(target, doc.thumbnail)
-      thumbnail = target
-    }
-    return {
-      text: doc.text,
-      pageCount: doc.pageCount,
-      thumbnail,
-      warning: doc.warning
-    }
-  }
-
-  return { text: '', pageCount: null, thumbnail: null, warning: null }
+  return { text: '', pageCount: null, warning: null }
 }
 
 /** Walk one watched folder, skipping the places nothing useful ever lives. */
@@ -142,13 +124,7 @@ async function walk(root: string, depth = 0): Promise<string[]> {
   for (const entry of entries) {
     const abs = path.join(root, entry.name)
 
-    // A GoodNotes document can be a bundle *directory* rather than a zip on
-    // macOS, in which case the directory itself is the document.
     if (entry.isDirectory()) {
-      if (kindOf(entry.name)) {
-        out.push(abs)
-        continue
-      }
       if (entry.name.startsWith('.') || entry.name === 'node_modules') continue
       out.push(...(await walk(abs, depth + 1)))
       continue
@@ -181,8 +157,15 @@ export async function scanLibrary(folders: LibraryFolder[]): Promise<LibraryDoc[
         stat = null
       }
 
-      // No stat means the placeholder is all that exists on this machine.
-      if (!stat) {
+      const dir = path.dirname(path.relative(folder.path, absPath))
+      const folderPath = dir === '.' || dir.startsWith('..') ? '' : dir.split(path.sep).join('/')
+
+      // Either the placeholder is all that exists, or the file is dataless —
+      // present in the listing, but with its contents still in iCloud. Both are
+      // listed and neither is opened: reading one would block the whole scan
+      // while macOS downloads it.
+      if (!stat || isDataless(stat)) {
+        const cached = stat ? cache.get(absPath) : undefined
         found.push({
           id: absPath,
           path: absPath,
@@ -190,12 +173,16 @@ export async function scanLibrary(folders: LibraryFolder[]): Promise<LibraryDoc[
           kind,
           folderId: folder.id,
           relPath: null,
-          size: 0,
-          mtime: 0,
-          pageCount: null,
+          folderPath,
+          size: stat?.size ?? 0,
+          mtime: stat?.mtimeMs ?? 0,
+          // Anything read before it was evicted is still worth showing.
+          pageCount: cached?.pageCount ?? null,
           evicted: true,
-          warning: 'Not downloaded from iCloud. Open it once on this Mac to index it.',
-          hasText: false
+          warning:
+            'Not downloaded from iCloud. Open it once on this Mac, or use Download, to read it.',
+          hasText: (cached?.text.length ?? 0) > 0,
+          renderable: false
         })
         continue
       }
@@ -212,7 +199,6 @@ export async function scanLibrary(folders: LibraryFolder[]): Promise<LibraryDoc[
             stamp,
             text: '',
             pageCount: null,
-            thumbnail: null,
             warning: (err as Error).message
           }
         }
@@ -227,12 +213,14 @@ export async function scanLibrary(folders: LibraryFolder[]): Promise<LibraryDoc[
         kind,
         folderId: folder.id,
         relPath: null,
+        folderPath,
         size: stat.size,
         mtime: stat.mtimeMs,
         pageCount: entry.pageCount,
         evicted: false,
         warning: entry.warning,
-        hasText: entry.text.length > 0
+        hasText: entry.text.length > 0,
+        renderable: kind === 'pdf'
       })
     }
   }
@@ -267,8 +255,33 @@ export function documentText(id: string): string {
   return cache.get(id)?.text ?? ''
 }
 
-export function documentThumbnail(id: string): string | null {
-  return cache.get(id)?.thumbnail ?? null
+/**
+ * The file to point a viewer at.
+ *
+ * A PDF renders from where it lies. Anything else is listed and searchable by
+ * name, but there is nothing here that can draw it.
+ */
+export async function renderablePath(id: string): Promise<string | null> {
+  const doc = docs.find((d) => d.id === id)
+  if (!doc || doc.evicted || doc.kind !== 'pdf') return null
+  return doc.path
+}
+
+/**
+ * Pull an evicted file down from iCloud, on request.
+ *
+ * `fs.open` is what triggers materialisation, and it is deliberately only ever
+ * called from here — never from a scan — so the block happens when the user
+ * asked for this one document and is waiting for it.
+ */
+export async function downloadDocument(absPath: string): Promise<void> {
+  const handle = await fs.open(absPath, 'r')
+  try {
+    // One byte is enough to make macOS fetch the whole file.
+    await handle.read(Buffer.alloc(1), 0, 1, 0)
+  } finally {
+    await handle.close()
+  }
 }
 
 export interface DocHit {

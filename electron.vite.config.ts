@@ -21,7 +21,9 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, 'src/preload/index.ts'),
           // The plugin host gets its own, far smaller, bridge.
-          'plugin-host': resolve(__dirname, 'src/preload/plugin-host.ts')
+          'plugin-host': resolve(__dirname, 'src/preload/plugin-host.ts'),
+          // So does the print window, which needs even less.
+          print: resolve(__dirname, 'src/preload/print.ts')
         }
       }
     },
@@ -35,7 +37,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/renderer/index.html'),
-          'plugin-host': resolve(__dirname, 'src/renderer/plugin-host.html')
+          'plugin-host': resolve(__dirname, 'src/renderer/plugin-host.html'),
+          print: resolve(__dirname, 'src/renderer/print.html')
         }
       }
     },

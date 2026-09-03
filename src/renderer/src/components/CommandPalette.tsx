@@ -3,7 +3,7 @@ import type { SearchHit } from '@shared/types'
 import { useStone } from '../store'
 import { COMMANDS, commandLabel, keysFor } from '../commands'
 import { formatChord } from '../lib/keys'
-import { IconNote, IconPuzzle, IconSearch } from '../ui/icons'
+import { IconFolder, IconNote, IconPuzzle, IconSearch } from '../ui/icons'
 
 interface Command {
   id: string
@@ -20,6 +20,8 @@ export function CommandPalette() {
   const settings = useStone((s) => s.settings)
   const pluginCommands = useStone((s) => s.pluginCommands)
   const openNote = useStone((s) => s.openNote)
+  const documents = useStone((s) => s.documents)
+  const openDocument = useStone((s) => s.openDocument)
 
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<SearchHit[]>([])
@@ -99,12 +101,25 @@ export function CommandPalette() {
     }))
   }, [hits, notes, query])
 
+  /**
+   * Documents rank alongside notes rather than in a section of their own.
+   * Searching for a thing should not require knowing what kind of file it is.
+   */
+  const documentResults = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return []
+    return documents
+      .filter((d) => d.name.toLowerCase().includes(q))
+      .slice(0, 5)
+  }, [documents, query])
+
   const rows = useMemo(
     () => [
       ...filteredCommands.map((c) => ({ kind: 'command' as const, command: c })),
+      ...documentResults.map((d) => ({ kind: 'doc' as const, doc: d })),
       ...noteResults.map((h) => ({ kind: 'note' as const, hit: h }))
     ],
-    [filteredCommands, noteResults]
+    [filteredCommands, documentResults, noteResults]
   )
 
   useEffect(() => {
@@ -122,6 +137,7 @@ export function CommandPalette() {
     if (!row) return
     setPalette(false)
     if (row.kind === 'command') row.command.run()
+    else if (row.kind === 'doc') openDocument(row.doc.path)
     else void openNote(row.hit.relPath)
   }
 
@@ -177,6 +193,33 @@ export function CommandPalette() {
                 <span className="palette__icon">{row.command.icon}</span>
                 <span className="palette__label truncate">{row.command.label}</span>
                 {row.command.hint && <span className="palette__kbd">{row.command.hint}</span>}
+              </button>
+            )
+          })}
+
+          {documentResults.length > 0 && <div className="palette__group eyebrow">Documents</div>}
+          {rows.map((row, index) => {
+            if (row.kind !== 'doc') return null
+            return (
+              <button
+                key={row.doc.id}
+                type="button"
+                className="palette__row"
+                data-active={index === cursor}
+                onMouseEnter={() => setCursor(index)}
+                onClick={() => activate(index)}
+              >
+                <span className="palette__icon">
+                  <IconFolder size={15} />
+                </span>
+                <span className="palette__label truncate">
+                  {row.doc.name}
+                  <span className="palette__sub" style={{ display: 'block' }}>
+                    {row.doc.kind.toUpperCase()}
+                    {row.doc.pageCount ? ` · ${row.doc.pageCount} pages` : ''}
+                    {row.doc.evicted ? ' · not downloaded' : ''}
+                  </span>
+                </span>
               </button>
             )
           })}

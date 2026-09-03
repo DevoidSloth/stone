@@ -49,6 +49,7 @@ mac:
     NSCalendarsFullAccessUsageDescription: Stone shows your Apple Calendar events alongside your notes and tasks, and writes events you create in Stone back to Calendar.
     NSRemindersUsageDescription: Stone can mirror tasks into Reminders.
     NSAppleEventsUsageDescription: Stone uses Apple Events to read your calendars through EventKit.
+    NSMicrophoneUsageDescription: Stone records lectures and meetings into your notes, so you can play them back against the notes you took and have them transcribed on this Mac.
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   # Signing is handled by scripts/sign-mac.mjs instead of by electron-builder.

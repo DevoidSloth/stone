@@ -1,6 +1,7 @@
 import type { Completion, CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
+import { useStone } from '../store'
 
 /**
  * The slash menu.
@@ -21,6 +22,12 @@ interface Block {
   snippet: string
   /** Replace the whole line rather than just the slash token. */
   wholeLine?: boolean
+  /**
+   * Runs instead of inserting the snippet, for a block that cannot be written
+   * as text — picking a file takes a dialog and a round trip to main, so the
+   * slash token is cleared first and the markdown arrives when it arrives.
+   */
+  action?: (view: EditorView) => void
 }
 
 const BLOCKS: Block[] = [
@@ -78,7 +85,7 @@ const BLOCKS: Block[] = [
     label: 'Table',
     detail: 'A three-column table',
     keywords: 'table grid rows columns',
-    snippet: '| | | |\n| --- | --- | --- |\n| | | |',
+    snippet: '|     |     |     |\n| --- | --- | --- |\n|     |     |     |',
     wholeLine: true
   },
   {
@@ -89,10 +96,59 @@ const BLOCKS: Block[] = [
     wholeLine: true
   },
   {
+    label: 'Drawing',
+    detail: 'An inline SVG picture',
+    keywords: 'svg drawing picture illustration vector sketch',
+    snippet:
+      '```svg\n<svg viewBox="0 0 800 450">\n  <circle cx="400" cy="225" r="120" fill="none" stroke="currentColor" stroke-width="2" />\n  |\n</svg>\n```',
+    wholeLine: true
+  },
+  {
+    label: 'Memory diagram',
+    detail: 'Stack frames, heap objects, and the pointers between them',
+    keywords: 'memory pointer heap stack struct node linked list reference diagram',
+    snippet:
+      '```memory\nstack:\n  main:\n    head -> n1\nheap:\n  n1 Node { val: 1, next -> n2 }\n  n2 Node { val: 2, next: null }|\n```\n',
+    wholeLine: true
+  },
+  {
+    label: 'Box and pointer',
+    detail: 'Variables, objects, and what points at what',
+    keywords: 'box pointer object reference variable java python heap field array list',
+    snippet:
+      '```boxes\nb -> board\n\nboard CBoard:\n  cells -> grid\n\ngrid Int[][] [ ->r0, ->r1 ]|\n```\n',
+    wholeLine: true
+  },
+  {
+    label: 'Cons list',
+    detail: 'SICP-style pairs, one line',
+    keywords: 'cons pair lisp scheme sicp cdr car list',
+    snippet: '```memory\npairs: 1 2 3|\n```\n',
+    wholeLine: true
+  },
+  {
+    label: 'Tree',
+    detail: 'A binary tree, heap, or BST, from an array',
+    keywords: 'tree binary bst heap node traversal inorder leetcode',
+    snippet: '```tree\nlevel: 5 3 8 2 4 . 9|\n```\n',
+    wholeLine: true
+  },
+  {
+    label: 'Algorithm run',
+    detail: 'An array and the steps, played back',
+    keywords: 'algorithm animation sort search step trace array stack queue playback',
+    snippet:
+      '```algo\narray: 5 3 8 1\n---\ncompare 0 1\nswap 0 1\nnote |\n```\n',
+    wholeLine: true
+  },
+  {
     label: 'Maths block',
     detail: 'Display equation',
     keywords: 'math latex katex equation formula',
-    snippet: '```math\n|\n```',
+    // `$$` rather than a ```math fence: both render the same here, but this is
+    // the form Obsidian, GitHub and every LaTeX-aware editor also understand,
+    // so the note stays readable outside Stone.
+    snippet: '$$\n|\n$$',
     wholeLine: true
   },
   {
@@ -101,6 +157,33 @@ const BLOCKS: Block[] = [
     keywords: 'query database view dataview list filter',
     snippet: '```stone\nfrom: |\nwhere: status is active\nsort: edited desc\n```\n',
     wholeLine: true
+  },
+  {
+    label: 'Image',
+    detail: 'Embed a picture from this computer',
+    keywords: 'image picture photo png jpg screenshot embed attach file',
+    snippet: '',
+    action: (view) => void insertPickedFiles(view)
+  },
+  {
+    label: 'PDF',
+    detail: 'Embed a page of a document',
+    keywords: 'pdf document paper attach file embed',
+    snippet: '',
+    action: (view) => void insertPickedFiles(view)
+  },
+  {
+    label: 'Recording',
+    detail: 'Record a lecture and stamp your notes as you type',
+    keywords: 'record recording audio lecture mic microphone transcribe transcript voice',
+    snippet: '',
+    action: () => void useStone.getState().startRecording()
+  },
+  {
+    label: 'Hyperlink',
+    detail: 'A link to a web address',
+    keywords: 'link hyperlink url web http address external',
+    snippet: '[|]()'
   },
   { label: 'Link to a note', detail: 'A wikilink', keywords: 'link wikilink reference', snippet: '[[|]]' },
   { label: 'Embed a note', detail: 'Transclude another page', keywords: 'embed transclude include', snippet: '![[|]]' },
@@ -139,6 +222,35 @@ function applySnippet(
     selection: EditorSelection.cursor(start + (caret === -1 ? insert.length : caret)),
     scrollIntoView: true
   })
+
+  block.action?.(view)
+}
+
+/**
+ * Pick files and drop their markdown in at the caret.
+ *
+ * Main copies whatever is chosen into the vault's attachments folder and hands
+ * back the markdown, so the vault stays self-contained — the same path a paste
+ * or a drop takes, just started from the menu instead.
+ */
+export async function insertPickedFiles(view: EditorView): Promise<void> {
+  const picked = await window.stone.attachments.pick()
+  if (picked.length === 0) return
+
+  // The caret is read now rather than when the dialog opened: the dialog is
+  // modal to the window, but nothing stops an autosave or a sync from having
+  // moved the document underneath in the meantime.
+  const at = view.state.selection.main.head
+  const line = view.state.doc.lineAt(at)
+  const prefix = line.text.slice(0, at - line.from).trim() === '' ? '' : '\n'
+  const insert = `${prefix}${picked.map((p) => p.markdown).join('\n')}\n`
+
+  view.dispatch({
+    changes: { from: at, to: at, insert },
+    selection: EditorSelection.cursor(at + insert.length),
+    scrollIntoView: true
+  })
+  view.focus()
 }
 
 /**

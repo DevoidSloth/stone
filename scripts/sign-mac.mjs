@@ -12,45 +12,18 @@
  * `afterPack` hook. It also knows the correct inside-out ordering for versioned
  * frameworks, which is fiddly to get right by hand.
  *
- * Identity resolution, in order:
- *   1. STONE_SIGN_IDENTITY, if set
- *   2. a Developer ID Application certificate, if the keychain has one
- *   3. the self-signed "Stone Local Signing" certificate
- *   4. nothing — packaged unsigned, with a warning explaining the consequence
+ * Identity resolution lives in scripts/lib/mac-identity.mjs, so the build
+ * wrapper can ask the same question before it starts packaging.
+ *
+ * This hook signs; it does not judge the result beyond the two checks below.
+ * The full verification — designated requirement, entitlements, the dmg's
+ * contents — is in scripts/build-mac.mjs, which is how a release is built.
  */
 
-import { execFileSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { signAsync } from '@electron/osx-sign'
-
-const LOCAL_IDENTITY = 'Stone Local Signing'
-
-function keychainIdentities() {
-  try {
-    // -v filters to valid identities and would hide the self-signed one, so the
-    // full list is read and matched by name.
-    return execFileSync('security', ['find-identity', '-p', 'codesigning'], {
-      encoding: 'utf8'
-    })
-  } catch {
-    return ''
-  }
-}
-
-function resolveIdentity() {
-  if (process.env.STONE_SIGN_IDENTITY) {
-    return { name: process.env.STONE_SIGN_IDENTITY, kind: 'configured' }
-  }
-
-  const listed = keychainIdentities()
-
-  const developerId = /"(Developer ID Application: [^"]+)"/.exec(listed)
-  if (developerId) return { name: developerId[1], kind: 'developer-id' }
-
-  if (listed.includes(LOCAL_IDENTITY)) return { name: LOCAL_IDENTITY, kind: 'self-signed' }
-
-  return null
-}
+import { resolveIdentity, UNSIGNED_WARNING } from './lib/mac-identity.mjs'
 
 export default async function signMac(context) {
   if (context.electronPlatformName !== 'darwin') return
@@ -70,19 +43,7 @@ export default async function signMac(context) {
   )
 
   if (!identity) {
-    console.warn(
-      [
-        '',
-        '  ⚠  No signing certificate found — packaging unsigned.',
-        '',
-        '     Calendar access will not survive a rebuild: with no certificate,',
-        '     macOS pins the permission to this exact binary and the next build',
-        '     invalidates it.',
-        '',
-        '     Fix with:  ./scripts/make-signing-cert.sh',
-        ''
-      ].join('\n')
-    )
+    console.warn(UNSIGNED_WARNING)
     return
   }
 

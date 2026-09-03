@@ -1,6 +1,8 @@
 import { syntaxTree } from '@codemirror/language'
 import {
   type EditorState,
+  EditorSelection,
+  Prec,
   type Range,
   RangeSetBuilder,
   StateEffect,
@@ -8,30 +10,44 @@ import {
   type Text
 } from '@codemirror/state'
 import {
+  type Command,
   Decoration,
   type DecorationSet,
   EditorView,
+  keymap,
   ViewPlugin,
   type ViewUpdate
 } from '@codemirror/view'
 import type { TaskStatus } from '@shared/types'
 import { cycleStatus, parseTaskLine, setStatusOnLine } from '@shared/task-syntax'
-import { embedKind } from '@shared/attachments'
+import { parseEmbed } from '@shared/attachments'
+import { readStamp, stampInsertPoint } from '@shared/audio'
 import { toISODate } from '../lib/dates'
 import {
+  TABLE_ROW_RE,
+  TABLE_RULE_RE,
+  alignmentsOf,
+  splitRow,
+  tableSource
+} from './table'
+import { runWidgetRanges } from './run-code'
+import { vizKind } from '../viz'
+import {
+  ArrowWidget,
   CheckboxWidget,
   CollapsedWidget,
   FoldWidget,
-  ImageWidget,
   MathWidget,
-  MediaWidget,
   MermaidWidget,
-  NoteEmbedWidget,
+  VizWidget,
   PropsWidget,
   QueryWidget,
   RuleWidget,
+  StampWidget,
+  SvgWidget,
   TableWidget,
-  resolveAssetUrl
+  embedWidget,
+  focusCell
 } from './widgets'
 
 /**
@@ -85,8 +101,49 @@ const URL_RE = /https?:\/\/[^\s<>()[\]]+/g
 const BLOCK_ID_RE = /\s(\^[A-Za-z0-9-]+)\s*$/
 const FOOTNOTE_REF_RE = /\[\^([^\]]+)\]/g
 const FOOTNOTE_DEF_RE = /^\[\^([^\]]+)\]:/
-const INLINE_MATH_RE = /(?<!\$)\$([^$\n]+?)\$(?!\$)/g
+/**
+ * `$…$`. A `\$` is an escaped dollar and a lone `$` is just a dollar, so a
+ * price mid-sentence never turns into an equation. Matches the exporter's
+ * rule exactly — the two have to agree or a note prints differently to how it
+ * was written.
+ */
+const INLINE_MATH_RE = /(?<![\\$])\$([^$\n]+?)(?<!\\)\$(?!\$)/g
 const HIGHLIGHT_RE = /==(?=\S)([^\n]*?\S)==/g
+/** `<u>underline</u>` — the tag, because markdown has no underline of its own. */
+const UNDERLINE_RE = /<u>(?=\S)([^\n]*?\S)<\/u>/gi
+
+/**
+ * Code is not prose, so the spellchecker has no business red-lining it. The
+ * attribute goes on the element holding the code — Chromium walks up from each
+ * text node to the nearest ancestor that states a preference — which turns
+ * checking off for that run only, leaving the surrounding sentence checked.
+ */
+const NO_SPELLCHECK = { spellcheck: 'false' }
+
+/**
+ * ASCII arrows. `->` and `<-` must not be part of a longer run — `-->` and
+ * `<->` are their own thing, and mangling half of one is worse than leaving it
+ * alone — and `^|` `v|` must not be the tail of a word, so a table cell ending
+ * in "Nov|" stays "Nov|".
+ */
+const ARROW_RE = /(?<![-<>=])(?:->|<-)(?![->=])|(?<![\p{L}\p{N}])(?:\^|v)\|(?!\|)/gu
+const ARROW_GLYPH: Record<string, string> = {
+  '->': '→',
+  '<-': '←',
+  '^|': '↑',
+  'v|': '↓'
+}
+
+/** Inline code spans on a line, as `[start, end)` offsets including the ticks. */
+const INLINE_CODE_RE = /(`+)(?:[^`]|(?!\1)`)+\1/g
+
+function inlineCodeSpans(text: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = []
+  INLINE_CODE_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = INLINE_CODE_RE.exec(text)) !== null) spans.push([m.index, m.index + m[0].length])
+  return spans
+}
 
 // ---------------------------------------------------------------- folding
 
@@ -198,6 +255,12 @@ export interface LivePreviewHandlers {
   onOpenUrl: (url: string) => void
   onSelectTag: (tag: string) => void
   loadEmbed: (target: string) => Promise<{ title: string; body: string } | null>
+  /** Open an embedded file — a PDF, or anything with no viewer here. */
+  onOpenAsset: (target: string) => void
+  /** Play a recording from a moment in it: an embed's play button, or a stamp. */
+  onPlayAudio: (target: string, seconds: number) => void
+  /** Show a recording's transcript in the inspector. */
+  onShowTranscript: (target: string) => void
   attachmentsFolder: () => string
   onHoverLink?: (target: string, rect: DOMRect) => void
   onHoverEnd?: () => void
@@ -212,84 +275,71 @@ interface Fence {
   end: number
 }
 
+const FENCE_RE = /^\s*(```|~~~)\s*(\S*)/
+/** `$$` alone on a line, which opens and closes display maths the way ``` does. */
+const MATH_FENCE_RE = /^\s*\$\$\s*$/
+
 /**
  * Fenced regions, mapped line by line from the top of the document. This cannot
  * start at the viewport: a code block scrolled into view mid-fence would
  * otherwise be read as prose and get decorated as markdown.
+ *
+ * `$$` counts as a fence so that display maths hides its own markup and skips
+ * the inline passes, exactly like a ``` block. Only the mark that opened a
+ * region can close it — a `$$` inside a code block is content, not a closer.
  */
 function scanFences(doc: Text): Map<number, Fence> {
   const info = new Map<number, Fence>()
-  let open = false
+  let mark = ''
   let start = 0
   let lang = ''
 
   for (let n = 1; n <= doc.lines; n++) {
-    const fence = /^\s*(```|~~~)\s*(\S*)/.exec(doc.line(n).text)
-    if (fence) {
-      if (!open) {
-        open = true
-        start = n
+    const text = doc.line(n).text
+    const fence = FENCE_RE.exec(text)
+    const math = MATH_FENCE_RE.test(text)
+
+    if (!mark) {
+      if (fence) {
+        mark = fence[1]
         lang = fence[2] ?? ''
-      } else {
-        for (let i = start; i <= n; i++) info.set(i, { lang, start, end: n })
-        open = false
+        start = n
+      } else if (math) {
+        mark = '$$'
+        lang = 'math'
+        start = n
       }
       continue
     }
-    if (open) info.set(n, { lang, start, end: 0 })
+
+    if (mark === '$$' ? math : fence !== null && fence[1] === mark) {
+      for (let i = start; i <= n; i++) info.set(i, { lang, start, end: n })
+      mark = ''
+      continue
+    }
+    info.set(n, { lang, start, end: 0 })
   }
   return info
 }
 
-const TABLE_ROW_RE = /^\s*\|.*\|\s*$/
-/** The alignment row: pipes, dashes and colons, and at least one dash. */
-const TABLE_RULE_RE = /^[\s|:-]*-[\s|:-]*$/
+/** `$$…$$` on a single line — display maths without the two extra lines. */
+const MATH_ALONE_RE = /^\$\$(?!\s*$)([\s\S]+?)\$\$$/
 const EMBED_ALONE_RE = /^!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/
 const IMAGE_ALONE_RE = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)$/
-
-/** Split a table row on unescaped pipes, dropping the outer pair. */
-function splitRow(text: string): string[] {
-  const body = text.trim().replace(/^\|/, '').replace(/\|$/, '')
-  const cells: string[] = []
-  let cell = ''
-  for (let i = 0; i < body.length; i++) {
-    const ch = body[i]
-    if (ch === '\\' && body[i + 1] === '|') {
-      cell += '|'
-      i++
-      continue
-    }
-    if (ch === '|') {
-      cells.push(cell.trim())
-      cell = ''
-      continue
-    }
-    cell += ch
-  }
-  cells.push(cell.trim())
-  return cells
-}
-
-/** `:---`, `---:`, `:---:` — per-column alignment from the rule row. */
-function alignmentsOf(rule: string): ('left' | 'center' | 'right')[] {
-  return splitRow(rule).map((spec) => {
-    const left = spec.startsWith(':')
-    const right = spec.endsWith(':')
-    if (left && right) return 'center'
-    if (right) return 'right'
-    return 'left'
-  })
-}
 
 interface BlockRegion {
   fromLine: number
   toLine: number
   deco: Decoration
+  /** Tables are navigated into rather than onto — see `focusTableCell`. */
+  table: boolean
 }
 
 interface BlockLayer {
   /** Line numbers the block layer owns, so the inline pass leaves them alone. */
   claimed: Set<number>
+  /** The same regions as spans, for cursor motion that has to step over them. */
+  regions: BlockRegion[]
   set: DecorationSet
 }
 
@@ -317,42 +367,58 @@ function computeBlockRegions(state: EditorState, handlers: LivePreviewHandlers):
     for (let n = first; n <= last; n++) liveLines.add(n)
   }
 
+  // The one table the user asked to see as markdown, if any.
+  const openSource = state.field(tableSource, false) ?? null
+  const sourceLines = new Set<number>(openSource === null ? [] : [openSource])
+
   const sectionLive = (from: number, to: number): boolean => {
     for (let n = from; n <= to; n++) if (liveLines.has(n)) return true
     return false
   }
 
-  const claim = (fromLine: number, toLine: number, deco: Decoration): void => {
+  const claim = (fromLine: number, toLine: number, deco: Decoration, table = false): void => {
     for (let n = fromLine; n <= toLine; n++) taken.add(n)
-    regions.push({ fromLine, toLine, deco })
+    regions.push({ fromLine, toLine, deco, table })
   }
 
   const fences = scanFences(doc)
 
   // Whole-fence widgets: mermaid and display maths stand in for the block.
+  // Display maths arrives here as either a `$$` region or a ```math fence — the
+  // scan labels both `math`, so they render identically.
   for (let n = 1; n <= doc.lines; n++) {
     const fence = fences.get(n)
     if (!fence || fence.start !== n || fence.end <= n) continue
 
     const lang = fence.lang.toLowerCase()
     const isDiagram = lang === 'mermaid'
+    // A drawing: the block holds SVG, for the pictures Mermaid has no grammar
+    // for. Scrubbed before it is drawn — see `lib/svg`.
+    const isDrawing = lang === 'svg'
     const isMath = lang === 'math' || lang === 'latex'
     // `stone` blocks are queries — a saved view, or one described in place.
     const isQuery = lang === 'stone' || lang === 'query'
-    if (!isDiagram && !isMath && !isQuery) continue
+    // `memory`, `tree` and `algo` blocks are program figures — see `viz/`.
+    const figure = vizKind(lang)
+    if (!isDiagram && !isDrawing && !isMath && !isQuery && !figure) continue
     if (sectionLive(fence.start, fence.end)) continue
 
     const source: string[] = []
     for (let i = fence.start + 1; i < fence.end; i++) source.push(doc.line(i).text)
+    const body = source.join('\n')
     claim(
       fence.start,
       fence.end,
       Decoration.replace({
-        widget: isDiagram
-          ? new MermaidWidget(source.join('\n'))
-          : isQuery
-            ? new QueryWidget(source.join('\n'))
-            : new MathWidget(source.join('\n'), true),
+        widget: figure
+          ? new VizWidget(figure, body)
+          : isDiagram
+            ? new MermaidWidget(body)
+            : isDrawing
+              ? new SvgWidget(body)
+              : isQuery
+                ? new QueryWidget(body)
+                : new MathWidget(body, true),
         block: true
       })
     )
@@ -377,20 +443,34 @@ function computeBlockRegions(state: EditorState, handlers: LivePreviewHandlers):
 
     // Two rows minimum, the second being the alignment rule, or it is not a table.
     if (end > n && TABLE_RULE_RE.test(doc.line(n + 1).text)) {
-      if (!sectionLive(n, end)) {
+      // Unlike every other block here, a table stays rendered while the caret
+      // is inside it: its cells are editable, so showing source would replace
+      // the grid being edited. `showTableSource` is the deliberate way out.
+      if (!sourceLines.has(n)) {
         const align = alignmentsOf(doc.line(n + 1).text)
         const rows: string[][] = []
         for (let i = n; i <= end; i++) {
           if (i === n + 1) continue
           rows.push(splitRow(doc.line(i).text))
         }
-        claim(n, end, Decoration.replace({ widget: new TableWidget(rows, align), block: true }))
+        claim(n, end, Decoration.replace({ widget: new TableWidget(rows, align, n), block: true }), true)
       }
       n = end + 1
       continue
     }
 
     n++
+  }
+
+  // `$$E = mc^2$$` written on one line. The multi-line form is a fence and the
+  // scan above has already claimed it; this is the shorthand people actually
+  // type, and it centres the same way.
+  for (let line = 1; line <= doc.lines; line++) {
+    if (taken.has(line) || fences.has(line) || liveLines.has(line)) continue
+    const inline = MATH_ALONE_RE.exec(doc.line(line).text.trim())
+    if (inline) {
+      claim(line, line, Decoration.replace({ widget: new MathWidget(inline[1], true), block: true }))
+    }
   }
 
   // An embed alone on its line is a figure, not a word inside a sentence.
@@ -401,27 +481,20 @@ function computeBlockRegions(state: EditorState, handlers: LivePreviewHandlers):
 
     const wiki = EMBED_ALONE_RE.exec(text)
     if (wiki) {
-      const target = wiki[1].trim()
-      const label = (wiki[2] ?? wiki[1]).trim()
-      const kind = embedKind(target)
-      const src = resolveAssetUrl(target, attachments)
-      const widget =
-        kind === 'image'
-          ? new ImageWidget(src, label, true)
-          : kind === 'video' || kind === 'audio' || kind === 'pdf'
-            ? new MediaWidget(src, kind, label)
-            : new NoteEmbedWidget(target, handlers.loadEmbed, handlers.onOpenWikilink)
+      const widget = embedWidget(parseEmbed(wiki[1], wiki[2]), attachments, true, handlers)
       claim(line, line, Decoration.replace({ widget, block: true }))
       continue
     }
 
+    // `![alt](path)` alone on its line. The alt text carries any size, and the
+    // path decides the widget — a `.pdf` written this way is still a PDF.
     const image = IMAGE_ALONE_RE.exec(text)
     if (image) {
       claim(
         line,
         line,
         Decoration.replace({
-          widget: new ImageWidget(resolveAssetUrl(image[2], attachments), image[1], true),
+          widget: embedWidget(parseEmbed(image[2], image[1]), attachments, true, handlers),
           block: true
         })
       )
@@ -441,7 +514,15 @@ function buildBlockLayer(state: EditorState, handlers: LivePreviewHandlers): Blo
     ranges.push(region.deco.range(state.doc.line(region.fromLine).from, state.doc.line(region.toLine).to))
   }
 
-  return { claimed, set: Decoration.set(ranges, true) }
+  // The run bar under a code block. It inserts rather than replaces, so it is
+  // not a region and claims no lines — the fence keeps its own plate and stays
+  // editable underneath.
+  for (const run of runWidgetRanges(state)) {
+    if (claimed.has(state.doc.lineAt(run.from).number)) continue
+    ranges.push(run)
+  }
+
+  return { claimed, regions, set: Decoration.set(ranges, true) }
 }
 
 function buildDecorations(
@@ -481,6 +562,22 @@ function buildDecorations(
         if (line.to >= doc.length) break
         line = doc.lineAt(line.to + 1)
         continue
+      }
+
+      // The recorder's own marker, pulled out of the prose and drawn as a
+      // clock in the gutter. Done before anything else on the line so the
+      // callout, task and link scans below see the text without it in the way.
+      const stampFrom = base + stampInsertPoint(text)
+      const stamp = readStamp(text.slice(stampFrom - base))
+      if (stamp) {
+        pushReplace(
+          state,
+          stampFrom,
+          stampFrom + stamp.length,
+          Decoration.replace({
+            widget: new StampWidget(stamp.clock, stamp.seconds, stamp.target, handlers.onPlayAudio)
+          })
+        )
       }
 
       // `> [!tip] Heading` — hide the marker and bold what follows it. The
@@ -590,14 +687,63 @@ function buildDecorations(
         }
       }
 
+      /*
+       * `<u>underline</u>`. Markdown has no underline — CommonMark left it out
+       * on purpose — so the tag is what everything downstream understands, and
+       * the tag itself is hidden until the caret comes to the line.
+       */
+      UNDERLINE_RE.lastIndex = 0
+      let underline: RegExpExecArray | null
+      while ((underline = UNDERLINE_RE.exec(text)) !== null) {
+        const start = base + underline.index
+        const end = start + underline[0].length
+        pushMark(state, start + 3, end - 4, Decoration.mark({ class: 'tok-underline' }))
+        if (live) {
+          pushMark(state, start, start + 3, Decoration.mark({ class: 'tok-mark' }))
+          pushMark(state, end - 4, end, Decoration.mark({ class: 'tok-mark' }))
+        } else {
+          pushReplace(state, start, start + 3)
+          pushReplace(state, end - 4, end)
+        }
+      }
+
+      /*
+       * `->` `<-` `^|` `v|` drawn as the arrows they picture. The pair itself
+       * comes back the moment the caret lands on the line, and inside `code`
+       * it never leaves — an arrow in a snippet is usually an operator.
+       */
       if (!live) {
+        let codeSpans: Array<[number, number]> | null = null
+        ARROW_RE.lastIndex = 0
+        let arrow: RegExpExecArray | null
+        while ((arrow = ARROW_RE.exec(text)) !== null) {
+          const glyph = ARROW_GLYPH[arrow[0]]
+          if (!glyph) continue
+          codeSpans ??= inlineCodeSpans(text)
+          const at = arrow.index
+          if (codeSpans.some(([from, until]) => at >= from && at < until)) continue
+          pushReplace(
+            state,
+            base + at,
+            base + at + arrow[0].length,
+            Decoration.replace({ widget: new ArrowWidget(glyph) })
+          )
+        }
+      }
+
+      if (!live) {
+        let mathCodeSpans: Array<[number, number]> | null = null
         INLINE_MATH_RE.lastIndex = 0
         let math: RegExpExecArray | null
         while ((math = INLINE_MATH_RE.exec(text)) !== null) {
+          // `$` inside a code span is a shell prompt or a variable, not maths.
+          mathCodeSpans ??= inlineCodeSpans(text)
+          const at = math.index
+          if (mathCodeSpans.some(([from, until]) => at >= from && at < until)) continue
           pushReplace(
             state,
-            base + math.index,
-            base + math.index + math[0].length,
+            base + at,
+            base + at + math[0].length,
             Decoration.replace({ widget: new MathWidget(math[1], false) })
           )
         }
@@ -615,7 +761,7 @@ function buildDecorations(
           base + image.index,
           base + image.index + whole.length,
           Decoration.replace({
-            widget: new ImageWidget(resolveAssetUrl(image[2], attachments), image[1], false),
+            widget: embedWidget(parseEmbed(image[2], image[1]), attachments, false, handlers),
             block: false
           })
         )
@@ -646,13 +792,7 @@ function buildDecorations(
         // An embed alone on its line is drawn by the block layer instead; what
         // reaches here sits mid-sentence and stays inline.
         if (isEmbed) {
-          const kind = embedKind(target)
-          const widget =
-            kind === 'image'
-              ? new ImageWidget(resolveAssetUrl(target, attachments), label, false)
-              : kind === 'video' || kind === 'audio' || kind === 'pdf'
-                ? new MediaWidget(resolveAssetUrl(target, attachments), kind, label)
-                : new NoteEmbedWidget(target, handlers.loadEmbed, handlers.onOpenWikilink)
+          const widget = embedWidget(parseEmbed(target, wl[3]), attachments, false, handlers)
           pushReplace(state, start, end, Decoration.replace({ widget }))
           continue
         }
@@ -685,6 +825,15 @@ function buildDecorations(
         if (claimed.has(doc.lineAt(node.from).number)) return false
         const name = node.name
 
+        // An indented code block has no fence to announce it, so the line
+        // layer never plates it — but it is still code, and the tree is where
+        // it shows up. `CodeText` is the run inside a fence, harmless to mark
+        // twice and cheaper than proving it was already covered.
+        if (name === 'CodeBlock' || name === 'CodeText') {
+          pushMark(state, node.from, node.to, Decoration.mark({ attributes: NO_SPELLCHECK }))
+          return false
+        }
+
         const heading = HEADING_CLASS[name]
         if (heading) {
           pushMark(state, node.from, node.to, Decoration.mark({ class: heading }))
@@ -693,7 +842,16 @@ function buildDecorations(
 
         const inline = INLINE_CLASS[name]
         if (inline) {
-          pushMark(state, node.from, node.to, Decoration.mark({ class: inline }))
+          pushMark(
+            state,
+            node.from,
+            node.to,
+            Decoration.mark(
+              name === 'InlineCode'
+                ? { class: inline, attributes: NO_SPELLCHECK }
+                : { class: inline }
+            )
+          )
           return
         }
 
@@ -806,7 +964,16 @@ function buildLineDecorations(view: EditorView): DecorationSet {
 
   for (const [lineNumber, classes] of [...lineClasses.entries()].sort((a, b) => a[0] - b[0])) {
     const line = doc.line(lineNumber)
-    builder.add(line.from, line.from, Decoration.line({ class: classes.join(' ') }))
+    // A fenced block is code all the way down, so the whole line opts out of
+    // spellchecking rather than each token inside it. Frontmatter goes the same
+    // way: a red line under a YAML key is noise, not a typo worth reporting.
+    const prose = !classes.includes('tok-line-code') && !classes.includes('tok-line-fm')
+    const attributes = prose ? undefined : NO_SPELLCHECK
+    builder.add(
+      line.from,
+      line.from,
+      Decoration.line({ class: classes.join(' '), attributes })
+    )
   }
 
   return builder.finish()
@@ -874,6 +1041,118 @@ function buildFoldHandles(view: EditorView): DecorationSet {
     }
   }
   return builder.finish()
+}
+
+// ------------------------------------------------------- cursor navigation
+
+interface BlockSpan {
+  from: number
+  to: number
+  fromLine: number
+  toLine: number
+  table: boolean
+}
+
+/** Every whole-line region currently standing in for the markdown beneath it. */
+function blockSpans(state: EditorState, layer: StateField<BlockLayer>): BlockSpan[] {
+  const doc = state.doc
+  const spans: BlockSpan[] = state.field(layer).regions.map((region) => ({
+    from: doc.line(region.fromLine).from,
+    to: doc.line(region.toLine).to,
+    fromLine: region.fromLine,
+    toLine: region.toLine,
+    table: region.table
+  }))
+
+  // Folded frontmatter is a block widget too, and it is why the caret could not
+  // reach the top of any note that has any.
+  for (const iter = state.field(frontmatterFold).iter(); iter.value; iter.next()) {
+    spans.push({
+      from: iter.from,
+      to: iter.to,
+      fromLine: doc.lineAt(iter.from).number,
+      toLine: doc.lineAt(iter.to).number,
+      table: false
+    })
+  }
+
+  return spans.sort((a, b) => a.from - b.from)
+}
+
+function moveCaret(view: EditorView, pos: number): boolean {
+  view.dispatch({
+    selection: EditorSelection.cursor(pos),
+    scrollIntoView: true,
+    userEvent: 'select'
+  })
+  return true
+}
+
+/**
+ * A table is edited in its cells, never on its lines, so arrowing into one puts
+ * the focus in a cell rather than dropping the caret behind the widget where it
+ * would be invisible. Entering from above lands in the header, from below in the
+ * last row.
+ */
+function focusTableCell(view: EditorView, span: BlockSpan, forward: boolean): boolean {
+  const table = view.contentDOM.querySelector(`.cm-table[data-line="${span.fromLine}"]`)
+  if (!table) return false
+  const column = table.querySelectorAll<HTMLElement>('.cm-table__cell[data-col="0"]')
+  const cell = forward ? column[0] : column[column.length - 1]
+  if (!cell) return false
+  focusCell(cell)
+  return true
+}
+
+/**
+ * Vertical motion across block widgets.
+ *
+ * `posAtCoords` deliberately steps *over* any block that is not text: given a y
+ * that lands in one, it walks half a line at a time until it finds a block it
+ * can put a caret in. That is right for a page break and wrong for everything
+ * Stone draws — a table, a diagram, a display equation, a folded frontmatter
+ * block are all things the user pressed Down to get *into*, and they were being
+ * jumped clean over.
+ *
+ * So the move is computed first, without dispatching it, and if it cleared a
+ * block on the way the caret goes to that block instead. Landing on a fenced
+ * block's line is what reveals its source, so the second press carries on
+ * through the markdown the first one exposed.
+ */
+function blockAwareMove(layer: StateField<BlockLayer>, forward: boolean): Command {
+  return (view) => {
+    const range = view.state.selection.main
+    if (!range.empty) return false
+
+    const spans = blockSpans(view.state, layer)
+    if (spans.length === 0) return false
+
+    const doc = view.state.doc
+    const head = range.head
+
+    // Already parked on a block: leave by the line beyond it, rather than by
+    // coordinates that sit somewhere inside a widget.
+    const inside = spans.find((span) => head >= span.from && head <= span.to)
+    if (inside) {
+      const line = forward ? inside.toLine + 1 : inside.fromLine - 1
+      if (line < 1 || line > doc.lines) return false
+      return moveCaret(view, doc.line(line).from)
+    }
+
+    const target = view.moveVertically(range, forward).head
+    if (target === head) return false
+
+    const lo = Math.min(head, target)
+    const hi = Math.max(head, target)
+    const cleared = spans.filter((span) => span.from >= lo && span.to <= hi)
+    if (cleared.length === 0) return false
+
+    // The nearest one in the direction of travel; a single press should never
+    // cross two blocks.
+    const span = forward ? cleared[0] : cleared[cleared.length - 1]
+    if (span.table && focusTableCell(view, span, forward)) return true
+    return moveCaret(view, doc.line(forward ? span.fromLine : span.toLine).from)
+  }
 }
 
 /** A fold toggle arrives as an effect, not a doc change, so watch for both. */
@@ -1071,5 +1350,26 @@ export function livePreview(handlers: LivePreviewHandlers) {
     }
   })
 
-  return [foldedLines, foldDecorations, frontmatterFold, blockLayer, marks, lines, handles, events]
+  return [
+    tableSource,
+    foldedLines,
+    foldDecorations,
+    frontmatterFold,
+    blockLayer,
+    marks,
+    lines,
+    handles,
+    events,
+    // A collapsed section is a replacement spanning line breaks. Without this
+    // the caret walks into the hidden text and disappears.
+    EditorView.atomicRanges.of((view) => view.state.field(foldDecorations)),
+    // Above the default keymap, below vim's — a vim user's `j` and `k` are
+    // their own business.
+    Prec.high(
+      keymap.of([
+        { key: 'ArrowDown', run: blockAwareMove(blockLayer, true) },
+        { key: 'ArrowUp', run: blockAwareMove(blockLayer, false) }
+      ])
+    )
+  ]
 }

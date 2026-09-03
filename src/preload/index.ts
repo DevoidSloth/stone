@@ -9,7 +9,17 @@ import type {
   LoadedPlugin,
   PluginCommand,
   CalendarAccount,
+  ClaudeActivity,
+  ClaudeMode,
+  ClaudeRunResult,
+  ClaudeStatus,
+  Transcript,
+  TranscribeProgress,
+  WhisperStatus,
   CloudTarget,
+  CodeRunResult,
+  CodeRunPhase,
+  CodeSessionInfo,
   Comment,
   GraphData,
   Mention,
@@ -121,7 +131,9 @@ const api = {
       call<{ relPath: string }>('folders:rename', relPath, name),
     move: (fromRel: string, toRel: string) =>
       call<{ relPath: string }>('folders:move', fromRel, toRel),
-    remove: (relPath: string) => call<boolean>('folders:delete', relPath)
+    remove: (relPath: string) => call<boolean>('folders:delete', relPath),
+    /** Open the note that defines a folder, creating it if there is none yet. */
+    note: (relPath: string) => call<{ relPath: string }>('folders:note', relPath)
   },
 
   trash: {
@@ -141,6 +153,7 @@ const api = {
     save: (data: Uint8Array, name: string) =>
       call<{ relPath: string; markdown: string }>('attachments:save', data, name),
     url: (relPath: string) => call<string>('attachments:url', relPath),
+    open: (relPath: string) => call<boolean>('attachments:open', relPath),
     pick: () => call<{ relPath: string; markdown: string }[]>('attachments:pick')
   },
 
@@ -242,11 +255,15 @@ const api = {
       call<{ doc: LibraryDoc; score: number; excerpt: string }[]>('library:search', query),
     text: (id: string) => call<string>('library:text', id),
     url: (absPath: string) => call<string>('library:url', absPath),
-    thumbnail: (id: string) => call<string | null>('library:thumbnail', id),
+    renderUrl: (id: string) => call<string | null>('library:renderUrl', id),
+    download: (absPath: string) => call<LibraryDoc[]>('library:download', absPath),
     reveal: (absPath: string) => call<boolean>('library:reveal', absPath),
     openExternally: (absPath: string) => call<boolean>('library:open', absPath),
     addFolder: (mode: 'index' | 'copy') =>
-      call<LibraryFolder | null>('library:addFolder', mode),
+      call<{ folder: LibraryFolder; libraryFolders: LibraryFolder[] } | null>(
+        'library:addFolder',
+        mode
+      ),
     removeFolder: (id: string) => call<LibraryFolder[]>('library:removeFolder', id),
     onScanned: (handler: (docs: LibraryDoc[]) => void) => {
       const listener = (_e: unknown, payload: LibraryDoc[]): void => handler(payload)
@@ -300,6 +317,127 @@ const api = {
     setEnabled: (enabled: boolean) =>
       call<{ running: boolean; bookmarklet: string }>('clipper:setEnabled', enabled),
     regenerateToken: () => call<{ bookmarklet: string }>('clipper:regenerateToken')
+  },
+
+  claude: {
+    status: () => call<ClaudeStatus>('claude:status'),
+    run: (request: {
+      id: string
+      mode: ClaudeMode
+      prompt: string
+      context: string | null
+      /** Agent mode: the session a follow-up continues. */
+      sessionId?: string | null
+    }) => call<ClaudeRunResult>('claude:run', request),
+    cancel: (id: string) => call<boolean>('claude:cancel', id),
+    /** Output so far, for the dialog's live preview. */
+    onChunk: (handler: (payload: { id: string; text: string }) => void) => {
+      const listener = (_e: unknown, payload: { id: string; text: string }): void => handler(payload)
+      ipcRenderer.on('claude:chunk', listener)
+      return (): void => {
+        ipcRenderer.removeListener('claude:chunk', listener)
+      }
+    },
+    /** Each tool the agent picks up, for the line that says what it is doing. */
+    onActivity: (handler: (payload: { id: string; activity: ClaudeActivity }) => void) => {
+      const listener = (_e: unknown, payload: { id: string; activity: ClaudeActivity }): void =>
+        handler(payload)
+      ipcRenderer.on('claude:activity', listener)
+      return (): void => {
+        ipcRenderer.removeListener('claude:activity', listener)
+      }
+    }
+  },
+
+  /**
+   * Recording, decoding and transcribing.
+   *
+   * Both write paths are streams rather than single calls: an hour of lecture
+   * is tens of megabytes as Opus and over a hundred as the PCM Whisper wants,
+   * and neither should cross the bridge in one piece.
+   */
+  audio: {
+    requestMicrophone: () => call<boolean>('audio:requestMicrophone'),
+    startRecording: (label: string) =>
+      call<{ id: string; relPath: string }>('audio:startRecording', label),
+    appendRecording: (id: string, chunk: Uint8Array) =>
+      call<number>('audio:appendRecording', id, chunk),
+    finishRecording: (id: string) =>
+      call<{ relPath: string; bytes: number }>('audio:finishRecording', id),
+    cancelRecording: (id: string) => call<boolean>('audio:cancelRecording', id),
+
+    openPcm: (id: string) => call<string>('audio:openPcm', id),
+    writePcm: (id: string, chunk: Uint8Array) => call<void>('audio:writePcm', id, chunk),
+    closePcm: (id: string) => call<string | null>('audio:closePcm', id),
+    discardPcm: (id: string) => call<void>('audio:discardPcm', id),
+
+    whisperStatus: () => call<WhisperStatus>('audio:whisperStatus'),
+    transcribe: (request: { id: string; audio: string; durationSeconds: number }) =>
+      call<Transcript>('audio:transcribe', request),
+    cancelTranscribe: (id: string) => call<boolean>('audio:cancelTranscribe', id),
+
+    transcript: (audioRelPath: string) => call<Transcript | null>('audio:transcript', audioRelPath),
+    transcripts: () => call<Transcript[]>('audio:transcripts'),
+    deleteTranscript: (audioRelPath: string) =>
+      call<boolean>('audio:deleteTranscript', audioRelPath),
+    duration: (audioRelPath: string) => call<number | null>('audio:duration', audioRelPath),
+
+    /** Segments as they are decoded, so a long transcript fills in as it runs. */
+    onProgress: (handler: (payload: TranscribeProgress) => void) => {
+      const listener = (_e: unknown, payload: TranscribeProgress): void => handler(payload)
+      ipcRenderer.on('audio:progress', listener)
+      return (): void => {
+        ipcRenderer.removeListener('audio:progress', listener)
+      }
+    }
+  },
+
+  /**
+   * Running a fenced code block, and the output it prints while it runs.
+   *
+   * `session` asks for the note's shared session — the notebook behaviour, where
+   * a block goes on from the ones above it. Main decides whether this particular
+   * block can have it and says so in the result, so the renderer never has to
+   * guess.
+   */
+  code: {
+    run: (request: {
+      id: string
+      lang: string
+      code: string
+      notePath: string | null
+      session: boolean
+    }) => call<CodeRunResult>('code:run', request),
+    cancel: (id: string) => call<boolean>('code:cancel', id),
+    /** Throws a note's sessions away; the next block starts from nothing. */
+    restartSession: (notePath: string, langId: string | null) =>
+      call<boolean>('code:session:restart', { notePath, langId }),
+    sessions: () => call<CodeSessionInfo[]>('code:sessions'),
+    onSessions: (handler: (sessions: CodeSessionInfo[]) => void) => {
+      const listener = (_e: unknown, payload: CodeSessionInfo[]): void => handler(payload)
+      ipcRenderer.on('code:sessions', listener)
+      return (): void => {
+        ipcRenderer.removeListener('code:sessions', listener)
+      }
+    },
+    /** Where a run has got to before it has printed anything. */
+    onPhase: (handler: (payload: CodeRunPhase) => void) => {
+      const listener = (_e: unknown, payload: CodeRunPhase): void => handler(payload)
+      ipcRenderer.on('code:phase', listener)
+      return (): void => {
+        ipcRenderer.removeListener('code:phase', listener)
+      }
+    },
+    onChunk: (handler: (payload: { id: string; stream: 'out' | 'err'; text: string }) => void) => {
+      const listener = (
+        _e: unknown,
+        payload: { id: string; stream: 'out' | 'err'; text: string }
+      ): void => handler(payload)
+      ipcRenderer.on('code:chunk', listener)
+      return (): void => {
+        ipcRenderer.removeListener('code:chunk', listener)
+      }
+    }
   },
 
   shell: {

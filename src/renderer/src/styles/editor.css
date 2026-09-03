@@ -29,10 +29,91 @@
   color: var(--text-faint);
   padding: 3px 6px;
   border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--dur-base) var(--ease-out);
+}
+
+.note__crumbs:hover {
+  background: var(--bg-hover);
 }
 
 .note__crumbs b {
   font-weight: 400;
+}
+
+/*
+ * Each crumb is a link to that folder's defining note. In a narrow split the
+ * folders give up their width long before the file's own name does — the
+ * eighth-place shrink factor is what buys that priority, and it beats hiding
+ * them outright because the trail stays clickable at any width.
+ */
+.note__crumb {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 0 8 auto;
+}
+
+.note__crumb-link {
+  color: inherit;
+  font: inherit;
+  max-width: 16ch;
+  border-radius: var(--r-xs);
+  padding: 1px 3px;
+  transition: color var(--dur-base) var(--ease-out), background var(--dur-base) var(--ease-out);
+}
+
+.note__crumb-link:hover {
+  color: var(--text-strong);
+  background: var(--bg-hover);
+}
+
+.note__crumb-sep {
+  color: var(--text-ghost);
+}
+
+.note__crumbs[data-narrow='true'] .note__crumb {
+  display: none;
+}
+
+/*
+ * The file's own name, last in the path and the handle for the picker. The
+ * chevron is what says the row is a control rather than a caption.
+ */
+.note__crumb-file {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 1 auto;
+  min-width: 7ch;
+  max-width: 28ch;
+  font: inherit;
+  color: var(--text);
+  background: none;
+  border: 0;
+  padding: 1px 3px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.note__crumb-file svg {
+  color: var(--text-ghost);
+  flex: 0 0 auto;
+}
+
+.note__crumbs:hover .note__crumb-file {
+  color: var(--text-strong);
+}
+
+/* The last crumb of a folder note is the folder itself, so it is named rather than linked. */
+.note__crumb-self {
+  color: var(--text-ghost);
+  font-size: var(--t-xs);
+  border: 1px solid var(--border-faint, var(--border));
+  border-radius: var(--r-xs);
+  padding: 0 5px;
+  white-space: nowrap;
 }
 
 .note__status {
@@ -118,6 +199,19 @@
 
 .cm-editor.cm-focused {
   outline: none;
+}
+
+/*
+ * Files are being dragged over the note.
+ *
+ * The whole editor lights up rather than a line, because the drop lands
+ * wherever the pointer is and pretending to be more precise than that would be
+ * a lie. Outset so the ring does not sit on top of the first line of text.
+ */
+.cm-editor.cm-dropping {
+  outline: 2px dashed var(--accent);
+  outline-offset: 8px;
+  border-radius: var(--r-md);
 }
 
 .cm-scroller {
@@ -215,6 +309,16 @@
   font-style: italic;
 }
 
+/*
+ * `<u>underline</u>`. Offset from the baseline so descenders stay legible,
+ * which is the one thing a plain `text-decoration: underline` gets wrong.
+ */
+.tok-underline {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
 .tok-strike {
   text-decoration: line-through;
   color: var(--text-faint);
@@ -226,7 +330,7 @@
   font-size: 0.86em;
   padding: 0.15em 0.4em;
   border-radius: var(--r-xs);
-  background: var(--gray-soft);
+  background: var(--wash-gray);
   color: var(--red);
 }
 
@@ -235,7 +339,7 @@
  * a passage, and a saturated block would outshout the prose around it.
  */
 .tok-highlight {
-  background: var(--yellow-soft);
+  background: var(--wash-yellow);
   border-radius: var(--r-xs);
   padding: 0.1em 0.15em;
   color: inherit;
@@ -278,7 +382,7 @@
 
 .tok-tag {
   color: var(--text-muted);
-  background: var(--gray-soft);
+  background: var(--wash-gray);
   border-radius: var(--r-xs);
   padding: 0.1em 0.42em;
   font-size: 0.82em;
@@ -287,21 +391,21 @@
 .tok-due {
   font-size: 0.82em;
   color: var(--text-muted);
-  background: var(--blue-soft);
+  background: var(--wash-blue);
   border-radius: var(--r-xs);
   padding: 0.12em 0.4em;
 }
 
 .tok-due--overdue {
   color: var(--red);
-  background: var(--red-soft);
+  background: var(--wash-red);
 }
 
 .tok-pri {
   font-size: 0.78em;
   font-weight: 500;
   color: var(--red);
-  background: var(--red-soft);
+  background: var(--wash-red);
   border-radius: var(--r-xs);
   padding: 0.14em 0.42em;
 }
@@ -310,7 +414,7 @@
 .tok-pri--medium,
 .tok-pri--med {
   color: var(--text-muted);
-  background: var(--gray-soft);
+  background: var(--wash-gray);
 }
 
 .tok-est {
@@ -320,6 +424,17 @@
 
 .tok-mark {
   color: var(--text-ghost);
+}
+
+/*
+ * The glyph an ASCII arrow is drawn as. A hair of tracking either side keeps
+ * "a -> b" from closing up now that two characters have become one, and the
+ * slightly larger size stops the arrow reading as a stray dash mid-sentence.
+ */
+.tok-arrow {
+  font-size: 1.05em;
+  line-height: 1;
+  letter-spacing: 0.02em;
 }
 
 .tok-hr {
@@ -367,22 +482,57 @@
   padding-left: 14px;
 }
 
+/*
+ * The plate is painted on a pseudo-element rather than on the line itself.
+ *
+ * CodeMirror draws the selection into a layer of its own, a sibling of
+ * `.cm-content` sitting at a negative `z-index`, so an opaque background on a
+ * line paints straight over it: dragging across a code block really did select
+ * the text — the toolbar even appeared — and showed nothing at all. The plate
+ * goes below that layer instead, leaving the selection where it belongs,
+ * between the background and the glyphs.
+ *
+ * The depth is -10 rather than -2 because CodeMirror hands each layer
+ * `-1 - <its index among the registered layers>`. With the cursor layer
+ * registered first the selection lands on -2 today, which a -2 plate only
+ * survives on tree order; one more layer from any extension would put the
+ * selection at -3, under the plate, and the bug would be back. -10 clears the
+ * whole range instead of racing it.
+ *
+ * The line must stay out of its own stacking context for that to hold: give it
+ * `position: relative` for the pseudo to anchor to, and never a `z-index`.
+ */
 .cm-line.tok-line-code {
   font-family: var(--font-mono);
   font-size: 0.85em;
-  background: var(--bg-surface);
+  position: relative;
   padding-left: var(--sp-4);
   padding-right: var(--sp-4);
 }
 
+.cm-line.tok-line-code::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -10;
+  background: var(--bg-surface);
+  pointer-events: none;
+}
+
 .cm-line.tok-line-code-first {
-  border-radius: var(--r-sm) var(--r-sm) 0 0;
   padding-top: var(--sp-3);
 }
 
+.cm-line.tok-line-code-first::before {
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+}
+
 .cm-line.tok-line-code-last {
-  border-radius: 0 0 var(--r-sm) var(--r-sm);
   padding-bottom: var(--sp-3);
+}
+
+.cm-line.tok-line-code-last::before {
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
 }
 
 /* Checkbox widget rendered in place of `[ ]`. */

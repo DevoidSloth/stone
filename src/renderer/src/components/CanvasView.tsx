@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CanvasData, CanvasEdge, CanvasFile, CanvasNode, CanvasSide } from '@shared/types'
 import { useStone } from '../store'
 import { IconNote, IconPlus, IconTrash, IconX } from '../ui/icons'
+import { PageIcon } from './PageDressing'
 
 /**
  * The canvas.
@@ -625,7 +626,7 @@ export function CanvasView() {
                 {node.type === 'file' && (
                   <>
                     <div className="cnode__title truncate">
-                      {note?.icon && <span>{note.icon}</span>}
+                      {note?.icon && <PageIcon icon={note.icon} />}
                       {note?.title ?? node.file.replace(/\.md$/, '')}
                     </div>
                     <div className="cnode__excerpt">

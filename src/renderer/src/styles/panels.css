@@ -21,11 +21,131 @@
   flex: 1;
   min-width: 0;
   min-height: 0;
-  border-left: 1px solid var(--border-hair);
 }
 
-.panes__pane:first-child {
-  border-left: 0;
+/* The pane a drag has picked up recedes, so the row reads as one short. */
+.panes__pane[data-lifted='true'] {
+  opacity: 0.4;
+}
+
+/* Holds the pane's content and, during a drag, the drop surface over it. */
+.panes__body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/*
+ * The seam between two panes: a hairline to look at, and a wider invisible
+ * strip either side of it to actually hit, which is the difference between a
+ * divider people drag and one they miss.
+ */
+.panes__divider {
+  position: relative;
+  flex: 0 0 1px;
+  background: var(--border-hair);
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.panes__divider::after {
+  content: '';
+  position: absolute;
+  inset: 0 -3px;
+}
+
+.panes__divider:hover,
+body.is-resizing .panes__divider {
+  background: var(--accent);
+}
+
+/* Once a drag is under way the whole row stops trying to select text. */
+body.is-resizing,
+.panes[data-dragging] {
+  user-select: none;
+}
+
+body.is-resizing * {
+  cursor: col-resize !important;
+}
+
+/* ------------------------------------------------------------ drag & drop */
+
+.panedrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+}
+
+/* Where the drop would land. It animates between zones, so the shape itself
+   explains the rule rather than a legend having to. */
+.panedrop__hint {
+  position: absolute;
+  top: var(--sp-2);
+  bottom: var(--sp-2);
+  left: var(--sp-2);
+  right: var(--sp-2);
+  border: 1.5px solid var(--accent);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  pointer-events: none;
+  transition:
+    left var(--dur-base) var(--ease-out),
+    right var(--dur-base) var(--ease-out);
+}
+
+.panedrop__hint[data-zone='left'] {
+  right: 55%;
+}
+
+.panedrop__hint[data-zone='right'] {
+  left: 55%;
+}
+
+/* The gap a dragged tab would drop into. */
+.tabstrip__slot {
+  width: 2px;
+  height: 18px;
+  border-radius: 1px;
+  background: var(--accent);
+  flex: 0 0 auto;
+}
+
+.tab[draggable='true'] {
+  cursor: grab;
+}
+
+.tab[data-dragging='true'] {
+  opacity: 0.35;
+}
+
+.tabstrip__grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 22px;
+  border-radius: var(--r-xs);
+  color: var(--text-ghost);
+  cursor: grab;
+  opacity: 0;
+  flex: 0 0 auto;
+}
+
+.tabstrip:hover .tabstrip__grip {
+  opacity: 1;
+}
+
+.tabstrip__grip:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.tabstrip__grip:active {
+  cursor: grabbing;
 }
 
 .tabstrip {

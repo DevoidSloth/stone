@@ -429,7 +429,10 @@ export async function movePath(
   }
 
   await ensureDir(path.dirname(to))
-  if (await exists(to)) throw new Error(`"${path.basename(toRel)}" already exists there.`)
+  // Not a plain `exists` check: a case-only rename finds itself. See isSameEntry.
+  if ((await exists(to)) && !(await isSameEntry(from, to))) {
+    throw new Error(`"${path.basename(toRel)}" already exists there.`)
+  }
   await fs.rename(from, to)
   return toRelPath(vaultPath, to)
 }
@@ -454,6 +457,24 @@ export async function exists(p: string): Promise<boolean> {
   try {
     await fs.access(p)
     return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether two paths are the same entry on disk.
+ *
+ * macOS formats APFS case-insensitively by default, so `exists()` answers true
+ * for `Notes` while only `notes` is on disk. Every "is the target taken?" check
+ * therefore reports a collision with the very file being renamed the moment the
+ * rename is a change of case — which is exactly when someone is fixing
+ * capitalisation. Inode and device identify the entry itself and settle it.
+ */
+export async function isSameEntry(a: string, b: string): Promise<boolean> {
+  try {
+    const [statA, statB] = await Promise.all([fs.stat(a), fs.stat(b)])
+    return statA.ino === statB.ino && statA.dev === statB.dev
   } catch {
     return false
   }
@@ -486,11 +507,22 @@ export function sanitizeFilename(title: string): string {
   )
 }
 
-/** Append ` 2`, ` 3`, … until the path is free. */
-export async function uniquePath(dir: string, base: string): Promise<string> {
+/**
+ * Append ` 2`, ` 3`, … until the path is free.
+ *
+ * `ignore` is the file being renamed, when there is one: a case-only rename
+ * collides with itself on a case-insensitive filesystem, and treating that as
+ * taken turns "Foo" → "foo" into "foo 2".
+ */
+export async function uniquePath(dir: string, base: string, ignore?: string): Promise<string> {
+  const free = async (candidate: string): Promise<boolean> => {
+    if (!(await exists(candidate))) return true
+    return ignore ? isSameEntry(candidate, ignore) : false
+  }
+
   let candidate = path.join(dir, `${base}.md`)
   let n = 2
-  while (await exists(candidate)) {
+  while (!(await free(candidate))) {
     candidate = path.join(dir, `${base} ${n}.md`)
     n++
   }

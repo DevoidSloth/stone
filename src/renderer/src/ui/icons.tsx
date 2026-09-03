@@ -45,6 +45,12 @@ export const IconCalendar = (p: IconProps) => (
   </Icon>
 )
 
+export const IconPlay = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M5.25 3.4 12.4 7.6a.5.5 0 0 1 0 .86L5.25 12.6a.5.5 0 0 1-.75-.43V3.83a.5.5 0 0 1 .75-.43Z" />
+  </Icon>
+)
+
 export const IconCheck = (p: IconProps) => (
   <Icon {...p}>
     <path d="m3 8.4 3.2 3.1L13 4.8" />
@@ -277,6 +283,18 @@ export const IconSplit = (p: IconProps) => (
   </Icon>
 )
 
+/** Two columns of dots — the universal "pick this up" affordance. */
+export const IconGrip = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="6" cy="4" r=".85" fill="currentColor" stroke="none" />
+    <circle cx="10" cy="4" r=".85" fill="currentColor" stroke="none" />
+    <circle cx="6" cy="8" r=".85" fill="currentColor" stroke="none" />
+    <circle cx="10" cy="8" r=".85" fill="currentColor" stroke="none" />
+    <circle cx="6" cy="12" r=".85" fill="currentColor" stroke="none" />
+    <circle cx="10" cy="12" r=".85" fill="currentColor" stroke="none" />
+  </Icon>
+)
+
 export const IconMore = (p: IconProps) => (
   <Icon {...p}>
     <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
@@ -306,6 +324,14 @@ export const IconSort = (p: IconProps) => (
 export const IconDownload = (p: IconProps) => (
   <Icon {...p}>
     <path d="M8 2.4v7.4M5.1 7l2.9 2.9L10.9 7M2.6 12.2v.4a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1v-.4" />
+  </Icon>
+)
+
+export const IconPrint = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4.75 6.25V2.5h6.5v3.75" />
+    <path d="M4.75 11.25h-1.5a1 1 0 0 1-1-1V7.25a1 1 0 0 1 1-1h9.5a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1.5" />
+    <rect x="4.75" y="9.25" width="6.5" height="4.25" rx="1" />
   </Icon>
 )
 
@@ -343,6 +369,13 @@ export const IconRelation = (p: IconProps) => (
   </Icon>
 )
 
+export const IconSparkle = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M6.5 2.25 7.7 5.3 10.75 6.5 7.7 7.7 6.5 10.75 5.3 7.7 2.25 6.5 5.3 5.3Z" />
+    <path d="M11.75 9.5l.6 1.65 1.65.6-1.65.6-.6 1.65-.6-1.65-1.65-.6 1.65-.6Z" />
+  </Icon>
+)
+
 export const IconPalette = (p: IconProps) => (
   <Icon {...p}>
     <path d="M8 2a6 6 0 0 0 0 12c.9 0 1.4-.6 1.4-1.3 0-.9-.8-1.2-.8-2 0-.6.5-1 1.1-1H11a3 3 0 0 0 3-3c0-2.6-2.7-4.7-6-4.7Z" />
@@ -376,3 +409,42 @@ export function StoneMark({ size = 20 }: { size?: number }) {
     </svg>
   )
 }
+
+export const IconMic = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="5.75" y="1.75" width="4.5" height="7.5" rx="2.25" />
+    <path d="M3.25 7.25a4.75 4.75 0 0 0 9.5 0M8 12v2.25" />
+  </Icon>
+)
+
+export const IconStop = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="3.75" y="3.75" width="8.5" height="8.5" rx="1.5" fill="currentColor" stroke="none" />
+  </Icon>
+)
+
+export const IconPause = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M6 3.5v9M10 3.5v9" strokeWidth={2} />
+  </Icon>
+)
+
+export const IconSkipBack = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M8.25 3.5a4.75 4.75 0 1 1-4.6 5.94" />
+    <path d="M2 5.5h2.6M3.6 3.4v2.6" />
+  </Icon>
+)
+
+export const IconSkipForward = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M7.75 3.5a4.75 4.75 0 1 0 4.6 5.94" />
+    <path d="M14 5.5h-2.6M12.4 3.4v2.6" />
+  </Icon>
+)
+
+export const IconWaveform = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M2.5 6.5v3M5.25 4v8M8 2.25v11.5M10.75 4.75v6.5M13.5 6.5v3" />
+  </Icon>
+)

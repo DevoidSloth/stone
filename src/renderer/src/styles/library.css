@@ -211,3 +211,241 @@
   gap: var(--sp-2);
   justify-content: center;
 }
+
+/* ------------------------------------------------- a document, in a pane */
+
+.docpane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.docpane__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border-hair);
+}
+
+.docpane__head b {
+  font-size: var(--t-xs);
+  font-weight: 500;
+  max-width: 40%;
+}
+
+.docpane__name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 45%;
+  padding: 2px 5px;
+  margin: -2px -5px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.docpane__name svg {
+  color: var(--text-ghost);
+  flex: 0 0 auto;
+}
+
+.docpane__name:hover {
+  background: var(--bg-hover);
+}
+
+.docpane__meta {
+  font-size: var(--t-2xs);
+  color: var(--text-ghost);
+  white-space: nowrap;
+}
+
+.docpane__tools {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
+}
+
+/* ----------------------------------------------------------- pdf viewer */
+
+.pdfview {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.pdfview__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border-hair);
+}
+
+.pdfview__spacer {
+  flex: 1;
+}
+
+.pdfview__count {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--t-2xs);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.pdfview__page {
+  width: 46px;
+  padding: 2px 4px;
+  text-align: right;
+  font-size: var(--t-2xs);
+}
+
+.pdfview__zoom .segmented__btn {
+  font-size: var(--t-2xs);
+  padding: 2px 6px;
+}
+
+.pdfview__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/*
+ * The rail. A notebook is a thing you flip through, and a scrollbar is a poor
+ * substitute — this gives every page a place, marks the ones with handwriting,
+ * and keeps the current page visible.
+ */
+.pdfview__rail {
+  flex: 0 0 74px;
+  overflow-y: auto;
+  padding: var(--sp-2) 0;
+  border-right: 1px solid var(--border-hair);
+  background: var(--bg-surface);
+}
+
+.pdfthumb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  padding: 4px 0 6px;
+  cursor: pointer;
+  color: var(--text-ghost);
+}
+
+.pdfthumb:hover .pdfthumb__box {
+  border-color: var(--text-ghost);
+}
+
+.pdfthumb[aria-current='true'] .pdfthumb__box {
+  border-color: var(--accent, var(--text-faint));
+  box-shadow: 0 0 0 2px var(--accent, var(--text-faint));
+}
+
+.pdfthumb[aria-current='true'] .pdfthumb__n {
+  color: var(--text-strong);
+}
+
+.pdfthumb__box {
+  position: relative;
+  display: block;
+  width: 40px;
+  min-height: 52px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: white;
+  overflow: hidden;
+}
+
+.pdfthumb__canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.pdfthumb__n {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pdfview__scroll {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: var(--sp-4);
+  background: var(--bg-sunken, var(--bg-surface));
+}
+
+.pdfview__status {
+  font-size: var(--t-2xs);
+  color: var(--text-ghost);
+}
+
+.pdfview__page {
+  position: relative;
+  box-shadow: var(--shadow-md, 0 2px 12px rgb(0 0 0 / 0.14));
+  background: white;
+}
+
+.pdfview__canvas {
+  display: block;
+}
+
+.docpane__frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: var(--bg-sunken, var(--bg-surface));
+}
+
+.docpane__text {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-4);
+}
+
+.docpane__text pre {
+  margin: 0;
+  font-size: var(--t-2xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-muted);
+}
+
+.docpane__links {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--border-hair);
+}
+
+.docpane__link {
+  font-size: var(--t-2xs);
+  color: var(--text-muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+}
+
+.docpane__link:hover {
+  color: var(--text-strong);
+}

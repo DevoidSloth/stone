@@ -6,6 +6,7 @@ import { builtInValue, runView } from '@shared/view-query'
 import { compareTasks, dueDay } from '@shared/task-syntax'
 import { useStone } from '../store'
 import { relativeDay } from '../lib/dates'
+import { PageIcon } from './PageDressing'
 
 /**
  * A query, rendered where it was written.
@@ -123,7 +124,7 @@ export function EmbeddedQuery({ source }: { source: string }) {
               onClick={() => void openNote(note.relPath)}
             >
               <span className="embedq__label truncate">
-                {note.icon && <span className="dbtable__icon">{note.icon}</span>}
+                {note.icon && <PageIcon icon={note.icon} className="dbtable__icon" />}
                 {note.title}
               </span>
               {/* Extra columns are shown as trailing metadata rather than as a

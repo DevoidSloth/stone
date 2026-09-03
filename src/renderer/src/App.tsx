@@ -17,9 +17,14 @@ import { LibraryView } from './components/LibraryView'
 import { SidePanels } from './components/SidePanels'
 import { AgendaPane } from './components/AgendaPane'
 import { CommandPalette } from './components/CommandPalette'
+import { QuickOpen } from './components/QuickOpen'
 import { QuickAdd } from './components/QuickAdd'
 import { SettingsModal } from './components/SettingsModal'
+import { PromptDialog } from './components/PromptDialog'
+import { ClaudeDialog } from './components/ClaudeDialog'
+import { AudioBar } from './components/AudioBar'
 import { Welcome } from './components/Welcome'
+import { IconX } from './ui/icons'
 
 /** True when the keystroke belongs to a field or the editor, not to a shortcut. */
 function isTyping(target: EventTarget | null): boolean {
@@ -150,23 +155,48 @@ export function App() {
           {showInspector && <SidePanels />}
           {showAgenda && <AgendaPane />}
         </div>
+
+        {/* A row of the layout rather than something floating over it: a bar
+            that covered the last line of a note would hide exactly the line
+            being written while a lecture is recorded. */}
+        <AudioBar />
       </div>
 
       <CommandPalette />
+      <QuickOpen />
       <QuickAdd />
       <SettingsModal />
+      <PromptDialog />
+      <ClaudeDialog />
 
       <div className="toasts" role="status" aria-live="polite">
         {toasts.map((toast) => (
-          <button
-            key={toast.id}
-            type="button"
-            className={`toast toast--${toast.tone}`}
-            onClick={() => dismissToast(toast.id)}
-          >
+          <div key={toast.id} className={`toast toast--${toast.tone}`}>
             <span className="toast__dot" />
-            {toast.message}
-          </button>
+            {/* Selectable, not a button label: an error you cannot select is an
+                error you cannot report. */}
+            <span className="toast__message">{toast.message}</span>
+            {toast.tone === 'error' && (
+              <button
+                type="button"
+                className="toast__action"
+                title="Copy this message"
+                onClick={() => {
+                  void navigator.clipboard.writeText(toast.message)
+                }}
+              >
+                Copy
+              </button>
+            )}
+            <button
+              type="button"
+              className="toast__close"
+              aria-label="Dismiss"
+              onClick={() => dismissToast(toast.id)}
+            >
+              <IconX size={11} />
+            </button>
+          </div>
         ))}
       </div>
     </div>
