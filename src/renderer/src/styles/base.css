@@ -99,10 +99,15 @@ a {
   outline: none;
 }
 
+/*
+ * No `border-radius` here. It would set the *element's* radius, not the ring's,
+ * so focusing anything rounder than 3px visibly squared its corners for as long
+ * as it held focus. Chromium already draws the outline along the element's own
+ * radius.
+ */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-  border-radius: var(--r-xs);
 }
 
 /* ------------------------------------------------------------------ helpers */
@@ -298,5 +303,134 @@ textarea.field {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* ----------------------------------------------------------------- tooltip */
+
+/*
+ * Positioned by the component at the anchor's centre; the transform is what
+ * actually centres it, so the popup never needs its own width measured.
+ */
+.tip[hidden] {
+  display: none;
+}
+
+.tip {
+  position: fixed;
+  z-index: var(--z-toast);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: 280px;
+  padding: 5px 8px;
+  border-radius: var(--r-sm);
+  background: var(--bg-tooltip);
+  color: var(--text-tooltip);
+  font-size: var(--t-xs);
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: var(--shadow-sm);
+  animation: fade-in var(--dur-base) var(--ease-out);
+}
+
+.tip--bottom { transform: translate(-50%, 0); }
+.tip--top { transform: translate(-50%, -100%); }
+
+.tip__label { white-space: normal; }
+
+.tip__keys {
+  flex: none;
+  color: var(--text-tooltip-faint);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--track-snug);
+}
+
+/* --------------------------------------------------------------- spinner */
+
+/*
+ * One indeterminate indicator for the whole app. Long commands — reindex,
+ * whole-vault export — used to run for many seconds with no sign that anything
+ * was happening, because there was nothing to reach for.
+ */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 620ms linear infinite;
+  transform-origin: 50% 50%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /*
+   * The blanket reduce rule above collapses every animation to 0.01ms, which
+   * would leave the spinner frozen and reading as a stuck app. A slow, steady
+   * rotation carries the same "still working" signal without the spin.
+   */
+  .spin {
+    animation: spin 2.4s linear infinite !important;
+  }
+}
+
+/* -------------------------------------------------------- higher contrast */
+
+/*
+ * Stone's calm comes from structure carried almost entirely in low-alpha ink —
+ * hairlines at 9%, ghost text at 36%. That is the first thing to disappear for
+ * anyone who needs contrast, so the tokens step up rather than the components
+ * being rewritten. This is what the token layer was built for.
+ */
+@media (prefers-contrast: more) {
+  :root,
+  :root[data-theme='light'] {
+    --border-faint: rgb(55 53 47 / 18%);
+    --border-hair: rgb(55 53 47 / 30%);
+    --border: rgb(55 53 47 / 46%);
+    --border-strong: rgb(55 53 47 / 62%);
+    --text-muted: rgb(55 53 47 / 82%);
+    --text-faint: rgb(55 53 47 / 72%);
+    --text-ghost: rgb(55 53 47 / 60%);
+    --bg-hover: rgb(55 53 47 / 14%);
+    --bg-active: rgb(55 53 47 / 24%);
+  }
+
+  :root[data-theme='dark'] {
+    --border-faint: rgb(255 255 255 / 20%);
+    --border-hair: rgb(255 255 255 / 32%);
+    --border: rgb(255 255 255 / 46%);
+    --border-strong: rgb(255 255 255 / 64%);
+    --text-muted: rgb(255 255 255 / 84%);
+    --text-faint: rgb(255 255 255 / 74%);
+    --text-ghost: rgb(255 255 255 / 62%);
+    --bg-hover: rgb(255 255 255 / 12%);
+    --bg-active: rgb(255 255 255 / 20%);
+  }
+}
+
+/*
+ * Windows High Contrast replaces the palette outright, and a layout whose only
+ * structure is a hairline loses all of it. Borders come back as system colours.
+ */
+@media (forced-colors: active) {
+  .titlebar,
+  .sidebar,
+  .tabstrip,
+  .agenda,
+  .panels {
+    border-color: CanvasText;
+  }
+
+  .btn,
+  .tab,
+  .segmented__btn,
+  .ctx,
+  .tip {
+    border: 1px solid CanvasText;
+  }
+
+  :focus-visible {
+    outline: 2px solid Highlight;
   }
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useStone } from '../store'
 import { chordFromEvent, formatChord, fromAccelerator, toAccelerator } from '../lib/keys'
 import { IconCopy, IconRefresh } from '../ui/icons'
+import { describeError } from '../lib/errors'
 
 function Toggle({ checked, onChange, label }: {
   checked: boolean
@@ -80,7 +81,7 @@ export function CaptureSettings() {
       await updateSettings({ clipperEnabled: next })
       if (next) toast('Clipper listening. Drag the bookmarklet to your bookmarks bar.', 'success')
     } catch (err) {
-      toast((err as Error).message, 'error')
+      toast(describeError(err), 'error')
     }
   }
 
@@ -195,7 +196,7 @@ export function CaptureSettings() {
               <button
                 type="button"
                 className="btn btn--ghost btn--sm"
-                title="Issue a new secret. The bookmarklet you already saved stops working."
+                data-tip="Issue a new secret. The bookmarklet you already saved stops working."
                 onClick={() => {
                   void window.stone.clipper.regenerateToken().then((r) => {
                     setClipper((c) => ({ ...c, bookmarklet: r.bookmarklet }))

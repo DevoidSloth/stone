@@ -3,7 +3,8 @@ import type { Priority, Task } from '@shared/types'
 import { compareTasks, dueDay } from '@shared/task-syntax'
 import { useStone } from '../store'
 import { addDays, relativeDay, today } from '../lib/dates'
-import { IconHash, IconPlus } from '../ui/icons'
+import { IconCheck, IconCopy, IconHash, IconNote, IconPlus } from '../ui/icons'
+import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
 
 type Bucket = 'overdue' | 'today' | 'tomorrow' | 'week' | 'later' | 'someday' | 'done'
 
@@ -33,12 +34,44 @@ function bucketOf(task: Task, now: string, weekEnd: string): Bucket {
 export function TaskRow({ task, showSource = true }: { task: Task; showSource?: boolean }) {
   const toggleTask = useStone((s) => s.toggleTask)
   const openNote = useStone((s) => s.openNote)
+  const { menu, open: openMenu, close: closeMenu } = useContextMenu()
 
   const due = dueDay(task.due)
   const overdue = Boolean(due && due < today() && task.status !== 'done')
 
+  const items = (): MenuItem[] => [
+    {
+      id: 'toggle',
+      label: task.status === 'done' ? 'Mark as not done' : 'Mark as done',
+      icon: <IconCheck size={14} />,
+      run: () => void toggleTask(task)
+    },
+    {
+      id: 'open',
+      label: 'Open the note it lives in',
+      icon: <IconNote size={14} />,
+      run: () => void openNote(task.relPath, { line: task.line })
+    },
+    {
+      id: 'open-split',
+      label: 'Open in a new tab',
+      run: () => void openNote(task.relPath, { line: task.line, newTab: true })
+    },
+    {
+      id: 'copy',
+      label: 'Copy the task text',
+      separated: true,
+      icon: <IconCopy size={14} />,
+      run: () => void navigator.clipboard.writeText(task.text)
+    }
+  ]
+
   return (
-    <div className={`task ${task.status === 'done' ? 'task--done' : ''}`}>
+    <div
+      className={`task ${task.status === 'done' ? 'task--done' : ''}`}
+      onContextMenu={(event) => openMenu(event, items())}
+    >
+      {menu && <ContextMenu state={menu} onClose={closeMenu} />}
       <button
         type="button"
         className="task__box"
@@ -54,7 +87,7 @@ export function TaskRow({ task, showSource = true }: { task: Task; showSource?: 
           type="button"
           className="task__text"
           onClick={() => void openNote(task.relPath)}
-          title="Open the note this task lives in"
+          data-tip="Open the note this task lives in"
         >
           {task.text || '(empty task)'}
         </button>

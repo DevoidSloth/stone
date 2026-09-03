@@ -403,6 +403,12 @@ export interface Settings {
   /** Template applied to a freshly created daily note, by relPath. */
   dailyTemplate: string | null
   editorFont: 'serif' | 'sans' | 'mono'
+  /** Editor body size in px. The prose measure scales with it. */
+  editorFontSize: number
+  /** Shell column widths in px, dragged by the user and remembered. */
+  sidebarWidth: number
+  inspectorWidth: number
+  agendaWidth: number
   editorWidth: number
   showStrataRail: boolean
   /**

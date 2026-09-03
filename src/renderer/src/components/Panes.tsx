@@ -1,8 +1,18 @@
-import { Fragment, useRef, useState, type DragEvent, type PointerEvent, type RefObject } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent,
+  type PointerEvent,
+  type RefObject
+} from 'react'
 import { MAX_PANES, docPathOf, isDocTarget, useStone } from '../store'
 import { NoteView } from './NoteView'
 import { DocumentPane } from './DocumentPane'
-import { IconGrip, IconPlus, IconSplit, IconX } from '../ui/icons'
+import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
+import { Tip } from '../ui/Tip'
+import { IconCopy, IconFolder, IconGrip, IconPlus, IconSplit, IconX } from '../ui/icons'
 
 /**
  * Tabs and split panes.
@@ -120,12 +130,75 @@ function TabStrip({ paneIndex }: { paneIndex: number }) {
   const closePane = useStone((s) => s.closePane)
   const splitPane = useStone((s) => s.splitPane)
   const moveTab = useStone((s) => s.moveTab)
+  const closeOtherTabs = useStone((s) => s.closeOtherTabs)
+  const closeTabsToRight = useStone((s) => s.closeTabsToRight)
+  const tabToNewPane = useStone((s) => s.tabToNewPane)
   const setPaneDrag = useStone((s) => s.setPaneDrag)
   const createNote = useStone((s) => s.createNote)
 
   const [slot, setSlot] = useState<number | null>(null)
+  const { menu, open: openMenu, close: closeMenu } = useContextMenu()
+  const strip = useRef<HTMLDivElement>(null)
+  const activeTab = useRef<HTMLDivElement>(null)
+
+  // With more tabs than fit, the strip scrolls but shows no scrollbar — so a
+  // tab activated from the palette or a shortcut could sit off-screen in its
+  // own tab bar with nothing to say so.
+  useEffect(() => {
+    activeTab.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [pane?.active, pane?.tabs.length])
 
   if (!pane) return null
+
+  const tabMenu = (tabId: string, index: number): MenuItem[] => {
+    const tab = pane.tabs[index]
+    const relPath = tab?.relPath ?? ''
+    const target = isDocTarget(relPath) ? docPathOf(relPath) : relPath
+    return [
+      {
+        id: 'close',
+        label: 'Close',
+        keys: 'Mod+W',
+        run: () => closeTab(paneIndex, tabId)
+      },
+      {
+        id: 'close-others',
+        label: 'Close others',
+        disabled: pane.tabs.length < 2,
+        run: () => closeOtherTabs(paneIndex, tabId)
+      },
+      {
+        id: 'close-right',
+        label: 'Close to the right',
+        disabled: index >= pane.tabs.length - 1,
+        run: () => closeTabsToRight(paneIndex, tabId)
+      },
+      {
+        id: 'split',
+        label: 'Open in a new split',
+        separated: true,
+        disabled: panes.length >= MAX_PANES,
+        run: () => tabToNewPane({ pane: paneIndex, tabId }, panes.length)
+      },
+      {
+        id: 'copy-path',
+        label: 'Copy path',
+        icon: <IconCopy size={14} />,
+        run: () => void navigator.clipboard.writeText(target)
+      },
+      {
+        id: 'copy-link',
+        label: 'Copy as a link',
+        run: () => void navigator.clipboard.writeText(`[[${basename(relPath)}]]`)
+      },
+      {
+        id: 'reveal',
+        label: 'Reveal in the file manager',
+        icon: <IconFolder size={14} />,
+        run: () => void window.stone.vault.revealInFolder(target)
+      }
+    ]
+  }
 
   /** The gap the pointer is nearest, counted in tabs from the left. */
   const slotAt = (event: DragEvent<HTMLDivElement>): number => {
@@ -144,6 +217,9 @@ function TabStrip({ paneIndex }: { paneIndex: number }) {
     <div className="tabstrip" data-active={paneIndex === activePane}>
       <div
         className="tabstrip__tabs"
+        ref={strip}
+        role="tablist"
+        aria-label="Open notes"
         onDragOver={(event) => {
           if (drag?.kind !== 'tab') return
           event.preventDefault()
@@ -168,9 +244,12 @@ function TabStrip({ paneIndex }: { paneIndex: number }) {
             <div
               className="tab"
               data-tab
+              ref={index === pane.active ? activeTab : undefined}
               draggable
-              data-dragging={drag?.kind === 'tab' && drag.tabId === tab.id}
+              role="tab"
               aria-selected={index === pane.active}
+              data-dragging={drag?.kind === 'tab' && drag.tabId === tab.id}
+              onContextMenu={(event) => openMenu(event, tabMenu(tab.id, index))}
               onDragStart={(event) => {
                 event.dataTransfer.effectAllowed = 'move'
                 // Chromium wants *something* on the transfer or the drag never
@@ -193,8 +272,18 @@ function TabStrip({ paneIndex }: { paneIndex: number }) {
               <button
                 type="button"
                 className="tab__label truncate"
+                tabIndex={index === pane.active ? 0 : -1}
                 onClick={() => focusTab(paneIndex, index)}
-                title={tab.relPath}
+                onKeyDown={(event) => {
+                  // Arrow keys walk the strip, which is what `role="tablist"`
+                  // promises and what the old `aria-selected`-on-a-div did not
+                  // deliver.
+                  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+                  event.preventDefault()
+                  const delta = event.key === 'ArrowRight' ? 1 : -1
+                  const next = (index + delta + pane.tabs.length) % pane.tabs.length
+                  focusTab(paneIndex, next)
+                }}
               >
                 {docs[tab.relPath]?.dirty && <span className="tab__dot" />}
                 {basename(tab.relPath)}
@@ -212,16 +301,19 @@ function TabStrip({ paneIndex }: { paneIndex: number }) {
         ))}
         {marker(pane.tabs.length)}
 
-        <button
-          type="button"
-          className="tabstrip__new"
-          aria-label="New note in a new tab"
-          title="New note in a new tab"
-          onClick={() => void createNote('Untitled', undefined, { pane: paneIndex, newTab: true })}
-        >
-          <IconPlus size={13} />
-        </button>
+        <Tip label="New note in a new tab">
+          <button
+            type="button"
+            className="tabstrip__new"
+            aria-label="New note in a new tab"
+            onClick={() => void createNote('Untitled', undefined, { pane: paneIndex, newTab: true })}
+          >
+            <IconPlus size={13} />
+          </button>
+        </Tip>
       </div>
+
+      {menu && <ContextMenu state={menu} onClose={closeMenu} />}
 
       <div className="tabstrip__tools">
         {panes.length > 1 && (
@@ -231,7 +323,6 @@ function TabStrip({ paneIndex }: { paneIndex: number }) {
             role="button"
             tabIndex={-1}
             aria-label="Drag to move this split"
-            title="Drag to move this split"
             onDragStart={(event) => {
               event.dataTransfer.effectAllowed = 'move'
               event.dataTransfer.setData('text/plain', pane.id)
@@ -247,7 +338,6 @@ function TabStrip({ paneIndex }: { paneIndex: number }) {
             type="button"
             className="btn btn--ghost btn--sm btn--icon"
             aria-label="Split the editor"
-            title="Split the editor"
             onClick={splitPane}
           >
             <IconSplit size={14} />
@@ -258,7 +348,6 @@ function TabStrip({ paneIndex }: { paneIndex: number }) {
             type="button"
             className="btn btn--ghost btn--sm btn--icon"
             aria-label="Close this pane"
-            title="Close this pane"
             onClick={() => closePane(paneIndex)}
           >
             <IconX size={13} />
@@ -314,7 +403,7 @@ function Divider({ index, row }: { index: number; row: RefObject<HTMLDivElement 
       className="panes__divider"
       role="separator"
       aria-orientation="vertical"
-      title="Drag to resize · double-click to even them out"
+      aria-label="Drag to resize the panes, or double-click to even them out"
       onPointerDown={grab}
       onDoubleClick={() => setPaneSizes(useStone.getState().panes.map(() => 1))}
     />

@@ -4,6 +4,7 @@ import { useStone } from '../store'
 import { COMMANDS, commandLabel, keysFor } from '../commands'
 import { formatChord } from '../lib/keys'
 import { IconFolder, IconNote, IconPuzzle, IconSearch } from '../ui/icons'
+import { useFocusTrap } from '../lib/focus-trap'
 
 interface Command {
   id: string
@@ -28,6 +29,9 @@ export function CommandPalette() {
   const [cursor, setCursor] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const dialog = useRef<HTMLDivElement>(null)
+
+  useFocusTrap(dialog, open)
 
   useEffect(() => {
     if (open) {
@@ -145,6 +149,7 @@ export function CommandPalette() {
     <div className="overlay overlay--top" onMouseDown={() => setPalette(false)} role="presentation">
       <div
         className="palette"
+        ref={dialog}
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"

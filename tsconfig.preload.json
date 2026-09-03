@@ -4,7 +4,11 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2023"],
+    // The preload runs in the renderer's context, so it genuinely has a DOM —
+    // it is the only place that can stamp the theme before the first paint.
+    // It gets its own project rather than DOM being added to the main one,
+    // where a stray `document` would typecheck and then fail at runtime.
+    "lib": ["ES2023", "DOM"],
     "types": ["node", "electron-vite/node"],
     "strict": true,
     "noUnusedLocals": true,
@@ -18,9 +22,5 @@
       "@shared/*": ["src/shared/*"]
     }
   },
-  "include": [
-    "electron.vite.config.ts",
-    "src/main/**/*",
-    "src/shared/**/*"
-  ]
+  "include": ["src/preload/**/*", "src/shared/**/*"]
 }

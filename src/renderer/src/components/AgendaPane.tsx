@@ -86,7 +86,7 @@ export function AgendaPane() {
         <div className="agenda__body">
           {overdue.length > 0 && (
             <section className="agenda__section">
-              <div className="eyebrow" style={{ color: 'var(--rose)' }}>
+              <div className="eyebrow" style={{ color: 'var(--red)' }}>
                 Overdue
               </div>
               {overdue.map((task) => (
@@ -129,7 +129,7 @@ export function AgendaPane() {
                 type="button"
                 className="btn btn--ghost btn--sm btn--icon"
                 style={{ marginLeft: 'auto' }}
-                title="Add a task"
+                data-tip="Add a task"
                 aria-label="Add a task"
                 onClick={() => setQuickAdd(true)}
               >
@@ -146,7 +146,7 @@ export function AgendaPane() {
           </section>
 
           {empty && (
-            <p className="empty__body" style={{ textAlign: 'left', color: 'var(--s-7)' }}>
+            <p className="empty__body" style={{ textAlign: 'left', color: 'var(--text-muted)' }}>
               A clear day. Good time to write something down.
             </p>
           )}

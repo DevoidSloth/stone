@@ -458,9 +458,87 @@ const api = {
     }
   },
 
+  updates: {
+    check: () => call<unknown>('update:check'),
+    state: () => call<unknown>('update:state'),
+    onState: (handler: (state: unknown) => void) => {
+      const listener = (_e: unknown, value: unknown): void => handler(value)
+      ipcRenderer.on('update:state', listener)
+      return (): void => {
+        ipcRenderer.removeListener('update:state', listener)
+      }
+    }
+  },
+
+  menu: {
+    /** The renderer's command registry, so main can build a menu from it. */
+    publish: (commands: { id: string; label: string; accelerator?: string }[]) =>
+      ipcRenderer.send('menu:commands', commands),
+    onInvoke: (handler: (id: string) => void) => {
+      const listener = (_e: unknown, id: string): void => handler(id)
+      ipcRenderer.on('menu:invoke', listener)
+      return (): void => {
+        ipcRenderer.removeListener('menu:invoke', listener)
+      }
+    }
+  },
+
+  app: {
+    /** Main asks for a flush before it lets the quit through. */
+    onFlush: (handler: () => void | Promise<void>) => {
+      const listener = (): void => {
+        void Promise.resolve(handler()).finally(() => ipcRenderer.send('app:flushed'))
+      }
+      ipcRenderer.on('app:flush', listener)
+      return (): void => {
+        ipcRenderer.removeListener('app:flush', listener)
+      }
+    }
+  },
+
+  theme: {
+    /** Fires only while the theme is `system` and the OS crosses light/dark. */
+    onChange: (handler: (theme: 'dark' | 'light') => void) => {
+      const listener = (_e: unknown, value: 'dark' | 'light'): void => handler(value)
+      ipcRenderer.on('theme:changed', listener)
+      return (): void => {
+        ipcRenderer.removeListener('theme:changed', listener)
+      }
+    }
+  },
+
   platform: process.platform as NodeJS.Platform
 }
 
 export type StoneApi = typeof api
+
+/**
+ * Paint the right theme on the very first frame.
+ *
+ * The renderer used to ship `<html data-theme="dark">` hardcoded and correct
+ * itself once the store had booted, so every light-theme user watched the app
+ * flash dark on launch. The usual fix — an inline script in the head — is
+ * rightly forbidden by the CSP (`script-src 'self'`), and loosening it for a
+ * cosmetic fix would be a bad trade. The preload runs before any page script
+ * and can ask main synchronously, so it does.
+ */
+function applyInitialTheme(): void {
+  let theme: 'dark' | 'light' = 'dark'
+  try {
+    theme = ipcRenderer.sendSync('theme:resolved') as 'dark' | 'light'
+  } catch {
+    // A failed hint is a cosmetic problem; the store corrects it on boot.
+  }
+  const stamp = (): void => {
+    if (document.documentElement) document.documentElement.dataset.theme = theme
+  }
+  stamp()
+  // `documentElement` is normally already there, but not guaranteed this early.
+  if (!document.documentElement) {
+    document.addEventListener('DOMContentLoaded', stamp, { once: true })
+  }
+}
+
+applyInitialTheme()
 
 contextBridge.exposeInMainWorld('stone', api)

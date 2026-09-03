@@ -23,10 +23,14 @@ import {
   IconTable,
   IconTimeline,
   IconTrash,
-  IconX
+  IconX,
+  IconFolder,
+  IconCopy,
+  IconNote
 } from '../ui/icons'
 import { PageIcon } from './PageDressing'
 import { TaskRow } from './TasksView'
+import { ContextMenu, useContextMenu } from './ContextMenu'
 
 /**
  * Database views.
@@ -568,8 +572,10 @@ function TableShape({
   onEdit: (relPath: string, key: string, value: string | null) => void
 }) {
   const openNote = useStone((s) => s.openNote)
+  const { menu, open: openMenu, close: closeMenu } = useContextMenu()
   return (
     <div className="dbtable__wrap">
+      {menu && <ContextMenu state={menu} onClose={closeMenu} />}
       <table className="dbtable">
         <thead>
           <tr>
@@ -585,7 +591,38 @@ function TableShape({
         </thead>
         <tbody>
           {rows.map((note) => (
-            <tr key={note.relPath} onClick={() => void openNote(note.relPath)}>
+            <tr
+              key={note.relPath}
+              onClick={() => void openNote(note.relPath)}
+              onContextMenu={(event) =>
+                openMenu(event, [
+                  {
+                    id: 'open',
+                    label: 'Open',
+                    icon: <IconNote size={14} />,
+                    run: () => void openNote(note.relPath)
+                  },
+                  {
+                    id: 'open-tab',
+                    label: 'Open in a new tab',
+                    run: () => void openNote(note.relPath, { newTab: true })
+                  },
+                  {
+                    id: 'reveal',
+                    label: 'Reveal in the file manager',
+                    separated: true,
+                    icon: <IconFolder size={14} />,
+                    run: () => void window.stone.vault.revealInFolder(note.relPath)
+                  },
+                  {
+                    id: 'copy-link',
+                    label: 'Copy as a link',
+                    icon: <IconCopy size={14} />,
+                    run: () => void navigator.clipboard.writeText(`[[${note.title}]]`)
+                  }
+                ])
+              }
+            >
               {columns.map((column) => (
                 <Cell
                   key={column}
@@ -1011,7 +1048,7 @@ export function DatabaseView() {
                 type="button"
                 className="dbview__kind"
                 aria-pressed={view.kind === id}
-                title={label}
+                data-tip={label}
                 aria-label={label}
                 onClick={() => commit({ ...view, kind: id })}
               >

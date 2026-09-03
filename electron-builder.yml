@@ -69,3 +69,11 @@ linux:
   target:
     - AppImage
   category: Office
+
+# Where `electron-updater` looks for `latest-mac.yml` and the blockmap that
+# electron-builder is already producing. Without this the release workflow
+# builds updates nothing can find.
+publish:
+  provider: github
+  owner: DevoidSloth
+  repo: stone

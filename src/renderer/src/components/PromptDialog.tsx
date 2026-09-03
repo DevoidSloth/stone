@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStone } from '../store'
+import { useFocusTrap } from '../lib/focus-trap'
 
 /**
  * The one-line text dialog.
@@ -19,6 +20,9 @@ export function PromptDialog() {
 
   const [value, setValue] = useState('')
   const input = useRef<HTMLInputElement>(null)
+  const dialog = useRef<HTMLFormElement>(null)
+
+  useFocusTrap(dialog, request !== null)
 
   // Each new question reseeds the field, and a rename arrives with its current
   // name selected so it can be typed straight over.
@@ -47,6 +51,7 @@ export function PromptDialog() {
     >
       <form
         className="modal modal--prompt"
+        ref={dialog}
         role="dialog"
         aria-modal="true"
         aria-label={request.title}

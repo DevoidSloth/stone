@@ -3,6 +3,7 @@ import type { ClaudeActivity, ClaudeContext, ClaudeMode } from '@shared/types'
 import { useStone } from '../store'
 import { documentText, insertBlock, selectedText } from '../editor/insert'
 import { IconSparkle, IconX } from '../ui/icons'
+import { useFocusTrap } from '../lib/focus-trap'
 
 /**
  * Ask Claude.
@@ -95,6 +96,9 @@ export function ClaudeDialog() {
   const [busy, setBusy] = useState(false)
   const [seconds, setSeconds] = useState(0)
   const [output, setOutput] = useState('')
+  const dialog = useRef<HTMLFormElement>(null)
+
+  useFocusTrap(dialog, open)
   const [activity, setActivity] = useState<ClaudeActivity[]>([])
   const [turns, setTurns] = useState<Turn[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -285,6 +289,7 @@ export function ClaudeDialog() {
     <div className="overlay overlay--top" onMouseDown={close} role="presentation">
       <form
         className={agent ? 'modal modal--claude modal--claude-agent' : 'modal modal--claude'}
+        ref={dialog}
         role="dialog"
         aria-modal="true"
         aria-label="Ask Claude"
@@ -361,7 +366,7 @@ export function ClaudeDialog() {
                 type="button"
                 data-on={context === 'selection'}
                 disabled={!selection}
-                title={
+                data-tip={
                   selection
                     ? `${selection.length.toLocaleString()} selected characters`
                     : 'Nothing is selected'

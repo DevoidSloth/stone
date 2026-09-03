@@ -16,6 +16,7 @@ import type { ReactElement } from 'react'
 import type { Settings } from '@shared/types'
 import { useStone } from './store'
 import { exportNoteToPdf } from './export-note'
+import { describeError } from './lib/errors'
 import { activeEditor } from './editor/insert'
 import { insertPickedFiles } from './editor/slash'
 import { noteSessions, notePathFacet, restartSession, runFenceAtCursor, runFences } from './editor/run-code'
@@ -73,6 +74,13 @@ export interface CommandDef {
 }
 
 const s = (): ReturnType<typeof useStone.getState> => useStone.getState()
+
+const THEME_NAME = { system: 'system', light: 'light', dark: 'dark' } as const
+
+/** System → light → dark → system. */
+function nextTheme(theme: Settings['theme']): Settings['theme'] {
+  return theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system'
+}
 
 export const COMMANDS: CommandDef[] = [
   // ------------------------------------------------------------- navigation
@@ -450,7 +458,14 @@ export const COMMANDS: CommandDef[] = [
     icon: IconPrint,
     defaultKeys: ['Mod+Shift+P'],
     run: () => {
-      void exportNoteToPdf(s().activeRelPath)
+      const relPath = s().activeRelPath
+      if (!relPath) {
+        s().toast('Open a note first — there is nothing to export.', 'info')
+        return
+      }
+      void s().withTask('export-pdf', 'Exporting the note as a PDF…', () =>
+        exportNoteToPdf(relPath)
+      )
     }
   },
   {
@@ -460,9 +475,12 @@ export const COMMANDS: CommandDef[] = [
     icon: IconDownload,
     defaultKeys: [],
     run: () => {
-      void window.stone.exporter.vault().then((result) => {
-        if (result) s().toast(`${result.count} notes exported to ${result.folder}.`, 'success')
-      })
+      void s()
+        .withTask('export-vault', 'Exporting the vault…', () => window.stone.exporter.vault())
+        .then((result) => {
+          if (result) s().toast(`${result.count} notes exported to ${result.folder}.`, 'success')
+        })
+        .catch((err) => s().toast(describeError(err), 'error'))
     }
   },
 
@@ -505,11 +523,16 @@ export const COMMANDS: CommandDef[] = [
 
   {
     id: 'theme',
-    label: () => (s().settings?.theme === 'light' ? 'Use the dark theme' : 'Use the light theme'),
+    // Cycles rather than toggles. A two-way switch destroyed `system` on the
+    // first click, and there was no way back to it outside Settings.
+    label: () => {
+      const next = nextTheme(s().settings?.theme ?? 'system')
+      return next === 'system' ? 'Match the system theme' : `Use the ${THEME_NAME[next]} theme`
+    },
     group: 'App',
     icon: IconSun,
     defaultKeys: [],
-    run: () => void s().updateSettings({ theme: s().settings?.theme === 'light' ? 'dark' : 'light' })
+    run: () => void s().updateSettings({ theme: nextTheme(s().settings?.theme ?? 'system') })
   },
   {
     id: 'reindex',
@@ -518,10 +541,13 @@ export const COMMANDS: CommandDef[] = [
     icon: IconRefresh,
     defaultKeys: [],
     run: () => {
-      void window.stone.vault
-        .reindex()
-        .then(() => s().refreshVault())
+      void s()
+        .withTask('reindex', 'Rebuilding the vault index…', async () => {
+          await window.stone.vault.reindex()
+          await s().refreshVault()
+        })
         .then(() => s().toast('Vault reindexed.', 'success'))
+        .catch((err) => s().toast(describeError(err), 'error'))
     }
   },
   {
@@ -529,7 +555,9 @@ export const COMMANDS: CommandDef[] = [
     label: 'Open settings',
     group: 'App',
     icon: IconSettings,
-    defaultKeys: [],
+    // ⌘, is a convention strong enough that its absence reads as a missing
+    // feature, and nothing else was bound to it.
+    defaultKeys: ['Mod+,'],
     run: () => s().setSettingsOpen(true)
   }
 ]

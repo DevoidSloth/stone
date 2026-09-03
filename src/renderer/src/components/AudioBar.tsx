@@ -196,7 +196,7 @@ function RecordingRow({
         {paused ? 'Paused' : recording.note ? basename(recording.note) : 'Recording'}
       </span>
 
-      <button type="button" className="btn btn--ghost btn--sm" onClick={onMark} title="Stamp this line (⌘⇧M)">
+      <button type="button" className="btn btn--ghost btn--sm" onClick={onMark} data-tip="Stamp this line (⌘⇧M)">
         Mark
       </button>
       <button type="button" className="btn btn--ghost btn--sm" onClick={onPause}>
@@ -210,7 +210,7 @@ function RecordingRow({
         type="button"
         className="btn btn--ghost btn--sm audiobar__discard"
         onClick={onDiscard}
-        title="Throw this recording away"
+        data-tip="Throw this recording away"
       >
         <IconTrash size={12} />
       </button>
@@ -261,10 +261,10 @@ function PlaybackRow({
       <button type="button" className="audiobar__play" onClick={toggle} aria-label={playing ? 'Pause' : 'Play'}>
         {playing ? <IconPause size={13} /> : <IconPlay size={13} />}
       </button>
-      <button type="button" className="audiobar__icon" onClick={() => nudge(-SKIP_SECONDS)} title={`Back ${SKIP_SECONDS}s`}>
+      <button type="button" className="audiobar__icon" onClick={() => nudge(-SKIP_SECONDS)} data-tip={`Back ${SKIP_SECONDS}s`}>
         <IconSkipBack size={14} />
       </button>
-      <button type="button" className="audiobar__icon" onClick={() => nudge(SKIP_SECONDS)} title={`Forward ${SKIP_SECONDS}s`}>
+      <button type="button" className="audiobar__icon" onClick={() => nudge(SKIP_SECONDS)} data-tip={`Forward ${SKIP_SECONDS}s`}>
         <IconSkipForward size={14} />
       </button>
 

@@ -448,3 +448,18 @@ export const IconWaveform = (p: IconProps) => (
     <path d="M2.5 6.5v3M5.25 4v8M8 2.25v11.5M10.75 4.75v6.5M13.5 6.5v3" />
   </Icon>
 )
+
+/** Half-filled disc: the theme is whatever the system says it is. */
+export const IconContrast = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="8" cy="8" r="5.75" />
+    <path d="M8 2.25a5.75 5.75 0 0 1 0 11.5z" fill="currentColor" stroke="none" />
+  </Icon>
+)
+
+/** Indeterminate progress. Spun by CSS, not by a second path. */
+export const IconSpinner = (p: IconProps) => (
+  <Icon {...p} className={`spin ${p.className ?? ''}`.trim()}>
+    <path d="M8 2.25a5.75 5.75 0 1 0 5.75 5.75" />
+  </Icon>
+)

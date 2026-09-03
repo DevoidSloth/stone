@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { GraphData } from '@shared/types'
 import { useStone } from '../store'
-import { IconSearch } from '../ui/icons'
+import { IconSearch, IconNote, IconCopy } from '../ui/icons'
+import { ContextMenu, useContextMenu } from './ContextMenu'
 
 /**
  * The link graph, drawn on a canvas with a small force simulation.
@@ -67,6 +68,8 @@ export function GraphView() {
 
   const hostRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const pickRef = useRef<((x: number, y: number) => { relPath: string } | null) | null>(null)
+  const { menu, open: openMenu, close: closeMenu } = useContextMenu()
   /** Set by the simulation effect so the Fit button can reach it. */
   const fitRef = useRef<(() => void) | null>(null)
   const [hovered, setHovered] = useState<string | null>(null)
@@ -410,6 +413,10 @@ export function GraphView() {
       view.current.zoom = next
     }
 
+    // Right-click needs the same hit test the drag handler uses, and it lives
+    // inside this effect along with the simulation it reads.
+    pickRef.current = pick
+
     canvas.addEventListener('pointerdown', onDown)
     canvas.addEventListener('pointermove', onMove)
     canvas.addEventListener('pointerup', onUp)
@@ -444,6 +451,7 @@ export function GraphView() {
 
   return (
     <div className="graph">
+      {menu && <ContextMenu state={menu} onClose={closeMenu} />}
       <div className="graph__head">
         <h1 className="tasks__title">Graph</h1>
         <span className="cal__year">
@@ -474,7 +482,45 @@ export function GraphView() {
       </div>
 
       <div className="graph__canvas" ref={hostRef}>
-        <canvas ref={canvasRef} />
+        <canvas
+          ref={canvasRef}
+          onContextMenu={(event) => {
+            const hit = pickRef.current?.(event.clientX, event.clientY)
+            if (!hit) return
+            const relPath = hit.relPath
+            openMenu(event, [
+              {
+                id: 'open',
+                label: 'Open',
+                icon: <IconNote size={14} />,
+                run: () => void openNote(relPath)
+              },
+              {
+                id: 'open-tab',
+                label: 'Open in a new tab',
+                run: () => void openNote(relPath, { newTab: true })
+              },
+              {
+                id: 'local',
+                label: 'Focus the graph on this note',
+                separated: true,
+                run: () => {
+                  void openNote(relPath)
+                  setQuery(relPath.split('/').pop()?.replace(/\.md$/, '') ?? '')
+                }
+              },
+              {
+                id: 'copy-link',
+                label: 'Copy as a link',
+                icon: <IconCopy size={14} />,
+                run: () =>
+                  void navigator.clipboard.writeText(
+                    `[[${relPath.split('/').pop()?.replace(/\.md$/, '') ?? relPath}]]`
+                  )
+              }
+            ])
+          }}
+        />
         {visible.nodes.length === 0 && (
           <div className="empty">
             <div className="empty__inner">

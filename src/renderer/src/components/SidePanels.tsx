@@ -26,6 +26,7 @@ import {
   IconWaveform,
   IconX
 } from '../ui/icons'
+import { describeError } from '../lib/errors'
 
 /**
  * The right-hand inspector.
@@ -228,7 +229,7 @@ function LinksPanel() {
       if (activeRelPath) await openNote(activeRelPath)
       toast('Linked.', 'success')
     } catch (err) {
-      toast((err as Error).message, 'error')
+      toast(describeError(err), 'error')
     }
   }
 
@@ -286,7 +287,7 @@ function LinksPanel() {
           <button
             type="button"
             className="btn btn--sm"
-            title="Turn this mention into a link"
+            data-tip="Turn this mention into a link"
             onClick={() => void link(mention.relPath, mention.line, mention.text)}
           >
             Link
@@ -350,7 +351,7 @@ function PropertiesPanel() {
 
           return (
             <div key={key} className="props__row">
-              <label className="props__key truncate" htmlFor={`prop-${key}`} title={key}>
+              <label className="props__key truncate" htmlFor={`prop-${key}`} data-tip={key}>
                 {key}
               </label>
 
@@ -692,7 +693,7 @@ function HistoryPanel() {
           <button
             type="button"
             className="btn btn--sm"
-            title="Replace the note with this version"
+            data-tip="Replace the note with this version"
             onClick={() => void restoreSnapshot(snapshot.id)}
           >
             <IconRestore size={12} />
@@ -728,7 +729,7 @@ export function SidePanels() {
             type="button"
             className="inspector__tab"
             aria-pressed={open && panel === id}
-            title={label}
+            data-tip={label}
             aria-label={label}
             onClick={() => (open && panel === id ? togglePanel() : setSidePanel(id))}
           >

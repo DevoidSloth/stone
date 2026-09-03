@@ -23,8 +23,11 @@ import {
   IconPin,
   IconPlus,
   IconRefresh,
-  IconNote
+  IconNote,
+  IconCalendar,
+  IconCopy
 } from '../ui/icons'
+import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
 
 const HOUR_PX = 46
 const DAY_START_HOUR = 6
@@ -33,7 +36,37 @@ export function colorFor(event: CalEvent, accounts: { id: string; color: string 
   if (event.color) return event.color
   const account = accounts.find((a) => a.id === event.accountId)
   if (account) return account.color
-  return event.id.startsWith('task:') ? 'var(--iris)' : 'var(--citrine)'
+  return event.id.startsWith('task:') ? 'var(--purple)' : 'var(--yellow)'
+}
+
+/**
+ * What right-click offers on an event.
+ *
+ * Shared by every surface that draws one — the month grid, the week grid, the
+ * agenda list — so the menu is the same wherever the event is seen.
+ */
+export function eventMenuItems(
+  event: CalEvent,
+  actions: { onOpen: (event: CalEvent) => void; openNote: (relPath: string, opts?: { newTab?: boolean }) => void }
+): MenuItem[] {
+  const items: MenuItem[] = [
+    { id: 'details', label: 'Open the details', icon: <IconCalendar size={14} />, run: () => actions.onOpen(event) }
+  ]
+  if (event.relPath) {
+    const relPath = event.relPath
+    items.push(
+      { id: 'note', label: 'Open the note it came from', icon: <IconNote size={14} />, run: () => actions.openNote(relPath) },
+      { id: 'note-tab', label: 'Open the note in a new tab', run: () => actions.openNote(relPath, { newTab: true }) }
+    )
+  }
+  items.push({
+    id: 'copy',
+    label: 'Copy the title',
+    separated: true,
+    icon: <IconCopy size={14} />,
+    run: () => void navigator.clipboard.writeText(event.title)
+  })
+  return items
 }
 
 /** Index events by day, expanding multi-day spans onto each day they cover. */
@@ -151,7 +184,7 @@ export function CalendarView() {
           <button
             type="button"
             className="btn btn--ghost btn--icon"
-            title="Refresh connected calendars"
+            data-tip="Refresh connected calendars"
             aria-label="Refresh connected calendars"
             onClick={() => void loadCalendar(true)}
           >
@@ -304,7 +337,7 @@ function EventChip({
         e.stopPropagation()
         onOpen(event)
       }}
-      title={event.title}
+      data-tip={event.title}
     >
       <span className="chip__dot" />
       {!event.allDay && <span className="chip__time">{formatTime(event.start)}</span>}
@@ -316,6 +349,8 @@ function EventChip({
 // -------------------------------------------------------------------- week
 
 function WeekGrid({ anchor, weekStartsOn, grouped, accounts, onSelectDay, onOpenEvent }: GridProps) {
+  const { menu, open: openMenu, close: closeMenu } = useContextMenu()
+  const openNote = useStone((s) => s.openNote)
   const start = startOfWeek(anchor, weekStartsOn)
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(start, i)), [start])
   const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes()
@@ -324,6 +359,7 @@ function WeekGrid({ anchor, weekStartsOn, grouped, accounts, onSelectDay, onOpen
 
   return (
     <div className="week">
+      {menu && <ContextMenu state={menu} onClose={closeMenu} />}
       <div className="week__cols">
         <div />
         {days.map((day) => (
@@ -396,6 +432,9 @@ function WeekGrid({ anchor, weekStartsOn, grouped, accounts, onSelectDay, onOpen
                         } as React.CSSProperties
                       }
                       onClick={() => onOpenEvent(event)}
+                      onContextMenu={(e) =>
+                        openMenu(e, eventMenuItems(event, { onOpen: onOpenEvent, openNote }))
+                      }
                     >
                       <b>{event.title}</b>
                       <span>{formatTime(event.start)}</span>
@@ -424,6 +463,9 @@ function AgendaList({
   accounts: { id: string; color: string }[]
   onOpenEvent: (event: CalEvent) => void
 }) {
+  const { menu, open: openMenu, close: closeMenu } = useContextMenu()
+  const openNote = useStone((s) => s.openNote)
+
   const days = useMemo(() => {
     const out: string[] = []
     for (let i = 0; i < 45; i++) out.push(addDays(anchor, i))
@@ -446,6 +488,7 @@ function AgendaList({
 
   return (
     <div className="agendaview">
+      {menu && <ContextMenu state={menu} onClose={closeMenu} />}
       {days.map((day) => (
         <div key={day} className={`agendaday ${isToday(day) ? 'agendaday--today' : ''}`}>
           <div className="agendaday__when">
@@ -453,7 +496,7 @@ function AgendaList({
             <span className="agendaday__dow">
               {WEEKDAYS_LONG[fromISODate(day).getDay()].slice(0, 3)}
             </span>
-            <span className="agendaday__dow" style={{ color: 'var(--s-6)' }}>
+            <span className="agendaday__dow" style={{ color: 'var(--text-faint)' }}>
               {relativeDay(day)}
             </span>
           </div>
@@ -465,6 +508,9 @@ function AgendaList({
                 className="arow"
                 style={{ '--chip': colorFor(event, accounts) } as React.CSSProperties}
                 onClick={() => onOpenEvent(event)}
+                onContextMenu={(e) =>
+                  openMenu(e, eventMenuItems(event, { onOpen: onOpenEvent, openNote }))
+                }
               >
                 <span className="arow__time">
                   {event.allDay ? 'All day' : formatRange(event.start, event.end, false)}

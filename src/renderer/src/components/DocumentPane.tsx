@@ -3,6 +3,7 @@ import type { LibraryDoc } from '@shared/types'
 import { useStone } from '../store'
 import { PdfViewer } from './PdfViewer'
 import { IconChevronDown, IconCloud, IconLink, IconRefresh, IconSearch } from '../ui/icons'
+import { describeError } from '../lib/errors'
 
 /**
  * A document, open in a pane like any note.
@@ -82,7 +83,7 @@ export function DocumentPane({ absPath, paneIndex }: { absPath: string; paneInde
       useStone.setState({ documents: next })
       toast(`${doc.name} downloaded.`, 'success')
     } catch (err) {
-      toast((err as Error).message, 'error')
+      toast(describeError(err), 'error')
     } finally {
       setDownloading(false)
     }
@@ -95,7 +96,7 @@ export function DocumentPane({ absPath, paneIndex }: { absPath: string; paneInde
         <button
           type="button"
           className="docpane__name truncate"
-          title={`Open another file in this pane (${window.stone.platform === 'darwin' ? '⌘P' : 'Ctrl P'})`}
+          data-tip={`Open another file in this pane (${window.stone.platform === 'darwin' ? '⌘P' : 'Ctrl P'})`}
           onClick={() => setQuickOpen(paneIndex)}
         >
           <b className="truncate">{doc.name}</b>
@@ -113,7 +114,7 @@ export function DocumentPane({ absPath, paneIndex }: { absPath: string; paneInde
               type="button"
               className="btn btn--ghost btn--sm"
               aria-pressed={showText}
-              title="Show the text Stone extracted, which is what search matches on"
+              data-tip="Show the text Stone extracted, which is what search matches on"
               onClick={() => setShowText((v) => !v)}
             >
               <IconSearch size={12} /> Text
@@ -122,7 +123,7 @@ export function DocumentPane({ absPath, paneIndex }: { absPath: string; paneInde
           <button
             type="button"
             className="btn btn--ghost btn--sm"
-            title="Open beside this, to write about it"
+            data-tip="Open beside this, to write about it"
             onClick={() => splitPane()}
           >
             Split

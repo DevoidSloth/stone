@@ -110,7 +110,7 @@
 .note__crumb-self {
   color: var(--text-ghost);
   font-size: var(--t-xs);
-  border: 1px solid var(--border-faint, var(--border));
+  border: 1px solid var(--border-faint);
   border-radius: var(--r-xs);
   padding: 0 5px;
   white-space: nowrap;
@@ -144,7 +144,7 @@
 
 /* Notion's page measure is 708px, set inside a wide 96px gutter. */
 .note__wrap {
-  max-width: var(--measure, 708px);
+  max-width: var(--page-measure);
   margin: 0 auto;
   padding: var(--sp-9) var(--sp-7) 40vh;
 }
@@ -640,7 +640,7 @@
 /* --------------------------------------------------------------- backlinks */
 
 .backlinks {
-  max-width: var(--measure, 708px);
+  max-width: var(--page-measure);
   margin: 0 auto;
   padding: var(--sp-4) var(--sp-7) var(--sp-8);
 }

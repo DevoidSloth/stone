@@ -70,7 +70,7 @@
   overflow: hidden;
   cursor: grab;
   /* The board is its own plane; it should not read as part of the page. */
-  background: var(--bg-sunken, var(--bg-surface));
+  background: var(--bg-sunken);
 }
 
 .canvasview__surface:active {

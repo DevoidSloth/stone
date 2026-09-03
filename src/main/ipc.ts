@@ -28,7 +28,8 @@ import { buildIcs } from './calendar/ics'
 import * as graph from './calendar/graph'
 import { detectCloudTargets, syncAdvice } from './cloud'
 import { applyThemeChrome } from './window-chrome'
-import { loadSettings, saveSettings } from './settings'
+import { loadSettings, peekSettings, saveSettings } from './settings'
+import { seedVault } from './seed'
 import { readNote, toAbsPath } from './vault/fs'
 import {
   configureExport,
@@ -291,6 +292,13 @@ export function registerIpc(): void {
   })
 
   handle('vault:open', async (vaultPath: string) => {
+    // Seed before opening, so the starter notes are in the index the first
+    // scan builds rather than arriving as watcher events afterwards. Only on
+    // the very first vault, and only when it is genuinely empty — an existing
+    // Obsidian vault opened for the first time must never be written into.
+    const before = peekSettings()
+    if (!before.firstRunComplete) await seedVault(vaultPath, before.inboxFolder)
+
     await vault.open(vaultPath)
     const settings = await saveSettings({ vaultPath, firstRunComplete: true })
     // Plugins live inside the vault, so opening one is what makes them exist.

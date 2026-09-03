@@ -3,6 +3,7 @@ import { parseQuickAdd } from '@shared/task-syntax'
 import type { NLSpan } from '@shared/nl-date'
 import { useStone } from '../store'
 import { formatTime, relativeDay } from '../lib/dates'
+import { useFocusTrap } from '../lib/focus-trap'
 
 /**
  * One line in, one task out. Dates can be written either way — "@2026-08-12" or
@@ -21,6 +22,9 @@ export function QuickAdd() {
   const [literal, setLiteral] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const mirrorRef = useRef<HTMLDivElement>(null)
+  const dialog = useRef<HTMLDivElement>(null)
+
+  useFocusTrap(dialog, open)
 
   useEffect(() => {
     if (open) {
@@ -65,6 +69,7 @@ export function QuickAdd() {
     <div className="overlay overlay--top" onMouseDown={() => setQuickAdd(false)} role="presentation">
       <div
         className="quickadd"
+        ref={dialog}
         role="dialog"
         aria-modal="true"
         aria-label="Add a task"

@@ -21,6 +21,10 @@ import './styles/viz.css'
 import './styles/panels.css'
 
 import { App } from './App'
+import { installTooltips } from './ui/tooltip'
+
+// One delegated listener for every `data-tip` in the app.
+installTooltips()
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

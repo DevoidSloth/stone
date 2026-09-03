@@ -6,6 +6,7 @@ import { useStone } from '../store'
 import { seekPlayer } from '../audio/player'
 import { insertBlock } from '../editor/insert'
 import { IconMic, IconSearch, IconSparkle, IconWaveform, IconX } from '../ui/icons'
+import { describeError } from '../lib/errors'
 
 /**
  * The transcript of the recording the player is on, and a way to ask about it.
@@ -272,7 +273,7 @@ function Actions({
       })
       if (runId.current === id) setAnswer(result.text)
     } catch (err) {
-      if (runId.current === id) toast((err as Error).message, 'error')
+      if (runId.current === id) toast(describeError(err), 'error')
     } finally {
       if (runId.current === id) {
         setBusy(false)

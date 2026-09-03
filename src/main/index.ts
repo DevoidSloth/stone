@@ -1,10 +1,11 @@
-import { app, BrowserWindow, nativeTheme, session, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeTheme, screen, session, shell } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs/promises'
+import fsSync from 'node:fs'
 import { registerIpc, vault } from './ipc'
 import { closeAllRecordings } from './audio'
 import { loadSettings, peekSettings, saveSettings } from './settings'
-import { CHROME_BG, OVERLAY } from './window-chrome'
+import { CHROME_BG, OVERLAY, applyThemeChrome, resolveTheme } from './window-chrome'
 import { registerProtocolHandler, registerProtocolScheme } from './protocol'
 import { handleUrl, registerCapture, teardownCapture, urlFromArgv } from './capture'
 import { stopClipper } from './clipper'
@@ -12,6 +13,8 @@ import { reloadPlugins, shutdownPlugins } from './plugins'
 import { cancelAllRuns } from './run-code'
 import { endAllSessions } from './code-session'
 import { registerSpellingMenu } from './spelling'
+import { buildAppMenu, type MenuCommand } from './menu'
+import { checkForUpdates, registerUpdater, updateState } from './updater'
 
 const isDev = !app.isPackaged
 
@@ -43,10 +46,44 @@ async function fileExists(p: string): Promise<boolean> {
   }
 }
 
+/**
+ * Keep a restored window on a screen that still exists.
+ *
+ * Bounds are saved verbatim, so a window last closed on an external monitor is
+ * restored to coordinates that, once the laptop is undocked, name a point no
+ * display covers — the window opens off-screen with no way back but deleting
+ * the state file. Anything that does not overlap a live display by a reasonable
+ * margin gets centred on the primary one instead.
+ */
+function clampToDisplays(state: WindowState): WindowState {
+  if (state.x === undefined || state.y === undefined) return state
+
+  const rect = { x: state.x, y: state.y, width: state.width, height: state.height }
+  const visible = screen.getAllDisplays().some((display) => {
+    const a = display.workArea
+    const overlapX = Math.min(rect.x + rect.width, a.x + a.width) - Math.max(rect.x, a.x)
+    const overlapY = Math.min(rect.y + rect.height, a.y + a.height) - Math.max(rect.y, a.y)
+    // Enough of the title bar to grab, not merely a corner pixel.
+    return overlapX > 120 && overlapY > 60
+  })
+  if (visible) return state
+
+  const { workArea } = screen.getPrimaryDisplay()
+  const width = Math.min(state.width, workArea.width)
+  const height = Math.min(state.height, workArea.height)
+  return {
+    ...state,
+    width,
+    height,
+    x: workArea.x + Math.round((workArea.width - width) / 2),
+    y: workArea.y + Math.round((workArea.height - height) / 2)
+  }
+}
+
 async function readWindowState(): Promise<WindowState> {
   try {
     const raw = await fs.readFile(stateFile(), 'utf8')
-    return { width: 1360, height: 900, ...(JSON.parse(raw) as Partial<WindowState>) }
+    return clampToDisplays({ width: 1360, height: 900, ...(JSON.parse(raw) as Partial<WindowState>) })
   } catch {
     return { width: 1360, height: 900 }
   }
@@ -64,10 +101,29 @@ async function persistWindowState(win: BrowserWindow): Promise<void> {
   }
 }
 
+/**
+ * The same write, synchronously, for the `close` handler.
+ *
+ * An async write started as the window closes races the process exit, and the
+ * one time it reliably loses is the one that matters: a resize made just before
+ * quitting, which is exactly when the user expects the size to stick. The
+ * payload is one small object, so blocking for it costs nothing.
+ */
+function persistWindowStateSync(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  const state: WindowState = { ...win.getNormalBounds(), maximized: win.isMaximized() }
+  try {
+    fsSync.mkdirSync(path.dirname(stateFile()), { recursive: true })
+    fsSync.writeFileSync(stateFile(), JSON.stringify(state), 'utf8')
+  } catch {
+    // Losing window position is not worth surfacing to the user.
+  }
+}
+
 async function createWindow(): Promise<BrowserWindow> {
   const settings = await loadSettings()
   const state = await readWindowState()
-  const theme = settings.theme === 'light' ? 'light' : 'dark'
+  const theme = resolveTheme(settings.theme)
 
   // macOS takes its icon from the bundle, so setting it here would be ignored.
   const icon =
@@ -139,7 +195,7 @@ async function createWindow(): Promise<BrowserWindow> {
   }
   win.on('resize', scheduleSave)
   win.on('move', scheduleSave)
-  win.on('close', () => void persistWindowState(win))
+  win.on('close', () => persistWindowStateSync(win))
 
   const notifyMaximize = (): void =>
     win.webContents.send('window:maximized', win.isMaximized())
@@ -187,6 +243,39 @@ function allowMicrophone(): void {
   session.defaultSession.setPermissionCheckHandler((_contents, permission) => isMedia(permission))
 }
 
+/**
+ * Answer the preload's synchronous question: which theme is in force?
+ *
+ * The renderer cannot paint the right theme on its first frame without knowing
+ * this before any page script runs, and the CSP rightly forbids the inline
+ * bootstrap script that would normally carry it. `sendSync` in the preload is
+ * the remaining way in, and it is cheap: one cached settings read, once per
+ * window, before the first paint.
+ */
+function registerThemeHint(): void {
+  ipcMain.on('theme:resolved', (event) => {
+    event.returnValue = resolveTheme(peekSettings().theme)
+  })
+}
+
+/**
+ * Follow the OS when the user has asked to.
+ *
+ * `nativeTheme.themeSource = 'system'` makes Electron's own chrome follow along,
+ * but nothing tells the renderer, so the app would keep whatever palette it had
+ * when macOS crossed into dark mode at sunset.
+ */
+function watchSystemTheme(): void {
+  nativeTheme.on('updated', () => {
+    if (peekSettings().theme !== 'system') return
+    const resolved = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+    applyThemeChrome(resolved)
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('theme:changed', resolved)
+    }
+  })
+}
+
 app.whenReady().then(async () => {
   app.setAppUserModelId('com.stone.app')
 
@@ -205,6 +294,20 @@ app.whenReady().then(async () => {
   // takes effect without a restart — and removing one revokes access at once.
   registerProtocolHandler(vault, () => peekSettings().libraryFolders.map((f) => f.path))
   registerIpc()
+  registerThemeHint()
+  watchSystemTheme()
+
+  // A menu before the renderer has reported anything, so the window never opens
+  // menuless; it is rebuilt with real labels and accelerators once it has.
+  buildAppMenu([])
+  ipcMain.on('menu:commands', (_event, commands: MenuCommand[]) => buildAppMenu(commands))
+
+  registerUpdater()
+  ipcMain.handle('update:check', () => {
+    checkForUpdates(true)
+    return updateState()
+  })
+  ipcMain.handle('update:state', () => updateState())
   allowMicrophone()
 
   registerCapture(
@@ -242,7 +345,30 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+/**
+ * Let the renderer write what it still has in a debounce timer.
+ *
+ * The renderer saves 900ms after the last keystroke, so quitting mid-sentence
+ * used to drop it. `beforeunload` catches most exits, but not the ones that
+ * begin here — ⌘Q, the dock menu, a system logout — so the quit is held for one
+ * round-trip. Bounded, because a wedged renderer must not make the app
+ * unquittable.
+ */
+let flushed = false
+
+app.on('before-quit', (event) => {
+  const [win] = BrowserWindow.getAllWindows()
+  if (!flushed && win && !win.isDestroyed() && !win.webContents.isCrashed()) {
+    event.preventDefault()
+    flushed = true
+    const done = new Promise<void>((resolve) => {
+      ipcMain.once('app:flushed', () => resolve())
+      win.webContents.send('app:flush')
+    })
+    void Promise.race([done, new Promise((r) => setTimeout(r, 1500))]).then(() => app.quit())
+    return
+  }
+
   void vault.close()
   // A recording still open is a file handle holding an unflushed tail; closing
   // it keeps whatever was captured rather than losing the last few seconds.

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef} from 'react'
 import { useStone } from '../store'
 import { KeybindingSettings } from './KeybindingSettings'
 import { CaptureSettings } from './CaptureSettings'
@@ -8,8 +8,24 @@ import { AudioSettings } from './AudioSettings'
 import { CodeSettings } from './CodeSettings'
 import { PdfSettings } from './PdfSettings'
 import { IconCloud, IconPlus, IconRefresh, IconTrash, IconX } from '../ui/icons'
+import { describeError } from '../lib/errors'
+import { useFocusTrap } from '../lib/focus-trap'
 
 const FEED_COLORS = ['#e0a94a', '#45c79a', '#8891ff', '#ee6b6b', '#4fa8d8', '#b07ce0']
+
+/**
+ * System first, because that is what a Mac app is expected to do and what the
+ * default now is. The two named themes are the override, not the choice.
+ */
+const THEMES = [
+  { id: 'system', label: 'System' },
+  { id: 'light', label: 'Limestone' },
+  { id: 'dark', label: 'Basalt' }
+] as const
+
+/** Below 11 the live-preview widgets stop lining up; above 28 nothing fits. */
+const MIN_FONT = 11
+const MAX_FONT = 28
 
 function Toggle({
   checked,
@@ -45,6 +61,9 @@ export function SettingsModal() {
   const loadCalendar = useStone((s) => s.loadCalendar)
   const refreshVault = useStone((s) => s.refreshVault)
   const toast = useStone((s) => s.toast)
+  const dialog = useRef<HTMLDivElement>(null)
+
+  useFocusTrap(dialog, open)
 
   const [feedName, setFeedName] = useState('')
   const [feedUrl, setFeedUrl] = useState('')
@@ -84,7 +103,7 @@ export function SettingsModal() {
       await loadCalendar(true)
       toast('Calendar subscribed.', 'success')
     } catch (err) {
-      toast((err as Error).message, 'error')
+      toast(describeError(err), 'error')
     }
   }
 
@@ -111,7 +130,7 @@ export function SettingsModal() {
       toast('Outlook calendar connected.', 'success')
     } catch (err) {
       setDevicePrompt(null)
-      toast((err as Error).message, 'error')
+      toast(describeError(err), 'error')
     } finally {
       setBusy(false)
     }
@@ -121,6 +140,7 @@ export function SettingsModal() {
     <div className="overlay overlay--center" onMouseDown={() => setOpen(false)} role="presentation">
       <div
         className="modal"
+        ref={dialog}
         role="dialog"
         aria-modal="true"
         aria-label="Settings"
@@ -190,20 +210,56 @@ export function SettingsModal() {
             <div className="row">
               <div className="row__label">
                 <b>Theme</b>
-                <span>Basalt or limestone.</span>
+                <span>Basalt, limestone, or whichever the system is using.</span>
               </div>
               <div className="segmented">
-                {(['dark', 'light'] as const).map((theme) => (
+                {THEMES.map(({ id, label }) => (
                   <button
-                    key={theme}
+                    key={id}
                     type="button"
                     className="segmented__btn"
-                    aria-selected={settings.theme === theme}
-                    onClick={() => void updateSettings({ theme })}
+                    aria-selected={settings.theme === id}
+                    onClick={() => void updateSettings({ theme: id })}
                   >
-                    {theme === 'dark' ? 'Basalt' : 'Limestone'}
+                    {label}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            <div className="row" style={{ marginTop: 'var(--sp-3)' }}>
+              <div className="row__label">
+                <b>Editor text size</b>
+                <span>The prose measure grows with it, so the line length stays right.</span>
+              </div>
+              <div className="stepper">
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  aria-label="Smaller"
+                  disabled={settings.editorFontSize <= MIN_FONT}
+                  onClick={() =>
+                    void updateSettings({
+                      editorFontSize: Math.max(MIN_FONT, settings.editorFontSize - 1)
+                    })
+                  }
+                >
+                  −
+                </button>
+                <span className="stepper__value mono">{settings.editorFontSize}px</span>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  aria-label="Larger"
+                  disabled={settings.editorFontSize >= MAX_FONT}
+                  onClick={() =>
+                    void updateSettings({
+                      editorFontSize: Math.min(MAX_FONT, settings.editorFontSize + 1)
+                    })
+                  }
+                >
+                  +
+                </button>
               </div>
             </div>
 
@@ -302,7 +358,7 @@ export function SettingsModal() {
                     key={snippet}
                     type="button"
                     className="tagchip"
-                    title="Remove this snippet"
+                    data-tip="Remove this snippet"
                     onClick={() =>
                       void updateSettings({
                         cssSnippets: settings.cssSnippets.filter((s) => s !== snippet)
@@ -531,7 +587,7 @@ export function SettingsModal() {
                 <button
                   type="button"
                   className="btn"
-                  title="Copy anything new into the vault's attachments folder, so the vault stays self-contained"
+                  data-tip="Copy anything new into the vault's attachments folder, so the vault stays self-contained"
                   onClick={() => void addLibraryFolder('copy')}
                 >
                   Import a folder
@@ -556,7 +612,7 @@ export function SettingsModal() {
                       type="button"
                       className="btn btn--ghost btn--icon btn--sm"
                       aria-label={`Stop watching ${folder.label}`}
-                      title="Stop watching this folder. The files themselves are left alone."
+                      data-tip="Stop watching this folder. The files themselves are left alone."
                       onClick={() => void removeLibraryFolder(folder.id)}
                     >
                       <IconTrash size={13} />
@@ -578,7 +634,7 @@ export function SettingsModal() {
                 className="btn btn--ghost btn--sm btn--icon"
                 style={{ marginLeft: 'auto' }}
                 aria-label="Refresh calendars"
-                title="Refresh calendars"
+                data-tip="Refresh calendars"
                 onClick={() => {
                   void refreshAccounts()
                   void loadCalendar(true)

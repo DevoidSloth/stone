@@ -373,7 +373,7 @@
 
 .embedq--error,
 .embedq__warning {
-  color: var(--danger, #ee6b6b);
+  color: var(--red);
 }
 
 /* ----------------------------------------------------------------- maths */

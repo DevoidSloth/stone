@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { LoadedPlugin, ThemeInfo } from '@shared/types'
 import { useStone } from '../store'
 import { IconPalette, IconPuzzle, IconRefresh } from '../ui/icons'
+import { describeError } from '../lib/errors'
 
 /**
  * Themes and plugins.
@@ -37,7 +38,7 @@ export function ExtensionSettings() {
         'success'
       )
     } catch (err) {
-      toast((err as Error).message, 'error')
+      toast(describeError(err), 'error')
     }
   }
 
@@ -117,7 +118,7 @@ export function ExtensionSettings() {
               {plugin.name} <span className="mono">{plugin.version}</span>
             </b>
             {plugin.error ? (
-              <span style={{ color: 'var(--danger, #ee6b6b)' }}>{plugin.error}</span>
+              <span style={{ color: 'var(--red)' }}>{plugin.error}</span>
             ) : (
               <span>
                 {plugin.description}

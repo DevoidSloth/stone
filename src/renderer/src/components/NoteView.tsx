@@ -24,6 +24,8 @@ import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
 import { HoverPreview } from './SidePanels'
 import { exportNoteToPdf } from '../export-note'
 import { formatLongDate, relativeDay, toISODate } from '../lib/dates'
+import { describeError } from '../lib/errors'
+import { useResolvedDark } from '../lib/theme'
 
 function basename(relPath: string): string {
   return relPath.split('/').pop()!.replace(/\.md$/, '')
@@ -62,6 +64,9 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
   const titleRef = useRef<HTMLInputElement>(null)
   const headRef = useRef<HTMLDivElement>(null)
   const { menu, open: openMenu, close: closeMenu } = useContextMenu()
+  // CodeMirror keys its own base theme off a boolean, not off our CSS, so the
+  // resolved theme has to reach it as a value — including when `system` flips.
+  const dark = useResolvedDark()
 
   const note = useMemo(() => notes.find((n) => n.relPath === relPath) ?? null, [notes, relPath])
 
@@ -155,7 +160,7 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
       toast(`Exported to ${saved}.`, 'success')
       void window.stone.exporter.reveal(saved)
     } catch (err) {
-      toast((err as Error).message, 'error')
+      toast(describeError(err), 'error')
     }
   }
 
@@ -225,6 +230,7 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
       label: 'Move to trash',
       icon: <IconTrash size={13} />,
       danger: true,
+      separated: true,
       run: () => void deleteNote(relPath)
     }
   ]
@@ -361,6 +367,8 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
           attachmentsFolder={settings?.attachmentsFolder ?? 'Attachments'}
           vimMode={settings?.vimMode ?? false}
           spellcheck={settings?.spellcheck ?? true}
+          dark={dark}
+          fontSize={settings?.editorFontSize ?? 16}
           revealLine={doc.revealLine}
           onRevealed={() => consumeReveal(relPath)}
           onHoverLink={(target, rect) => setHover({ target, rect })}
@@ -378,7 +386,7 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
             type="button"
             className="btn btn--ghost btn--sm btn--icon"
             aria-label="Back"
-            title="Back"
+            data-tip="Back"
             onClick={goBack}
           >
             <IconArrowLeft size={14} />
@@ -387,7 +395,7 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
             type="button"
             className="btn btn--ghost btn--sm btn--icon"
             aria-label="Forward"
-            title="Forward"
+            data-tip="Forward"
             onClick={goForward}
           >
             <IconArrowRight size={14} />
@@ -418,7 +426,7 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
                 <button
                   type="button"
                   className="note__crumb-link truncate"
-                  title={`Open the folder note for ${crumb}`}
+                  data-tip={`Open the folder note for ${crumb}`}
                   onClick={(event) => {
                     event.stopPropagation()
                     void openFolderNote(crumb)
@@ -434,7 +442,7 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
             type="button"
             className="note__crumb-file"
             aria-label="Open another file in this pane"
-            title={`Open another file in this pane (${window.stone.platform === 'darwin' ? '⌘P' : 'Ctrl P'})`}
+            data-tip={`Open another file in this pane (${window.stone.platform === 'darwin' ? '⌘P' : 'Ctrl P'})`}
           >
             <span className="truncate">{name}</span>
             <IconChevronDown size={11} />
@@ -449,7 +457,7 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
             type="button"
             className="btn btn--ghost btn--sm btn--icon"
             aria-label={favorited ? 'Remove from favourites' : 'Add to favourites'}
-            title={favorited ? 'Remove from favourites' : 'Add to favourites'}
+            data-tip={favorited ? 'Remove from favourites' : 'Add to favourites'}
             data-on={favorited}
             onClick={() => void toggleFavorite(relPath)}
           >
@@ -459,7 +467,7 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
             type="button"
             className="btn btn--ghost btn--sm btn--icon"
             aria-label="More actions"
-            title="More actions"
+            data-tip="More actions"
             onClick={(e) => {
               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
               openMenu(

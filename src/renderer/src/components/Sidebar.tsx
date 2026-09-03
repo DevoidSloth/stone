@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef} from 'react'
 import type { LibraryDoc, NoteMeta } from '@shared/types'
 import { folderDefinedBy } from '@shared/folder-note'
 import { docTarget, useStone } from '../store'
@@ -18,6 +18,8 @@ import {
   IconTrash
 } from '../ui/icons'
 import { PageIcon } from './PageDressing'
+import { describeError } from '../lib/errors'
+import { seedTreeTabStop, useTreeKeyboard } from '../lib/tree-keys'
 
 type Tab = 'pages' | 'recent' | 'tags' | 'docs'
 
@@ -168,10 +170,13 @@ function NoteRow({
     <button
       type="button"
       className="treerow"
+      data-treerow
+      role="treeitem"
+      tabIndex={-1}
       aria-current={active}
       draggable
       style={{ paddingLeft: 6 + depth * 14 }}
-      title={`${note.title} · edited ${relativeDay(toISODate(new Date(note.mtime)))}`}
+      data-tip={`${note.title} · edited ${relativeDay(toISODate(new Date(note.mtime)))}`}
       onClick={(e) => onOpen(note.relPath, e.metaKey || e.ctrlKey)}
       onAuxClick={(e) => {
         if (e.button === 1) onOpen(note.relPath, true)
@@ -232,6 +237,10 @@ function FolderRows({
           <div key={child.path}>
             <div
               className="treerow treerow--folder"
+              data-treerow
+              role="treeitem"
+              tabIndex={-1}
+              aria-expanded={!isCollapsed}
               data-drop={dropTarget === child.path}
               aria-current={current}
               style={{ paddingLeft: 6 + depth * 14 }}
@@ -267,7 +276,7 @@ function FolderRows({
               <button
                 type="button"
                 className="treerow__open"
-                title={
+                data-tip={
                   child.note
                     ? `Open ${child.name}`
                     : `Open ${child.name} — its folder note is written on first open`
@@ -446,9 +455,12 @@ function DocRow({
     <button
       type="button"
       className="treerow"
+      data-treerow
+      role="treeitem"
+      tabIndex={-1}
       aria-current={active}
       style={{ paddingLeft: 6 + depth * 14 }}
-      title={`${doc.name} · ${doc.path}`}
+      data-tip={`${doc.name} · ${doc.path}`}
       onClick={(e) => onOpen(doc.path, e.metaKey || e.ctrlKey)}
       onAuxClick={(e) => {
         if (e.button === 1) onOpen(doc.path, true)
@@ -460,12 +472,12 @@ function DocRow({
       </span>
       <span className="treerow__label truncate">{doc.name}</span>
       {doc.evicted ? (
-        <span className="treerow__count" title="Not downloaded from iCloud">
+        <span className="treerow__count" data-tip="Not downloaded from iCloud">
           <IconCloud size={11} />
         </span>
       ) : (
         doc.pageCount !== null && (
-          <span className="treerow__count" title={`${doc.pageCount} pages`}>
+          <span className="treerow__count" data-tip={`${doc.pageCount} pages`}>
             {doc.pageCount}
           </span>
         )
@@ -645,6 +657,14 @@ export function Sidebar() {
   const [filter, setFilter] = useState('')
   const [tagFilter, setTagFilter] = useState<string | null>(null)
   const { menu, open: openMenu, close: closeMenu } = useContextMenu()
+  const treeRef = useRef<HTMLDivElement>(null)
+  const onTreeKeyDown = useTreeKeyboard(treeRef)
+
+  // One row has to be in the tab order or the tree is unreachable by keyboard;
+  // after that the roving tabindex in the handler takes over.
+  useEffect(() => {
+    seedTreeTabStop(treeRef.current)
+  })
 
   const [collapsed, setCollapsed] = useState<Set<string>>(() => {
     try {
@@ -776,6 +796,7 @@ export function Sidebar() {
         label: 'Move to trash',
         icon: <IconTrash size={13} />,
         danger: true,
+        separated: true,
         run: () => void deleteNote(note.relPath)
       }
     ]
@@ -804,7 +825,7 @@ export function Sidebar() {
       if (parent) setCollapsed((prev) => new Set([...prev].filter((p) => p !== parent)))
       toast(`Created ${relPath}.`, 'success')
     } catch (err) {
-      toast((err as Error).message, 'error')
+      toast(describeError(err), 'error')
     }
   }
 
@@ -848,7 +869,7 @@ export function Sidebar() {
               await window.stone.folders.rename(path, name)
               await refreshVault()
             } catch (err) {
-              toast((err as Error).message, 'error')
+              toast(describeError(err), 'error')
             }
           })()
         }
@@ -858,6 +879,7 @@ export function Sidebar() {
         label: 'Move folder to trash',
         icon: <IconTrash size={13} />,
         danger: true,
+        separated: true,
         run: () => {
           void window.stone.folders
             .remove(path)
@@ -899,7 +921,7 @@ export function Sidebar() {
                 'success'
               )
             } catch (err) {
-              toast((err as Error).message, 'error')
+              toast(describeError(err), 'error')
             }
           })()
         }
@@ -989,7 +1011,13 @@ export function Sidebar() {
             )}
           </div>
         ) : (
-          <div className="sidebar__list">
+          <div
+            className="sidebar__list"
+            ref={treeRef}
+            role="tree"
+            aria-label="Notes"
+            onKeyDown={onTreeKeyDown}
+          >
             {favoriteNotes.length > 0 && tab === 'pages' && !searching && (
               <>
                 <div className="sidebar__group eyebrow">Favourites</div>
@@ -1062,7 +1090,7 @@ export function Sidebar() {
             type="button"
             className="btn btn--sm sidebar__new"
             onClick={newNoteMenu}
-            title={templates.length > 0 ? 'New page, blank or from a template' : 'New page'}
+            data-tip={templates.length > 0 ? 'New page, blank or from a template' : 'New page'}
           >
             <IconPlus size={13} />
             New page
@@ -1071,7 +1099,7 @@ export function Sidebar() {
             type="button"
             className="btn btn--sm btn--icon"
             aria-label="New folder"
-            title="New folder at the top of the vault"
+            data-tip="New folder at the top of the vault"
             onClick={() => void newFolder('')}
           >
             <IconFolder size={13} />

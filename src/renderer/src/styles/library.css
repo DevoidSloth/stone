@@ -173,7 +173,7 @@
   min-height: 0;
   width: 100%;
   border: 0;
-  background: var(--bg-sunken, var(--bg-surface));
+  background: var(--bg-sunken);
 }
 
 .library__text {
@@ -387,7 +387,7 @@
   justify-content: center;
   align-items: flex-start;
   padding: var(--sp-4);
-  background: var(--bg-sunken, var(--bg-surface));
+  background: var(--bg-sunken);
 }
 
 .pdfview__status {
@@ -410,7 +410,7 @@
   min-height: 0;
   width: 100%;
   border: 0;
-  background: var(--bg-sunken, var(--bg-surface));
+  background: var(--bg-sunken);
 }
 
 .docpane__text {

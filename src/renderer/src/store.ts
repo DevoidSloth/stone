@@ -27,6 +27,7 @@ import { setFrontmatterKey } from '@shared/frontmatter'
 import { folderNotePath } from '@shared/folder-note'
 import { readStamp, stampInsertPoint, stampTarget } from '@shared/audio'
 import * as recorder from './audio/recorder'
+import { describeError } from './lib/errors'
 import * as decode from './audio/decode'
 import { insertBlock } from './editor/insert'
 
@@ -56,6 +57,8 @@ export interface Toast {
   id: number
   message: string
   tone: 'info' | 'success' | 'error'
+  /** Identical messages collapse into one row carrying how many arrived. */
+  count: number
 }
 
 /**
@@ -291,8 +294,19 @@ interface StoneState {
 
   boot: () => Promise<void>
   setView: (view: View) => void
+  /** True while any dialog is up, so global chords do not fire behind one. */
+  modalOpen: () => boolean
+
+  /** Long-running work, shown while it runs. Not the vault's `tasks`. */
+  running: { id: string; label: string }[]
+  /** Run `work` with a visible indicator; returns whatever `work` returns. */
+  withTask: <T>(id: string, label: string, work: () => Promise<T>) => Promise<T>
   toast: (message: string, tone?: Toast['tone']) => void
   dismissToast: (id: number) => void
+  dismissAllToasts: () => void
+  holdToasts: (held: boolean) => void
+  /** Write every note with a pending debounced save, right now. */
+  flushSaves: () => Promise<void>
 
   refreshVault: () => Promise<void>
   loadGraph: () => Promise<void>
@@ -302,6 +316,10 @@ interface StoneState {
   openNote: (relPath: string, opts?: { newTab?: boolean; pane?: number; line?: number }) => Promise<void>
   openTarget: (target: string) => Promise<void>
   closeTab: (paneIndex: number, tabId: string) => void
+  /** Close every tab in the pane except one — the menu action people expect. */
+  closeOtherTabs: (paneIndex: number, tabId: string) => void
+  /** Close everything to the right of a tab, for pruning a long session. */
+  closeTabsToRight: (paneIndex: number, tabId: string) => void
   focusTab: (paneIndex: number, tabIndex: number) => void
   focusPane: (paneIndex: number) => void
   splitPane: () => void
@@ -430,6 +448,47 @@ interface StoneState {
 
 let toastSeq = 0
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+const MAX_TOASTS = 4
+const TOAST_MS = 3600
+const toastTimers = new Map<number, ReturnType<typeof setTimeout>>()
+let toastsHeld = false
+
+/** Restart a toast's dismissal countdown, unless the pointer is holding the stack. */
+function scheduleToastDismiss(id: number, get: () => StoneState): void {
+  const existing = toastTimers.get(id)
+  if (existing) clearTimeout(existing)
+  if (toastsHeld) return
+  toastTimers.set(
+    id,
+    setTimeout(() => {
+      toastTimers.delete(id)
+      get().dismissToast(id)
+    }, TOAST_MS)
+  )
+}
+
+/**
+ * Stamp the resolved theme on the document.
+ *
+ * `system` means "whatever the OS is doing", which the renderer cannot see
+ * directly through the settings value — so it asks the media query, and main
+ * pushes an update when the OS crosses over while the app is running.
+ */
+/** The editor's text size, exposed to CSS so the prose measure can follow it. */
+export function applyEditorSize(px: number): void {
+  document.documentElement.style.setProperty('--editor-size', `${px}px`)
+}
+
+export function applyThemeAttribute(theme: Settings['theme']): void {
+  const resolved =
+    theme === 'system'
+      ? window.matchMedia('(prefers-color-scheme: dark)').matches
+        ? 'dark'
+        : 'light'
+      : theme
+  document.documentElement.dataset.theme = resolved
+}
 let dailyTimer: ReturnType<typeof setTimeout> | null = null
 
 function makeTab(relPath: string): Tab {
@@ -542,12 +601,20 @@ export const useStone = create<StoneState>((set, get) => ({
   sidebarOpen: true,
   agendaOpen: true,
   toasts: [],
+  running: [],
 
   async boot() {
     const settings = await window.stone.settings.get()
-    document.documentElement.dataset.theme = settings.theme === 'light' ? 'light' : 'dark'
+    applyThemeAttribute(settings.theme)
+    applyEditorSize(settings.editorFontSize)
     document.documentElement.dataset.vim = settings.vimMode ? 'on' : 'off'
     set({ settings })
+
+    // While the theme is `system`, main tells us when the OS crosses over.
+    window.stone.theme.onChange((resolved) => {
+      if (useStone.getState().settings?.theme !== 'system') return
+      document.documentElement.dataset.theme = resolved
+    })
 
     if (settings.vaultPath) {
       await get().refreshVault()
@@ -624,7 +691,7 @@ export const useStone = create<StoneState>((set, get) => ({
     try {
       set({ graph: await window.stone.vault.graph() })
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -641,17 +708,91 @@ export const useStone = create<StoneState>((set, get) => ({
     }
   },
 
+  /**
+   * Show that something is happening while it happens.
+   *
+   * "Rebuild the vault index" and "Export the whole vault" used to run for many
+   * seconds against a large vault with no feedback at all, and then produce a
+   * completion toast — so the only way to tell a slow command from a broken one
+   * was to wait and find out.
+   */
+  async withTask(id, label, work) {
+    set((state) => ({
+      running: state.running.some((t) => t.id === id)
+        ? state.running
+        : [...state.running, { id, label }]
+    }))
+    try {
+      return await work()
+    } finally {
+      set((state) => ({ running: state.running.filter((t) => t.id !== id) }))
+    }
+  },
+
+  modalOpen() {
+    const s = get()
+    return (
+      s.settingsOpen ||
+      s.quickAddOpen ||
+      s.claudeOpen ||
+      s.quickOpen !== null ||
+      s.textRequest !== null
+    )
+  },
+
   toast(message, tone = 'info') {
+    // A failure that repeats — a watcher on a folder that went away, a sync
+    // loop — used to stack an unbounded column of identical rows, each needing
+    // its own click, because errors deliberately never expire. Collapsing to a
+    // count keeps that decision without the pile.
+    const existing = get().toasts.find((t) => t.message === message && t.tone === tone)
+    if (existing) {
+      set((state) => ({
+        toasts: state.toasts.map((t) =>
+          t.id === existing.id ? { ...t, count: t.count + 1 } : t
+        )
+      }))
+      if (tone !== 'error') scheduleToastDismiss(existing.id, get)
+      return
+    }
+
     const id = ++toastSeq
-    set((state) => ({ toasts: [...state.toasts, { id, message, tone }] }))
+    set((state) => ({
+      // Oldest first out. Four is what fits without the stack becoming the UI.
+      toasts: [...state.toasts, { id, message, tone, count: 1 }].slice(-MAX_TOASTS)
+    }))
     // Errors stay until dismissed. An error worth showing is one the user may
     // need to read twice, quote in a bug report, or act on — and a message that
     // deletes itself after eight seconds is one they cannot copy.
-    if (tone !== 'error') setTimeout(() => get().dismissToast(id), 3600)
+    if (tone !== 'error') scheduleToastDismiss(id, get)
+  },
+
+  /** Hold the timer while the pointer is over the stack, so a message being read stays. */
+  holdToasts(held) {
+    toastsHeld = held
+    if (held) {
+      for (const timer of toastTimers.values()) clearTimeout(timer)
+      toastTimers.clear()
+      return
+    }
+    for (const toast of get().toasts) {
+      if (toast.tone !== 'error') scheduleToastDismiss(toast.id, get)
+    }
   },
 
   dismissToast(id) {
+    const timer = toastTimers.get(id)
+    if (timer) {
+      clearTimeout(timer)
+      toastTimers.delete(id)
+    }
     set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }))
+  },
+
+  dismissAllToasts() {
+    for (const timer of toastTimers.values()) clearTimeout(timer)
+    toastTimers.clear()
+    set({ toasts: [] })
   },
 
   async refreshVault() {
@@ -826,7 +967,7 @@ export const useStone = create<StoneState>((set, get) => ({
       get().toast(`Watching ${result.folder.label}.`, 'success')
       return true
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
       return false
     }
   },
@@ -838,7 +979,7 @@ export const useStone = create<StoneState>((set, get) => ({
       if (settings) set({ settings: { ...settings, libraryFolders } })
       set({ documents: await window.stone.library.list() })
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -891,6 +1032,26 @@ export const useStone = create<StoneState>((set, get) => ({
       // an accident. `settle` also hands the space back to its neighbours.
       return settle(panes, state.panes[state.activePane]?.id, state.activePane)
     })
+  },
+
+  closeOtherTabs(paneIndex, tabId) {
+    set((state) => ({
+      panes: state.panes.map((pane, index) =>
+        index !== paneIndex ? pane : { ...pane, tabs: pane.tabs.filter((t) => t.id === tabId), active: 0 }
+      )
+    }))
+  },
+
+  closeTabsToRight(paneIndex, tabId) {
+    set((state) => ({
+      panes: state.panes.map((pane, index) => {
+        if (index !== paneIndex) return pane
+        const at = pane.tabs.findIndex((t) => t.id === tabId)
+        if (at === -1) return pane
+        const tabs = pane.tabs.slice(0, at + 1)
+        return { ...pane, tabs, active: Math.min(pane.active, tabs.length - 1) }
+      })
+    }))
   },
 
   focusTab(paneIndex, tabIndex) {
@@ -1143,8 +1304,23 @@ export const useStone = create<StoneState>((set, get) => ({
           : state.docs
       }))
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
+  },
+
+  /**
+   * Write everything that is still sitting in a debounce timer.
+   *
+   * `setDoc` waits 900ms before saving, which is right while the app is running
+   * and wrong at the moment it stops: a sentence typed and then quit on was
+   * simply lost. Called from `beforeunload`, and by main before it lets the
+   * quit proceed.
+   */
+  async flushSaves() {
+    const pending = [...saveTimers.keys()]
+    for (const timer of saveTimers.values()) clearTimeout(timer)
+    saveTimers.clear()
+    await Promise.all(pending.map((relPath) => get().saveDoc(relPath)))
   },
 
   consumeReveal(relPath) {
@@ -1167,7 +1343,7 @@ export const useStone = create<StoneState>((set, get) => ({
       await get().openNote(relPath, opts)
       set({ view: 'notes' })
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1178,7 +1354,7 @@ export const useStone = create<StoneState>((set, get) => ({
       await get().openNote(relPath)
       set({ view: 'notes' })
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1197,7 +1373,7 @@ export const useStone = create<StoneState>((set, get) => ({
       await get().openNote(relPath, opts)
       set({ view: 'notes' })
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1235,7 +1411,7 @@ export const useStone = create<StoneState>((set, get) => ({
       await get().refreshVault()
       await get().openNote(next)
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1246,7 +1422,7 @@ export const useStone = create<StoneState>((set, get) => ({
       if (next !== relPath) await get().openNote(next)
       get().toast(`Moved to ${folder || 'the vault root'}.`, 'success')
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1256,7 +1432,7 @@ export const useStone = create<StoneState>((set, get) => ({
       await get().refreshVault()
       await get().openNote(copy)
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1310,7 +1486,7 @@ export const useStone = create<StoneState>((set, get) => ({
       }))
       await get().refreshVault()
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1324,7 +1500,7 @@ export const useStone = create<StoneState>((set, get) => ({
       await get().openNote(relPath)
       set({ selectedDay: day })
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1335,7 +1511,7 @@ export const useStone = create<StoneState>((set, get) => ({
       await get().refreshVault()
       await get().openNote(relPath)
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1354,7 +1530,7 @@ export const useStone = create<StoneState>((set, get) => ({
       // The note may be brand new, so the sidebar and index need to know.
       if (!get().notes.some((n) => n.relPath === relPath)) await get().refreshVault()
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1379,7 +1555,7 @@ export const useStone = create<StoneState>((set, get) => ({
       )
       set({ dailyDirty: false, dailyHash: result.hash })
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1395,7 +1571,7 @@ export const useStone = create<StoneState>((set, get) => ({
       const result = await window.stone.tasks.setStatus(task.relPath, task.line, next)
       if (result?.repeated) get().toast('Repeated — the next one is scheduled.', 'success')
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
       await get().refreshVault()
     }
   },
@@ -1406,7 +1582,7 @@ export const useStone = create<StoneState>((set, get) => ({
       await get().refreshVault()
       get().toast('Task added to today.', 'success')
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1424,7 +1600,7 @@ export const useStone = create<StoneState>((set, get) => ({
       const { events, errors } = await window.stone.calendar.events(window_.from, window_.to)
       set({ events, calendarErrors: errors, loadedRange: window_ })
     } catch (err) {
-      set({ calendarErrors: [(err as Error).message] })
+      set({ calendarErrors: [describeError(err)] })
     } finally {
       set({ calendarLoading: false })
     }
@@ -1449,7 +1625,7 @@ export const useStone = create<StoneState>((set, get) => ({
       const { accounts, errors } = await window.stone.calendar.accounts()
       set({ accounts, calendarErrors: errors })
     } catch (err) {
-      set({ calendarErrors: [(err as Error).message] })
+      set({ calendarErrors: [describeError(err)] })
     }
   },
 
@@ -1467,7 +1643,7 @@ export const useStone = create<StoneState>((set, get) => ({
       // A slower query that resolves after a newer one must not overwrite it.
       if (get().searchQuery === query) set({ searchHits: hits })
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     } finally {
       set({ searching: false })
     }
@@ -1491,7 +1667,7 @@ export const useStone = create<StoneState>((set, get) => ({
       await get().refreshVault()
       await get().runSearch(searchQuery)
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1501,7 +1677,7 @@ export const useStone = create<StoneState>((set, get) => ({
     try {
       set({ trash: await window.stone.trash.list() })
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1512,7 +1688,7 @@ export const useStone = create<StoneState>((set, get) => ({
       await get().loadTrash()
       get().toast(`Restored to ${restored}.`, 'success')
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1522,7 +1698,7 @@ export const useStone = create<StoneState>((set, get) => ({
       await get().loadTrash()
       get().toast(`${removed} note${removed === 1 ? '' : 's'} deleted for good.`, 'success')
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1548,7 +1724,7 @@ export const useStone = create<StoneState>((set, get) => ({
       await window.stone.comments.add(relPath, anchor, body)
       await get().loadComments()
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1557,7 +1733,7 @@ export const useStone = create<StoneState>((set, get) => ({
       await window.stone.comments.update(id, patch)
       await get().loadComments()
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1566,7 +1742,7 @@ export const useStone = create<StoneState>((set, get) => ({
       await window.stone.comments.remove(id)
       await get().loadComments()
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1594,7 +1770,7 @@ export const useStone = create<StoneState>((set, get) => ({
       await get().loadSnapshots()
       get().toast('Earlier version restored.', 'success')
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 
@@ -1626,9 +1802,8 @@ export const useStone = create<StoneState>((set, get) => ({
 
   async updateSettings(patch) {
     const settings = await window.stone.settings.set(patch)
-    if (patch.theme) {
-      document.documentElement.dataset.theme = settings.theme === 'light' ? 'light' : 'dark'
-    }
+    if (patch.theme) applyThemeAttribute(settings.theme)
+    if (patch.editorFontSize !== undefined) applyEditorSize(settings.editorFontSize)
     if (patch.vimMode !== undefined) {
       document.documentElement.dataset.vim = settings.vimMode ? 'on' : 'off'
     }
@@ -1767,7 +1942,7 @@ export const useStone = create<StoneState>((set, get) => ({
       void get().openPlayer(started.relPath, note)
       get().toast('Recording. Everything you type from here is stamped.', 'success')
     } catch (err) {
-      get().toast((err as Error).message, 'error')
+      get().toast(describeError(err), 'error')
     }
   },
 

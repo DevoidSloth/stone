@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { LibraryDoc } from '@shared/types'
 import { useStone } from '../store'
-import { IconCloud, IconFolder, IconRefresh, IconSearch, IconX } from '../ui/icons'
+import { IconCloud, IconCopy, IconFolder, IconRefresh, IconSearch, IconX } from '../ui/icons'
+import { describeError } from '../lib/errors'
+import { ContextMenu, useContextMenu } from './ContextMenu'
 
 /**
  * The library.
@@ -40,6 +42,7 @@ export function LibraryView() {
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<{ doc: LibraryDoc; excerpt: string }[]>([])
   const [open, setOpen] = useState<LibraryDoc | null>(null)
+  const { menu, open: openMenu, close: closeMenu } = useContextMenu()
   const [openUrl, setOpenUrl] = useState<string | null>(null)
   const [openText, setOpenText] = useState('')
   const [scanning, setScanning] = useState(false)
@@ -94,7 +97,7 @@ export function LibraryView() {
     try {
       setDocs(await window.stone.library.scan())
     } catch (err) {
-      toast((err as Error).message, 'error')
+      toast(describeError(err), 'error')
     } finally {
       setScanning(false)
     }
@@ -131,6 +134,7 @@ export function LibraryView() {
 
   return (
     <div className="library">
+      {menu && <ContextMenu state={menu} onClose={closeMenu} />}
       <div className="library__head">
         <div className="library__search">
           <IconSearch size={14} />
@@ -159,7 +163,7 @@ export function LibraryView() {
 
       <div className="library__folders">
         {folders.map((folder) => (
-          <span key={folder.id} className="tagchip" title={folder.path}>
+          <span key={folder.id} className="tagchip" data-tip={folder.path}>
             {folder.label}
             <em>{folder.mode === 'copy' ? 'copies in' : 'in place'}</em>
             <button
@@ -193,6 +197,34 @@ export function LibraryView() {
               data-active={open?.id === doc.id}
               onClick={() => setOpen(doc)}
               onDoubleClick={() => void window.stone.library.openExternally(doc.path)}
+              onContextMenu={(event) =>
+                openMenu(event, [
+                  { id: 'preview', label: 'Preview it here', run: () => setOpen(doc) },
+                  {
+                    id: 'external',
+                    label: 'Open in the default app',
+                    run: () => void window.stone.library.openExternally(doc.path)
+                  },
+                  {
+                    id: 'reveal',
+                    label: 'Reveal in the file manager',
+                    icon: <IconFolder size={14} />,
+                    run: () => void window.stone.library.reveal(doc.path)
+                  },
+                  {
+                    id: 'copy-link',
+                    label: 'Copy as a link',
+                    separated: true,
+                    icon: <IconCopy size={14} />,
+                    run: () => void navigator.clipboard.writeText(`[[${doc.name}]]`)
+                  },
+                  {
+                    id: 'copy-path',
+                    label: 'Copy the file path',
+                    run: () => void navigator.clipboard.writeText(doc.path)
+                  }
+                ])
+              }
             >
               <Thumbnail doc={doc} />
               <b className="truncate">{doc.name}</b>

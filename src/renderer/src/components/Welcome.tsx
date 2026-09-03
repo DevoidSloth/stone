@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { CloudTargetWithAdvice } from '../../../preload'
 import { useStone } from '../store'
-import { IconCloud, IconFolder, StoneMark } from '../ui/icons'
+import { IconCloud, IconFolder, IconSpinner, StoneMark } from '../ui/icons'
+import { describeError } from '../lib/errors'
 
 const ICON_FOR: Record<string, string> = {
   icloud: 'iCloud Drive',
@@ -18,6 +19,7 @@ const ICON_FOR: Record<string, string> = {
  */
 export function Welcome() {
   const toast = useStone((s) => s.toast)
+  const boot = useStone((s) => s.boot)
   const [targets, setTargets] = useState<CloudTargetWithAdvice[]>([])
   const [busy, setBusy] = useState(false)
 
@@ -32,9 +34,13 @@ export function Welcome() {
     setBusy(true)
     try {
       await window.stone.vault.open(path)
-      window.location.reload()
+      // `boot()` already knows how to bring the app up, and React swaps this
+      // screen for the shell as soon as the vault path lands in the store.
+      // Reloading the renderer instead threw away the whole process — fonts,
+      // bundle, and all — for the sake of re-running the same function.
+      await boot()
     } catch (err) {
-      toast((err as Error).message, 'error')
+      toast(describeError(err), 'error')
       setBusy(false)
     }
   }
@@ -48,6 +54,10 @@ export function Welcome() {
 
   return (
     <div className="welcome">
+      {/* Without this the first screen the user ever sees is an immovable
+          window, with the traffic lights floating over the card. */}
+      <div className="dragstrip" />
+
       <div className="welcome__card">
         <div className="welcome__mark">
           <StoneMark size={30} />
@@ -70,7 +80,7 @@ export function Welcome() {
               onClick={() => void open(`${target.path}${separator}Stone`)}
             >
               <span className="target__icon">
-                {target.kind === 'local' ? <IconFolder /> : <IconCloud />}
+                {busy ? <IconSpinner /> : target.kind === 'local' ? <IconFolder /> : <IconCloud />}
               </span>
               <span className="target__body">
                 <b>{ICON_FOR[target.kind] ?? target.label}</b>

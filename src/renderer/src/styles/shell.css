@@ -47,12 +47,47 @@
   position: relative;
 }
 
+/*
+ * Room for the window controls the OS draws over us.
+ *
+ * `titleBarOverlay` publishes its own geometry, so the reserved width is asked
+ * for rather than guessed — the old hardcoded 148px was a magic number that
+ * would drift the first time Windows changed its caption metrics, and Linux,
+ * which gets the same overlay, had no rule at all and wore the buttons on top
+ * of the theme and settings controls.
+ */
 .is-mac .titlebar {
   padding-left: 80px;
 }
 
-.is-win .titlebar {
-  padding-right: 148px;
+.is-win .titlebar,
+.is-linux .titlebar {
+  padding-right: max(148px, env(titlebar-area-x, 0px));
+}
+
+@supports (right: env(titlebar-area-width)) {
+  .is-win .titlebar,
+  .is-linux .titlebar {
+    padding-right: calc(100% - env(titlebar-area-width, calc(100% - 148px)));
+  }
+}
+
+/*
+ * A window with no title bar is a window that cannot be moved.
+ *
+ * The boot screen and the first-run screen both render before there is any
+ * chrome to drag, which on macOS also left the traffic lights floating over the
+ * welcome card. This is the minimum: a strip of drag region at the same height,
+ * carrying the same platform padding.
+ */
+.dragstrip {
+  height: var(--titlebar-h);
+  flex: 0 0 var(--titlebar-h);
+  -webkit-app-region: drag;
+}
+
+.is-mac .dragstrip {
+  padding-left: 80px;
 }
 
 .titlebar > * {
@@ -109,7 +144,13 @@
   background: var(--bg-hover);
 }
 
-.segmented__btn[aria-selected='true'] {
+/*
+ * Two spellings because there are two kinds of segmented control: the view
+ * switcher is navigation and marks itself `aria-current`, while the ones in
+ * Settings are genuine option groups and stay on `aria-selected`.
+ */
+.segmented__btn[aria-selected='true'],
+.segmented__btn[data-active='true'] {
   color: var(--text);
   background: var(--bg-hover);
 }
@@ -422,8 +463,39 @@
 }
 
 :root[data-theme='light'] .toast {
-  background: #373530;
-  color: rgb(255 255 255 / 90%);
+  background: var(--bg-tooltip);
+  color: var(--text-tooltip);
+}
+
+/*
+ * How many times an identical message arrived. Errors never expire by design,
+ * so without this a repeating failure grew an unbounded column of duplicates.
+ */
+.toast__count {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: var(--r-full);
+  background: rgb(255 255 255 / 14%);
+  color: inherit;
+  font-size: var(--t-2xs);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.toasts__clear {
+  pointer-events: auto;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-raised);
+  color: var(--text-muted);
+  font-size: var(--t-2xs);
+  cursor: pointer;
+}
+
+.toasts__clear:hover {
+  color: var(--text-strong);
+  border-color: var(--border-strong);
 }
 
 /* The message is the one part of a toast worth selecting, so it is the only
@@ -922,4 +994,19 @@
 .divider {
   height: 1px;
   background: var(--border-hair);
+}
+
+/* Work in progress: the same chip as a toast, without a way to dismiss it. */
+.toast--task {
+  color: var(--text-tooltip);
+}
+
+.toast--task .toast__message {
+  cursor: default;
+  user-select: none;
+}
+
+/* An update that has already downloaded. The quietest notice in the app. */
+.toast--update .toast__dot {
+  background: var(--green);
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStone } from '../store'
 import { fuzzyMatch, highlight } from '../lib/fuzzy'
 import { IconFolder, IconNote } from '../ui/icons'
+import { useFocusTrap } from '../lib/focus-trap'
 
 /**
  * Go to file.
@@ -43,6 +44,9 @@ export function QuickOpen() {
   const listRef = useRef<HTMLDivElement>(null)
 
   const open = useMemo(() => paneIndex !== null, [paneIndex])
+  const dialog = useRef<HTMLDivElement>(null)
+
+  useFocusTrap(dialog, open)
 
   useEffect(() => {
     if (!open) return
@@ -127,6 +131,7 @@ export function QuickOpen() {
     <div className="overlay overlay--top" onMouseDown={() => setQuickOpen(null)} role="presentation">
       <div
         className="palette"
+        ref={dialog}
         role="dialog"
         aria-modal="true"
         aria-label="Go to file"

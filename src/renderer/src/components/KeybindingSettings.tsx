@@ -104,7 +104,7 @@ export function KeybindingSettings() {
                   <div className="row__label">
                     <b>{commandLabel(command, { query: '' })}</b>
                     {keys.some((k) => (clashes.get(k)?.length ?? 0) > 1) && (
-                      <span style={{ color: 'var(--danger, #ee6b6b)' }}>
+                      <span style={{ color: 'var(--red)' }}>
                         Also bound to another command — the last one wins.
                       </span>
                     )}
@@ -116,7 +116,7 @@ export function KeybindingSettings() {
                         key={chord}
                         type="button"
                         className="tagchip"
-                        title="Remove this shortcut"
+                        data-tip="Remove this shortcut"
                         onClick={() => setKeys(command.id, keys.filter((k) => k !== chord))}
                       >
                         {formatChord(chord)}

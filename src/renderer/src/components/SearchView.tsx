@@ -124,7 +124,7 @@ export function SearchView() {
             type="button"
             className="filterbtn"
             aria-pressed={options.caseSensitive}
-            title="Match case"
+            data-tip="Match case"
             onClick={() => setSearchOptions({ caseSensitive: !options.caseSensitive })}
           >
             Aa
@@ -133,7 +133,7 @@ export function SearchView() {
             type="button"
             className="filterbtn"
             aria-pressed={options.wholeWord}
-            title="Whole words only"
+            data-tip="Whole words only"
             onClick={() => setSearchOptions({ wholeWord: !options.wholeWord })}
           >
             ab|
@@ -142,7 +142,7 @@ export function SearchView() {
             type="button"
             className="filterbtn"
             aria-pressed={options.regex}
-            title="Regular expression"
+            data-tip="Regular expression"
             onClick={() => setSearchOptions({ regex: !options.regex })}
           >
             .*
@@ -151,7 +151,7 @@ export function SearchView() {
             type="button"
             className="filterbtn"
             aria-pressed={replacing}
-            title="Replace across the vault"
+            data-tip="Replace across the vault"
             onClick={() => setReplacing((v) => !v)}
           >
             Replace

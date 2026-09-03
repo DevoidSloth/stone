@@ -1,4 +1,5 @@
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, nativeTheme } from 'electron'
+import type { Settings } from '@shared/types'
 
 /**
  * Colours for the Windows caption buttons drawn by the system into the title
@@ -17,6 +18,18 @@ export const CHROME_BG = {
 } as const
 
 export type ChromeTheme = keyof typeof OVERLAY
+
+/**
+ * The theme actually in force, with `system` collapsed to what the OS is doing.
+ *
+ * Every consumer used to write `theme === 'light' ? 'light' : 'dark'`, which
+ * quietly made `system` a synonym for dark everywhere outside main. There is
+ * one answer to this question and this is it.
+ */
+export function resolveTheme(theme: Settings['theme']): ChromeTheme {
+  if (theme === 'system') return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+  return theme
+}
 
 /**
  * Repaint the native window chrome to match the in-app theme.

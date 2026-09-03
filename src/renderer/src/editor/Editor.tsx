@@ -4,7 +4,6 @@ import {
   EditorView,
   keymap,
   drawSelection,
-  highlightActiveLine,
   placeholder
 } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
@@ -47,16 +46,26 @@ import { blockInsertion, clearActiveEditor, setActiveEditor, trackFocus } from '
 import { stamps } from './stamps'
 import { seekPlayer } from '../audio/player'
 import { useStone } from '../store'
+import { describeError } from '../lib/errors'
 
 /**
  * CodeMirror injects its own base styles at a specificity plain CSS cannot beat,
  * which is why the editor rendered in monospace with a phantom left indent no
  * matter what the stylesheet said. Anything structural has to be set here.
  */
-const stoneTheme = EditorView.theme({
+function makeStoneTheme(dark: boolean): Extension {
+  return EditorView.theme(STONE_THEME_SPEC, { dark })
+}
+
+/**
+ * `dark` is not cosmetic here. CodeMirror's base theme carries `&light` and
+ * `&dark` variants, and with no flag it assumes light — which is why ⌘F used to
+ * open a `#f5f5f5` panel with black text in the middle of the dark theme. The
+ * search panel is the one CodeMirror surface Stone does not restyle itself.
+ */
+const STONE_THEME_SPEC = ({
   '&': {
     fontFamily: 'var(--font-ui)',
-    fontSize: '16px',
     color: 'var(--text)',
     backgroundColor: 'transparent'
   },
@@ -83,10 +92,12 @@ const stoneTheme = EditorView.theme({
   '.cm-gutters': { display: 'none' },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--text)', borderLeftWidth: '1.5px' },
   '.cm-placeholder': { color: 'var(--text-ghost)' },
+  // Was a literal `rgba(35, 131, 226, 0.2)`, the only hardcoded colour left in
+  // the app — heavier than `--bg-selected` in both themes, so a selection in
+  // the editor did not match a selection anywhere else in the window.
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
-    backgroundColor: 'rgba(35, 131, 226, 0.2)'
+    backgroundColor: 'var(--bg-selected-strong)'
   },
-  '.cm-activeLine': { backgroundColor: 'transparent' },
   // The vim block cursor and status line are the plugin's own, and would
   // otherwise arrive in its default browser styling.
   '.cm-vim-panel': {
@@ -96,8 +107,77 @@ const stoneTheme = EditorView.theme({
     color: 'var(--text-muted)',
     backgroundColor: 'var(--bg-surface)'
   },
-  '.cm-fat-cursor': { backgroundColor: 'var(--accent) !important', color: 'var(--accent-ink) !important' }
-})
+  '.cm-fat-cursor': { backgroundColor: 'var(--accent) !important', color: 'var(--accent-ink) !important' },
+
+  // The find bar. Styled here rather than in CSS for the same reason as the
+  // rest of this object: CodeMirror's own rules land at a specificity plain
+  // stylesheets cannot beat.
+  '.cm-panels': {
+    backgroundColor: 'var(--bg-surface)',
+    color: 'var(--text)',
+    border: 'none'
+  },
+  '.cm-panels.cm-panels-bottom': { borderTop: '1px solid var(--border-hair)' },
+  '.cm-panels.cm-panels-top': { borderBottom: '1px solid var(--border-hair)' },
+  '.cm-panel.cm-search': {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '8px 10px',
+    fontFamily: 'var(--font-ui)',
+    fontSize: 'var(--t-sm)'
+  },
+  '.cm-panel.cm-search label': {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    color: 'var(--text-muted)',
+    fontSize: 'var(--t-xs)'
+  },
+  '.cm-textfield': {
+    height: '26px',
+    padding: '0 8px',
+    border: '1px solid var(--border-hair)',
+    borderRadius: 'var(--r-sm)',
+    backgroundColor: 'var(--bg-input)',
+    color: 'var(--text)',
+    fontFamily: 'var(--font-ui)',
+    fontSize: 'var(--t-sm)'
+  },
+  '.cm-textfield:focus': {
+    outline: 'none',
+    borderColor: 'var(--accent)',
+    boxShadow: '0 0 0 2px var(--accent-soft)'
+  },
+  '.cm-button': {
+    height: '26px',
+    padding: '0 10px',
+    border: '1px solid var(--border-hair)',
+    borderRadius: 'var(--r-sm)',
+    backgroundImage: 'none',
+    backgroundColor: 'transparent',
+    color: 'var(--text)',
+    fontFamily: 'var(--font-ui)',
+    fontSize: 'var(--t-sm)',
+    cursor: 'pointer'
+  },
+  '.cm-button:hover': { backgroundColor: 'var(--bg-hover)' },
+  '.cm-button:active': { backgroundImage: 'none', backgroundColor: 'var(--bg-active)' },
+  '.cm-panel.cm-search [name=close]': {
+    position: 'absolute',
+    top: '6px',
+    right: '8px',
+    padding: '2px 6px',
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--text-faint)',
+    fontSize: '16px',
+    cursor: 'pointer'
+  },
+  '.cm-searchMatch': { backgroundColor: 'var(--wash-yellow)' },
+  '.cm-searchMatch.cm-searchMatch-selected': { backgroundColor: 'var(--accent-soft)' }
+}) satisfies Parameters<typeof EditorView.theme>[0]
 
 /**
  * Code-block syntax colours.
@@ -183,6 +263,35 @@ function bodyStart(doc: string): number {
   return m ? m[0].length : 0
 }
 
+/**
+ * Per-note editor state, kept across tab switches.
+ *
+ * Bounded and ordered by last use: a long session touches more notes than are
+ * worth holding whole documents for, and the ones you left ten notes ago are
+ * the ones you are least likely to return to.
+ */
+const MAX_REMEMBERED = 24
+const docStates = new Map<string, EditorState>()
+const scrollTops = new Map<string, number>()
+
+function rememberDoc(key: string, state: EditorState, scrollTop: number): void {
+  docStates.delete(key)
+  docStates.set(key, state)
+  scrollTops.set(key, scrollTop)
+  while (docStates.size > MAX_REMEMBERED) {
+    const oldest = docStates.keys().next().value as string | undefined
+    if (oldest === undefined) break
+    docStates.delete(oldest)
+    scrollTops.delete(oldest)
+  }
+}
+
+/** Drop a note's remembered state — it was renamed, deleted, or changed on disk. */
+export function forgetDoc(key: string): void {
+  docStates.delete(key)
+  scrollTops.delete(key)
+}
+
 export interface EditorProps {
   value: string
   onChange: (next: string) => void
@@ -197,6 +306,9 @@ export interface EditorProps {
   attachmentsFolder?: string
   vimMode?: boolean
   spellcheck?: boolean
+  /** Drives CodeMirror's own `dark` flag, which its base theme keys off. */
+  dark?: boolean
+  fontSize?: number
   /** Scroll to this line once after the document loads. */
   revealLine?: number | null
   onRevealed?: () => void
@@ -216,6 +328,8 @@ export function Editor({
   attachmentsFolder = 'Attachments',
   vimMode = false,
   spellcheck = true,
+  dark = true,
+  fontSize = 16,
   revealLine = null,
   onRevealed,
   onHoverLink,
@@ -260,6 +374,10 @@ export function Editor({
   }
 
   const extensions = useMemo<Extension[]>(() => {
+    // Set by Escape, cleared by the Tab that follows it. Per view, which is
+    // what having it inside the memo gets us.
+    let tabEscapes = false
+
     const wikilinkSource = (context: CompletionContext): CompletionResult | null => {
       const match = context.matchBefore(/!?\[\[[^\]]*/)
       if (!match) return null
@@ -296,14 +414,33 @@ export function Editor({
      */
     const insertFiles = async (view_: EditorView, files: File[], at: number): Promise<void> => {
       const snippets: string[] = []
+      const failed: string[] = []
+      let lastError: unknown = null
       for (const file of files) {
+        const name = file.name || 'pasted.png'
         try {
           const buffer = new Uint8Array(await file.arrayBuffer())
-          const saved = await window.stone.attachments.save(buffer, file.name || 'pasted.png')
+          const saved = await window.stone.attachments.save(buffer, name)
           snippets.push(saved.markdown)
         } catch (err) {
+          // Console-only used to mean the user pasted a screenshot, nothing
+          // appeared, and nothing said why — in the one interaction the comment
+          // above calls the difference between an app you can live in and one
+          // you cannot.
           console.error('[stone] attachment failed', err)
+          lastError = err
+          failed.push(name)
         }
+      }
+      if (failed.length > 0) {
+        useStone
+          .getState()
+          .toast(
+            failed.length === 1
+              ? `Could not save “${failed[0]}” into the vault. ${describeError(lastError)}`
+              : `Could not save ${failed.length} of ${files.length} files into the vault.`,
+            'error'
+          )
       }
       if (snippets.length === 0) return
 
@@ -406,10 +543,10 @@ export function Editor({
     return [
       // Vim has to come first so its keymap outranks the defaults.
       ...(vimMode ? [vim({ status: true })] : []),
-      stoneTheme,
+      makeStoneTheme(dark),
+      EditorView.theme({ '&': { fontSize: `${fontSize}px` } }),
       history(),
       drawSelection(),
-      highlightActiveLine(),
       indentOnInput(),
       bracketMatching(),
       closeBrackets(),
@@ -514,7 +651,29 @@ export function Editor({
         ...searchKeymap,
         ...historyKeymap,
         ...defaultKeymap,
-        indentWithTab
+        // Tab indents, which makes the editor a keyboard trap in the strict
+        // sense: focus goes in and Tab never brings it out. Escape releases the
+        // capture for exactly one keystroke, so Tab then moves focus the way it
+        // does everywhere else, and the next Tab indents again.
+        {
+          key: 'Escape',
+          run: (v) => {
+            tabEscapes = true
+            v.dom.dispatchEvent(new CustomEvent('stone-tab-release'))
+            return false
+          }
+        },
+        {
+          key: 'Tab',
+          run: (v) => {
+            if (tabEscapes) {
+              tabEscapes = false
+              return false
+            }
+            return indentWithTab.run!(v)
+          },
+          shift: indentWithTab.shift
+        }
       ]),
       EditorView.updateListener.of((update) => {
         if (!update.docChanged) return
@@ -527,27 +686,46 @@ export function Editor({
     // rebuild when the editor's own configuration changes; rebuilding on every
     // render would drop focus.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vimMode, spellcheck])
+  }, [vimMode, spellcheck, dark, fontSize])
 
   useEffect(() => {
     if (!host.current) return
+
+    // A note you come back to should be where you left it. The view used to be
+    // destroyed and rebuilt on every tab switch, which threw away the undo
+    // history, the selection, the scroll offset and every fold — and then
+    // `bodyStart()` parked the caret at the top for good measure.
+    const remembered = docStates.get(docKey)
+    const reusable = remembered && remembered.doc.toString() === value
+
     const instance = new EditorView({
-      state: EditorState.create({
-        doc: value,
-        // The note's path is state, not configuration: the view is rebuilt when
-        // it changes anyway, and a run needs it both for its working directory
-        // and to keep one note's output off another note's blocks.
-        extensions: [extensions, notePathFacet.of(docKey)],
-        selection: { anchor: Math.min(bodyStart(value), value.length) }
-      }),
+      state: reusable
+        ? remembered
+        : EditorState.create({
+            doc: value,
+            // The note's path is state, not configuration: the view is rebuilt
+            // when it changes anyway, and a run needs it both for its working
+            // directory and to keep one note's output off another note's blocks.
+            extensions: [extensions, notePathFacet.of(docKey)],
+            selection: { anchor: Math.min(bodyStart(value), value.length) }
+          }),
       parent: host.current
     })
+
     view.current = instance
     emitted.current = value
+    if (reusable) {
+      const top = scrollTops.get(docKey)
+      if (top) requestAnimationFrame(() => instance.scrollDOM.scrollTo({ top }))
+    }
     // Claude's insertions go to the last editor focused; a note that has just
     // opened has not been clicked yet, so claim it now and let focus correct it.
     setActiveEditor(instance)
+
     return () => {
+      // Keep the state so the next visit resumes rather than restarts. Bounded,
+      // because a long session opens more notes than anyone needs remembered.
+      rememberDoc(docKey, instance.state, instance.scrollDOM.scrollTop)
       clearActiveEditor(instance)
       instance.destroy()
       view.current = null

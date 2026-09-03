@@ -167,6 +167,19 @@ body.is-resizing * {
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+  /*
+   * With more tabs than fit, the strip scrolled with no scrollbar and no other
+   * sign that there was more — so the fade is the only thing saying so. It is
+   * applied to both ends unconditionally; a strip that does not overflow has
+   * nothing under the fade to dim.
+   */
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 12px,
+    #000 calc(100% - 12px),
+    transparent 100%
+  );
 }
 
 .tabstrip__tabs::-webkit-scrollbar {
@@ -334,7 +347,7 @@ body.is-resizing * {
 .inspector__body {
   display: flex;
   flex-direction: column;
-  width: 296px;
+  width: var(--inspector-w);
   min-height: 0;
   order: 1;
 }
@@ -724,6 +737,16 @@ body.is-resizing * {
   top: -4px;
   max-height: 320px;
   overflow-y: auto;
+}
+
+/*
+ * The parent menu is measured and nudged back on screen; the submenu used to
+ * get none of that and opened rightward regardless, so a "Move to folder" off a
+ * right-click near the right edge opened off-window.
+ */
+.ctx--sub-left {
+  left: auto;
+  right: calc(100% - 4px);
 }
 
 .ctx__item {
@@ -1591,4 +1614,88 @@ body.is-resizing * {
   display: flex;
   gap: var(--sp-2);
   justify-content: center;
+}
+
+/* A small numeric stepper, for settings that are a value rather than a choice. */
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-sm);
+  background: var(--bg-input);
+}
+
+.stepper__value {
+  min-width: 46px;
+  text-align: center;
+  font-size: var(--t-sm);
+  color: var(--text);
+}
+
+/*
+ * The handle on a shell column's edge.
+ *
+ * Same interaction as `.panes__divider` — a hairline you can see and a wider
+ * strip you can actually hit — but sitting on one edge of a fixed column rather
+ * than between two flexible ones. Keyboard-reachable, because a divider that
+ * only answers to a pointer is a control some users cannot operate at all.
+ */
+.colresizer {
+  position: relative;
+  flex: 0 0 1px;
+  background: var(--border-hair);
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.colresizer::after {
+  content: '';
+  position: absolute;
+  inset: 0 -3px;
+}
+
+.colresizer:hover,
+.colresizer:focus-visible,
+body.is-resizing .colresizer {
+  background: var(--accent);
+}
+
+.colresizer:focus-visible {
+  outline: none;
+  flex-basis: 2px;
+}
+
+/*
+ * Keyboard focus inside a menu is tracked as state rather than as DOM focus:
+ * the container holds focus so it can own the arrow keys, and `data-active`
+ * says which row that means.
+ */
+.ctx__item[data-active='true'] {
+  background: var(--bg-hover);
+}
+
+.ctx__item[data-active='true'].ctx__item--danger {
+  background: var(--red-soft);
+}
+
+/*
+ * A rule above the item. Destructive actions used to sit flush against the
+ * ordinary ones with nothing but colour between them, and colour alone is the
+ * weaker of the two signals — especially at speed.
+ */
+.ctx__item[data-separated] {
+  margin-top: 5px;
+  border-top: 1px solid var(--border-hair);
+  padding-top: 9px;
+}
+
+/* The chord, right-aligned the way every native menu writes it. */
+.ctx__keys {
+  margin-left: auto;
+  padding-left: var(--sp-4);
+  color: var(--text-ghost);
+  font-size: var(--t-2xs);
+  font-variant-numeric: tabular-nums;
 }

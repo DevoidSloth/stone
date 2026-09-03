@@ -67,9 +67,19 @@
   --sp-9: 96px;
 
   --titlebar-h: 45px;
+  /* Defaults only: the shell overwrites these from settings as they are dragged. */
   --sidebar-w: 240px;
   --agenda-w: 300px;
-  --page-measure: 708px;
+  --inspector-w: 300px;
+
+  /*
+   * Notion's measure is 708px at a 16px body, which is 44.25 characters of
+   * em-width — a ratio, not a constant. Deriving it keeps the line length right
+   * when the reader turns the text size up, instead of packing more words onto
+   * a line that was already as long as it should be.
+   */
+  --editor-size: 16px;
+  --page-measure: calc(44.25 * var(--editor-size));
 
   --ease-out: cubic-bezier(0.2, 0.8, 0.4, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
@@ -96,13 +106,25 @@
   --bg-surface: #f7f7f5;
   --bg-raised: #efefee;
   --bg-input: #f7f7f5;
+  /* Below the page rather than on it: the library shelf and the canvas ground. */
+  --bg-sunken: #f1f0ee;
 
   /* Notion's hover greys are ink at low alpha, never a separate colour. */
   --bg-hover: rgb(55 53 47 / 8%);
   --bg-active: rgb(55 53 47 / 16%);
   --bg-selected: rgb(35 131 226 / 7%);
+  /*
+   * Selected *text*, which needs more weight than a selected row: the wash sits
+   * under glyphs rather than behind a whole block, and CodeMirror draws it in a
+   * layer beneath the text.
+   */
+  --bg-selected-strong: rgb(35 131 226 / 18%);
   --bg-scrim: rgb(15 15 15 / 32%);
+  --bg-tooltip: #37352f;
+  --text-tooltip: rgb(255 255 255 / 92%);
+  --text-tooltip-faint: rgb(255 255 255 / 55%);
 
+  --border-faint: rgb(55 53 47 / 5%);
   --border-hair: rgb(55 53 47 / 9%);
   --border: rgb(55 53 47 / 16%);
   --border-strong: rgb(55 53 47 / 26%);
@@ -177,12 +199,18 @@
   --bg-surface: #202020;
   --bg-raised: #2f2f2f;
   --bg-input: #262626;
+  --bg-sunken: #141414;
 
   --bg-hover: rgb(255 255 255 / 5.5%);
   --bg-active: rgb(255 255 255 / 10%);
   --bg-selected: rgb(35 131 226 / 16%);
+  --bg-selected-strong: rgb(35 131 226 / 30%);
   --bg-scrim: rgb(15 15 15 / 60%);
+  --bg-tooltip: #383838;
+  --text-tooltip: rgb(255 255 255 / 92%);
+  --text-tooltip-faint: rgb(255 255 255 / 52%);
 
+  --border-faint: rgb(255 255 255 / 5.5%);
   --border-hair: rgb(255 255 255 / 9.4%);
   --border: rgb(255 255 255 / 14%);
   --border-strong: rgb(255 255 255 / 22%);

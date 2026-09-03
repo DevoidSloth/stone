@@ -84,7 +84,7 @@ function PageThumb({
       className="pdfthumb"
       aria-current={current}
       onClick={onPick}
-      title={`Page ${page}`}
+      data-tip={`Page ${page}`}
     >
       <span className="pdfthumb__box">
         <canvas ref={canvas} className="pdfthumb__canvas" />

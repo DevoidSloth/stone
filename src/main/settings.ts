@@ -5,7 +5,7 @@ import type { Settings } from '@shared/types'
 
 export const DEFAULT_SETTINGS: Settings = {
   vaultPath: null,
-  theme: 'light',
+  theme: 'system',
   accentHue: 210,
   dailyFolder: 'Journal',
   dailyFormat: 'yyyy-MM-dd',
@@ -16,6 +16,10 @@ export const DEFAULT_SETTINGS: Settings = {
   templateFolder: 'Templates',
   dailyTemplate: null,
   editorFont: 'sans',
+  editorFontSize: 16,
+  sidebarWidth: 240,
+  inspectorWidth: 300,
+  agendaWidth: 300,
   editorWidth: 708,
   showStrataRail: false,
   showCanvas: false,
