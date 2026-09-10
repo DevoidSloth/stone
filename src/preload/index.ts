@@ -16,6 +16,7 @@ import type {
   Transcript,
   TranscribeProgress,
   WhisperStatus,
+  Backup,
   CloudTarget,
   CodeRunResult,
   CodeRunPhase,
@@ -147,6 +148,14 @@ const api = {
     read: (relPath: string, id: string) => call<string | null>('snapshots:read', relPath, id),
     restore: (relPath: string, id: string) =>
       call<{ hash: string }>('snapshots:restore', relPath, id)
+  },
+
+  /** Permanent, read-only copies under `.stone/backups`; these never rotate. */
+  backups: {
+    list: (relPath: string) => call<Backup[]>('backups:list', relPath),
+    read: (relPath: string, id: string) => call<string | null>('backups:read', relPath, id),
+    restore: (relPath: string, id: string) =>
+      call<{ hash: string }>('backups:restore', relPath, id)
   },
 
   attachments: {
@@ -437,7 +446,18 @@ const api = {
       return (): void => {
         ipcRenderer.removeListener('code:chunk', listener)
       }
-    }
+    },
+    /**
+     * Run a Java block and hand back the `boxes` source for the objects it
+     * left behind. One shot, and slow enough to be worth a status line: it
+     * compiles the block and runs it before it can draw anything.
+     *
+     * `prelude` is the note's earlier blocks. The drawer needs a JShell of its
+     * own and so cannot join the note's session, and a block that uses what an
+     * earlier one declared has to be given it back.
+     */
+    javaObjects: (request: { code: string; prelude: string[]; notePath: string | null }) =>
+      call<string>('java:objects', request)
   },
 
   shell: {

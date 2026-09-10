@@ -22,7 +22,15 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const src = path.join(root, 'src')
 
 /** Custom properties assigned by a component's inline `style`, not by CSS. */
-const SET_INLINE = new Set(['--chip', '--viz-hue', '--cols', '--depth', '--pct'])
+const SET_INLINE = new Set([
+  '--chip',
+  '--viz-hue',
+  '--cols',
+  '--depth',
+  '--pct',
+  '--callout-nest',
+  '--swatch',
+])
 
 function walk(dir) {
   const out = []

@@ -1,6 +1,8 @@
 import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
+import { SWATCHES } from '@shared/text-colour'
 import {
+  applyColour,
   blockKindAt,
   clearFormatting,
   isWrapped,
@@ -150,6 +152,7 @@ const ITEMS: Item[] = [
   {
     id: 'bullet',
     label: 'Bullet list',
+    shortcut: '⌘⇧8',
     paths: ['M2.9 4.5h.01', 'M2.9 8h.01', 'M2.9 11.5h.01', 'M6 4.5h7.4', 'M6 8h7.4', 'M6 11.5h7.4'],
     ...block('bullet')
   },
@@ -161,10 +164,18 @@ const ITEMS: Item[] = [
     ...block('task')
   },
   {
+    id: 'colour',
+    label: 'Colour',
+    // A filled disc, because a colour button that is not itself coloured is
+    // the one icon in this bar that would need a caption to be understood.
+    text: '\u25cf',
+    divide: true,
+    run: () => undefined
+  },
+  {
     id: 'clear',
     label: 'Clear formatting',
     text: 'Tx',
-    divide: true,
     run: (view) => void clearFormatting(view)
   }
 ]
@@ -172,6 +183,8 @@ const ITEMS: Item[] = [
 class Toolbar {
   private readonly dom: HTMLDivElement
   private readonly buttons = new Map<string, HTMLButtonElement>()
+  /** The swatch row under the bar, shown by the Colour button. */
+  private readonly palette: HTMLDivElement
   private visible = false
   /** Suppressed while the pointer is down, so it never follows a drag. */
   private dragging = false
@@ -206,6 +219,15 @@ class Toolbar {
       button.addEventListener('mousedown', (event) => event.preventDefault())
       button.addEventListener('click', (event) => {
         event.preventDefault()
+        // Colour is the one item that opens something instead of doing
+        // something: seven colours in two roles is fourteen buttons, and a bar
+        // that wide would cover the sentence being formatted.
+        if (item.id === 'colour') {
+          this.palette.hidden = !this.palette.hidden
+          this.schedulePosition()
+          return
+        }
+        this.palette.hidden = true
         item.run(this.view)
         this.sync()
       })
@@ -213,6 +235,9 @@ class Toolbar {
       this.buttons.set(item.id, button)
       this.dom.appendChild(button)
     }
+
+    this.palette = this.buildPalette()
+    this.dom.appendChild(this.palette)
 
     document.body.appendChild(this.dom)
 
@@ -226,6 +251,67 @@ class Toolbar {
     window.addEventListener('keydown', this.onKeyDown)
     window.addEventListener('scroll', this.onScroll, true)
     window.addEventListener('resize', this.onScroll)
+  }
+
+  /**
+   * The swatch row: seven colours, each offered twice — as ink and as a wash
+   * behind the words — plus the pair that take the colour off again.
+   *
+   * Two rows of the same hues rather than a grid of every combination: what
+   * people reach for is "make this red" or "highlight this yellow", and any
+   * pair beyond that is a decision the bar should not be asking for.
+   */
+  private buildPalette(): HTMLDivElement {
+    const palette = document.createElement('div')
+    palette.className = 'seltoolbar__palette'
+    palette.hidden = true
+
+    const row = (kind: 'ink' | 'wash', label: string): void => {
+      const line = document.createElement('div')
+      line.className = 'seltoolbar__swatches'
+
+      const caption = document.createElement('span')
+      caption.className = 'seltoolbar__swatch-label'
+      caption.textContent = label
+      line.appendChild(caption)
+
+      for (const swatch of SWATCHES) {
+        const chip = document.createElement('button')
+        chip.type = 'button'
+        chip.className = `seltoolbar__swatch seltoolbar__swatch--${kind}`
+        chip.title = swatch.label
+        chip.setAttribute('aria-label', `${label} ${swatch.label}`)
+        chip.style.setProperty('--swatch', kind === 'ink' ? swatch.ink : swatch.wash)
+        chip.addEventListener('mousedown', (event) => event.preventDefault())
+        chip.addEventListener('click', (event) => {
+          event.preventDefault()
+          applyColour(this.view, kind, kind === 'ink' ? swatch.ink : swatch.wash)
+          this.palette.hidden = true
+          this.sync()
+        })
+        line.appendChild(chip)
+      }
+
+      const none = document.createElement('button')
+      none.type = 'button'
+      none.className = 'seltoolbar__swatch seltoolbar__swatch--none'
+      none.title = `No ${label.toLowerCase()}`
+      none.setAttribute('aria-label', `Remove ${label.toLowerCase()}`)
+      none.addEventListener('mousedown', (event) => event.preventDefault())
+      none.addEventListener('click', (event) => {
+        event.preventDefault()
+        applyColour(this.view, kind, null)
+        this.palette.hidden = true
+        this.sync()
+      })
+      line.appendChild(none)
+
+      palette.appendChild(line)
+    }
+
+    row('ink', 'Text')
+    row('wash', 'Highlight')
+    return palette
   }
 
   private onPointerDown(): void {
@@ -352,6 +438,7 @@ class Toolbar {
   private hide(): void {
     if (!this.visible && this.dom.hidden) return
     this.dom.hidden = true
+    this.palette.hidden = true
     this.visible = false
   }
 

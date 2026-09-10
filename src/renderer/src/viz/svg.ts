@@ -1,8 +1,8 @@
 /**
  * The drawing primitives the program figures are built from.
  *
- * Three fences — `memory`, `tree` and `algo` — all end up as one SVG each, and
- * they all need the same handful of things: an element builder that does not
+ * Every fence — `memory`, `tree`, `types`, `algo` — ends up as one SVG, and they
+ * all need the same handful of things: an element builder that does not
  * fight the SVG namespace, a way to know how wide a label will be before it is
  * drawn, and arrowheads.
  *
@@ -114,7 +114,7 @@ let markerSeq = 0
  * Marker ids are document-global, and a note can hold a dozen figures, so each
  * figure mints its own. The returned prefix is what callers put in `marker-end`.
  */
-export function arrowDefs(): { defs: SVGDefsElement; arrow: string; open: string; dot: string } {
+export function arrowDefs(): { defs: SVGDefsElement; arrow: string; open: string; hollow: string; dot: string } {
   const id = `viz-${++markerSeq}`
   const marker = (suffix: string, path: SVGElement, size: number, refX: number): SVGMarkerElement =>
     svg(
@@ -135,6 +135,11 @@ export function arrowDefs(): { defs: SVGDefsElement; arrow: string; open: string
   const defs = svg('defs', {}, [
     marker('arrow', svg('path', { d: 'M 0 1 L 9 5 L 0 9 z', class: 'viz-arrowhead' }), 9, 8),
     marker('open', svg('path', { d: 'M 0 1 L 9 5 L 0 9', class: 'viz-arrowhead viz-arrowhead--open' }), 9, 8),
+    // UML's generalisation head: a closed triangle filled with the page rather
+    // than the line, so the edge stops at its base instead of showing through
+    // it. Larger than the others because it is the whole notation — a figure
+    // where it reads as a solid arrowhead is saying something different.
+    marker('hollow', svg('path', { d: 'M 0.6 1 L 9.4 5 L 0.6 9 z', class: 'viz-arrowhead viz-arrowhead--hollow' }), 12, 9.4),
     marker('dot', svg('circle', { cx: 5, cy: 5, r: 3.2, class: 'viz-arrowhead' }), 7, 5)
   ])
 
@@ -142,6 +147,7 @@ export function arrowDefs(): { defs: SVGDefsElement; arrow: string; open: string
     defs,
     arrow: `url(#${id}-arrow)`,
     open: `url(#${id}-open)`,
+    hollow: `url(#${id}-hollow)`,
     dot: `url(#${id}-dot)`
   }
 }

@@ -463,3 +463,19 @@ export const IconSpinner = (p: IconProps) => (
     <path d="M8 2.25a5.75 5.75 0 1 0 5.75 5.75" />
   </Icon>
 )
+
+/** An open book: the manual. */
+export const IconBook = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M8 4.5C6.9 3.6 5.4 3.2 3.6 3.3a.5.5 0 0 0-.35.5v7.3c0 .3.25.53.5.5 1.6-.1 2.9.28 3.9 1.1 1-.82 2.3-1.2 3.9-1.1a.5.5 0 0 0 .5-.5V3.8a.5.5 0 0 0-.35-.5c-1.8-.1-3.3.3-4.4 1.2Z" />
+    <path d="M8 4.5v8.2" />
+  </Icon>
+)
+
+/** Braces: what a block of code declares. */
+export const IconBraces = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M6.3 2.75c-1.2 0-1.8.6-1.8 1.8v1.2c0 1-.5 1.6-1.3 1.7v.1c.8.1 1.3.7 1.3 1.7v1.2c0 1.2.6 1.8 1.8 1.8" />
+    <path d="M9.7 2.75c1.2 0 1.8.6 1.8 1.8v1.2c0 1 .5 1.6 1.3 1.7v.1c-.8.1-1.3.7-1.3 1.7v1.2c0 1.2-.6 1.8-1.8 1.8" />
+  </Icon>
+)

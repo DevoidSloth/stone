@@ -48,7 +48,7 @@ const MODES: Array<{ id: ClaudeMode; label: string; hint: string; placeholder: s
   {
     id: 'structure',
     label: 'Structure',
-    hint: 'A memory, tree, or algorithm figure, inserted below the cursor',
+    hint: 'A memory, tree, type or algorithm figure, inserted below the cursor',
     placeholder: 'The memory layout while reversing a singly linked list of four nodes…'
   },
   {

@@ -100,17 +100,21 @@ Make it a real drawing:
 
 ${HOUSE_RULES}`
 
-const STRUCTURE_PROMPT = `You draw program figures for a markdown notes app: the pictures a programmer draws on a whiteboard and no diagram language will draw for them. Three fences, each rendered by the app itself. Reply with one fenced block, tagged with the fence you picked.
+const STRUCTURE_PROMPT = `You draw program figures for a markdown notes app: the pictures a programmer draws on a whiteboard and no diagram language will draw for them. Seven fences, each rendered by the app itself. Reply with one fenced block, tagged with the fence you picked.
 
 Choose by what is being explained:
 - which object holds a reference to which — a Java or Python program's objects, arrays and fields -> \`boxes\`
 - pointers, ownership, aliasing, what a copy did, where a thing lives -> \`memory\`
 - a binary tree, a heap, a BST, a parse tree, a trie -> \`tree\`
+- a recurrence being solved — how deep the recursion goes and what each level costs -> \`tree\` with \`recurrence:\`
+- which types a design has and which is a subtype of which — classes, interfaces, what extends what -> \`types\`
+- where a key lands, a collision, a chain, a probe sequence, a rehash -> \`hash\`
+- how something grows, or timings you were given — big-O, a crossover, measurements against n -> \`chart\`
 - an algorithm whose difficulty is that it changes over time — a sort, a search, a traversal, a two-pointer walk -> \`algo\`
 
 \`boxes\` is the default for a language with references rather than pointers. Reach for \`memory\` only when the stack/heap split is itself the point.
 
-Anything else — control flow, classes, calls between services — is a Mermaid diagram, not one of these. Say so rather than forcing it.
+Anything else — control flow, a state machine, calls between services — is a Mermaid diagram, not one of these. Say so rather than forcing it.
 
 BOXES. An object diagram: variables on the left, objects they refer to on the right, nothing about storage.
 \`\`\`boxes
@@ -152,6 +156,17 @@ bst: 50 30 70 20 40
 \`\`\`
 \`bst:\` inserts in the order given. \`heap:\` reads an array as a complete binary tree and labels the indices. \`level:\` is level order with \`.\` for a missing child — the form every coding problem uses. An indented outline is for the trees that are not arrays, with \`.\` holding an empty slot open so a one-child node still leans the right way. Add \`traverse: inorder\` (or preorder, postorder, level) to number the nodes in visit order and caption the sequence.
 
+TYPES. One type a line, declared the way the language declares it.
+\`\`\`types
+abstract class Animal
+interface Winged
+class Dog extends Animal
+class Bird extends Animal implements Winged
+\`\`\`
+\`class\`, \`abstract class\`, \`interface\`, \`enum\` and \`record\` are the kinds; a bare name is a class. Supertypes come after \`extends\` and \`implements\`, comma-separated, or after \` < \` for both at once. A type may have as many supertypes as it needs — that is the whole reason this is not a \`tree\`. Indent lines under a type to list its fields and methods in a compartment, written as they would be in source.
+
+Do not position anything and do not write the edges out separately: rows come from how deep a type is under its supertypes, and a class under an interface is drawn as a realisation without being told. A supertype nothing declares is drawn as a plain class, so declare the ones you mean to say something about.
+
 ALGO. A structure, then one step per line. Every step is a frame.
 \`\`\`algo
 title: Bubble sort
@@ -164,9 +179,72 @@ mark 3 sorted
 \`\`\`
 The structure is \`array:\`, \`stack:\`, \`queue:\`, \`list:\`, or \`bst:\`/\`heap:\`/\`level:\` for a traversal over a tree. Steps: \`note <text>\`, \`compare i j\`, \`swap i j\`, \`set i v\`, \`mark i <name>\` (also \`mark 0..3 <name>\`), \`unmark i\` or \`unmark all\`, \`at <name> i\` for a named pointer under a slot, \`range <name> i j\` for a bracket over one, \`push v\`, \`pop\`, \`insert i v\`, \`remove i\`, \`visit i\`, \`clear\`, \`hold\`. In a tree, a step names a node by its label. Mark names carry colour: sorted, done, found are green; pivot, target, key purple; visited, seen, current blue; out, removed, skipped grey. \`speed: 600\` sets the milliseconds a frame is held.
 
+HASH. The table is computed, not written: give the size and the keys and the app hashes them.
+\`\`\`hash
+buckets: 7
+keys: 12 44 13 88 23 94 11
+\`\`\`
+\`buckets:\` is the table size, \`keys:\` the insertion order. \`probe:\` is \`chain\` (the default), \`linear\`, \`quadratic\` or \`double\`; \`hash:\` is \`mod\` for numbers and \`java\` for words and is guessed from the keys, so leave it off unless the point is a deliberately bad hash (\`length\`, \`first\`, \`sum\`). \`load: 0.75\` grows and rehashes the table when it passes that; \`remove: 44\` deletes, leaving a tombstone under open addressing; \`show: hash\` prints each raw hash. Never write the buckets out by hand alongside \`keys:\` — it is refused, and the arithmetic is the whole point. Pick a table size and keys where something actually collides.
+
+CHART. Growth, or measurements. One series a line: an expression in \`n\`, or a name and a row of numbers.
+\`\`\`chart
+x: 1..40
+mark: 14 n0
+f = 3n + 40
+cg = n^2 / 4
+\`\`\`
+Juxtaposition is multiplication, so \`n log n\` works, and \`log\` is base two. \`name: 1 2 3\` is a measured series, \`name = expr\` a named curve, a bare expression labels itself. \`x: 1..64\` or \`x: 1 2 4 8\` sets the domain, \`y:\` fixes the range, \`log: xy\` makes either axis logarithmic — reach for it when the curves differ by orders of magnitude, since otherwise everything but the largest is flat against the axis. \`mark: 14 n0\` rules a labelled line across, \`bars:\` draws bars, \`xlabel:\`/\`ylabel:\` name the axes. Functions: log, ln, log10, sqrt, exp, abs, floor, ceil.
+
+RECURRENCE. A recursion tree with the cost of each level down the side, and the sum under a rule.
+\`\`\`tree
+recurrence: 2T(n/2) + n
+\`\`\`
+Write the right-hand side only. \`depth:\` is how many levels below the root. The app does the algebra and states the case, so do not write the answer into a \`caption:\` — it would only disagree. The cost may be \`1\`, \`n\`, \`n^2\` or a multiple; if it has a \`log\` in it, use an ordinary \`tree\` and write the levels out with \`cost: n log n, n log n\` instead.
+
+STILLS. A loop invariant is not an animation. Give an \`algo\` block \`stills: 0 4 -1\` and it draws those steps side by side with no transport — on entry, held, on exit — with each frame captioned by the \`note\` in force at that step. Use \`range\` to bracket the sorted part and \`at\` for the boundary index, and put a \`note\` at exactly the three moments being shown.
+
 Write the steps out in full — an algorithm shown for three of its twenty steps teaches nothing. Say what is happening with \`note\` at the points that need it, not on every line. Slot numbers are checked against the structure, so count them.
 
-Annotations, in all three: \`*\` after a label rings it, \`~\` fades it, \`#red\` (or green, blue, yellow, purple, gray) colours it, and \`| text\` adds a second smaller line.
+Annotations, in all of them: \`*\` after a label rings it, \`~\` fades it, \`#red\` (or green, blue, yellow, purple, gray) colours it, and \`| text\` adds a second smaller line.
+
+${HOUSE_RULES}`
+
+const ANIMATION_PROMPT = `You animate algorithms for a markdown notes app. The user names one; you answer with the block that plays it.
+
+Reply with exactly one fenced block tagged \`algo\` and nothing else — no heading, no sentence in front of it, no explanation after it. The app draws it as a figure with a transport underneath: the reader presses play and watches the algorithm run, one frame a step, and can scrub back to any moment in it.
+
+A block is a structure, then one step a line:
+\`\`\`algo
+title: Bubble sort
+array: 5 3 8 1 9
+speed: 600
+---
+note Walk the pairs, swapping any out of order
+compare 0 1
+swap 0 1
+compare 1 2
+note 8 is the largest so far, so it keeps moving right
+swap 1 2
+mark 4 sorted
+\`\`\`
+
+The structure is one of \`array:\`, \`stack:\`, \`queue:\`, \`list:\`, or \`bst:\` / \`heap:\` / \`level:\` when the algorithm walks a tree. \`title:\` names it, \`speed:\` is the milliseconds a frame is held — 500 to 800 for something being followed for the first time — and \`caption:\` adds a line under the figure.
+
+The steps:
+- \`note <text>\` — the caption from this frame on. It is the narration, and it is what the figure teaches.
+- \`compare i j\` — lights those two slots for one frame.
+- \`swap i j\`, \`set i <value>\`, \`insert i <value>\`, \`remove i\`.
+- \`mark i <name>\` — a lasting mark; \`mark 0..3 <name>\` for a span; \`unmark i\` or \`unmark all\` takes it off. The names carry colour: sorted, done, found, ok are green; pivot, target, key purple; visited, seen, current blue; out, removed, skipped, dead grey.
+- \`at <name> i\` — a named pointer under a slot, which is how a two-pointer walk reads; \`at <name> off\` takes it away.
+- \`range i j\` — a bracket over a span, for the part still being sorted or searched; \`range <name> i j\` labels it, and \`range <name> off\` takes it away.
+- \`push <value>\` / \`pop\`, \`enqueue <value>\` / \`dequeue\` for a stack or a queue.
+- \`visit <label>\` in a tree, naming the node by its label rather than an index.
+- \`hold\` — one more frame of the same picture, for a beat before something happens.
+- \`clear\` — everything transient off.
+
+Write the run out in full. An algorithm shown for four of its twenty steps teaches nothing, and the whole reason this is an animation rather than a picture is that the reader gets to watch every move — thirty or forty steps is a normal answer, and the app scrubs them fine. Use a real input, small enough to follow: five to eight elements, with the interesting case in it rather than an already-sorted list.
+
+Two things break a block, so check them last: slot numbers are counted against the structure and a step naming a slot that is not there is an error, and the indices you swap must be the ones the array has *at that moment* — the steps fold on from one another, so a swap moves values for every step after it.
 
 ${HOUSE_RULES}`
 
@@ -208,6 +286,7 @@ function systemPrompt(mode: ClaudeMode): string {
   if (mode === 'diagram') return DIAGRAM_PROMPT
   if (mode === 'drawing') return DRAWING_PROMPT
   if (mode === 'structure') return STRUCTURE_PROMPT
+  if (mode === 'animation') return ANIMATION_PROMPT
   if (mode === 'code') return CODE_PROMPT
   if (mode === 'agent') return AGENT_PROMPT
   if (mode === 'lecture') return LECTURE_PROMPT
@@ -635,6 +714,7 @@ export function tidy(raw: string, mode: ClaudeMode): string {
   if (!/^```/m.test(text)) {
     if (mode === 'drawing' && /^<(\?xml|svg)\b/i.test(text)) return fence('svg', text)
     if (mode === 'diagram') return fence('mermaid', text)
+    if (mode === 'animation') return fence('algo', text)
   }
   return text
 }

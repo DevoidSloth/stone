@@ -25,6 +25,11 @@ import { buildTree, drawTreeNode, layoutTree, type Figure, type TreeNode } from 
 export const ALGO_KEYS = [
   'title',
   'caption',
+  // A block Claude is still answering. Directives rather than a magic first
+  // line, so a half-finished block is as readable in another editor as here.
+  'pending',
+  'prompt',
+  'error',
   'array',
   'stack',
   'queue',
@@ -34,7 +39,10 @@ export const ALGO_KEYS = [
   'level',
   'speed',
   'autoplay',
-  'loop'
+  'loop',
+  // The run, frozen. A loop invariant is not an animation — it is three
+  // pictures, and the argument is what stayed true across them.
+  'stills'
 ] as const
 
 /** How a mark reads. Anything unlisted is simply "of note". */
@@ -246,14 +254,25 @@ function runSteps(start: Frame, steps: Step[], shape: Shape): Frame[] {
 
       case 'range':
       case 'window': {
-        const name = step.args[0]
-        if (!name) throw new VizError('`range` needs a name and two slots, as in `range lo..hi 0 4`', step.line)
+        // The name is optional, and left off more often than not: `range 0 4`
+        // is the bracket over the part still being sorted, and it does not need
+        // calling anything. Two numbers and no name is that; a name and two
+        // numbers is a bracket with a label on it.
+        const named = step.args.length > 2 || !/^\d+$/.test(step.args[0] ?? '')
+        const name = named ? step.args[0] : ''
+        const bounds = named ? step.args.slice(1) : step.args
+        if (named && !name) {
+          throw new VizError(
+            '`range` needs two slots, as in `range 0 4` or `range window 0 4`',
+            step.line
+          )
+        }
         const without = frame.ranges.filter((r) => r.name !== name)
-        if (step.args[1] === undefined || step.args[1] === 'off') {
+        if (bounds[0] === undefined || bounds[0] === 'off') {
           frame.ranges = without
         } else {
-          const lo = slot(step, step.args[1], n)
-          const hi = slot(step, step.args[2], n)
+          const lo = slot(step, bounds[0], n)
+          const hi = slot(step, bounds[1], n)
           frame.ranges = [...without, { name, lo: Math.min(lo, hi), hi: Math.max(lo, hi) }]
         }
         break
@@ -684,7 +703,126 @@ function prepare(source: string): Prepared {
   return { frames, stage, marksUsed, directives }
 }
 
-export function drawAlgo(source: string): Animation {
+// ------------------------------------------------------- waiting for an answer
+
+/**
+ * The block Claude has been asked for and has not answered yet.
+ *
+ * Generating one of these takes a minute or two, and the point of asking for it
+ * from inside the note is that the minute is spent taking notes rather than
+ * watching a dialog. So the block goes into the document straight away, holding
+ * the space the figure will need, and the note carries on underneath it. The
+ * source is real: `pending:` names the request, `prompt:` says what was asked
+ * for, and if the app is closed before the answer lands, what is left behind is
+ * a block saying what it was for rather than a mystery.
+ *
+ * `error:` is the same block after a request that failed. It keeps the prompt,
+ * because the prompt is the part worth another try.
+ */
+export function algoWaiting(source: string): Map<string, string> | null {
+  const { directives } = readSource(source, ALGO_KEYS)
+  return directives.has('pending') || directives.has('error') ? directives : null
+}
+
+/**
+ * Five empty slots, the width of a real figure, so nothing jumps when it lands.
+ *
+ * `live` is whether the request is actually still out. A block whose request
+ * was lost — the app was closed while it was being drawn — is not going to be
+ * filled in by anything, and a figure that shimmers away saying otherwise is a
+ * lie the note would go on telling for as long as it was kept.
+ */
+export function drawAlgoWaiting(directives: Map<string, string>, live = false): Animation {
+  const failed = directives.get('error')?.trim()
+  const asked = directives.get('prompt')?.trim()
+  const cellW = 48
+  const step = cellW + CELL_GAP
+  const slots = 5
+  const width = slots * step - CELL_GAP
+  const height = CELL_H + INDEX_H
+
+  const root = svg('svg', {
+    class: 'viz__svg',
+    viewBox: `${-PAD} ${-PAD} ${width + PAD * 2} ${height + PAD * 2}`,
+    width: round(width + PAD * 2),
+    height: round(height + PAD * 2),
+    role: 'img'
+  })
+  for (let at = 0; at < slots; at++) {
+    root.appendChild(
+      svg('rect', {
+        class: 'viz-cell__shape viz-cell__shape--waiting',
+        x: round(at * step),
+        y: 0,
+        width: cellW,
+        height: CELL_H,
+        rx: 5,
+        // Each slot a beat behind the one before it, so the wait reads as a
+        // sweep across the figure rather than five things blinking at once.
+        style: `animation-delay: ${at * 140}ms`
+      })
+    )
+  }
+
+  const element = html('div', {
+    class: failed || !live ? 'viz viz--algo viz--waiting is-failed' : 'viz viz--algo viz--waiting'
+  })
+  const named = asked || directives.get('title') || 'An algorithm'
+  element.appendChild(html('div', { class: 'viz__title' }, [named]))
+  element.appendChild(html('div', { class: 'viz__stage' }, [root]))
+  const said = failed
+    ? failed
+    : live
+      ? 'Claude is drawing this. Keep writing — it will appear here when it lands.'
+      : 'This was asked for and never arrived. Ask for it again, or delete the block.'
+  element.appendChild(html('p', { class: failed ? 'viz__error' : 'viz__caption' }, [said]))
+  return { root, element, destroy: () => {} }
+}
+
+/**
+ * The strip of stills, as one element.
+ *
+ * Built here rather than by each caller so that a run frozen on screen and the
+ * same run on paper are the same picture. The frames are laid out by CSS, which
+ * is what lets three stills of an eight-cell array sit in a row on a wide note
+ * and stack on a narrow one without the figure being measured twice.
+ */
+export function drawAlgoStrip(source: string): Animation {
+  const film = drawAlgoFilm(source)
+  const strip = html('div', { class: 'viz__film' })
+  for (const cell of film.cells) {
+    strip.appendChild(
+      html('div', { class: 'viz__frame' }, [
+        html('div', { class: 'viz__stage' }, [cell.svg]),
+        html('p', { class: 'viz__note' }, [cell.note || `Step ${cell.step}`])
+      ])
+    )
+  }
+
+  const element = html('figure', { class: 'viz viz--algo viz--still' }, [
+    film.title ? html('div', { class: 'viz__title' }, [film.title]) : null,
+    strip,
+    film.caption ? html('figcaption', { class: 'viz__caption' }, [film.caption]) : null
+  ])
+
+  return {
+    root: film.cells[0]?.svg ?? svg('svg'),
+    element,
+    title: film.title,
+    caption: film.caption,
+    destroy: () => {}
+  }
+}
+
+export function drawAlgo(source: string, live = false): Animation {
+  const waiting = algoWaiting(source)
+  if (waiting) return drawAlgoWaiting(waiting, live)
+
+  // A run asked to hold still never gets a transport: the figure is the frames
+  // side by side, and a play button under it would be offering to animate an
+  // argument that is not about time.
+  if (readSource(source, ALGO_KEYS).directives.has('stills')) return drawAlgoStrip(source)
+
   const { frames, stage, marksUsed, directives } = prepare(source)
 
   const speed = Math.min(4000, Math.max(120, numeric(directives, 'speed', 700)))
@@ -823,13 +961,41 @@ export function drawAlgo(source: string): Animation {
 const FILM_MAX = 12
 
 /**
- * The same run, printed.
+ * The steps a `stills:` directive asks to be frozen, if it asks for any.
+ *
+ * A bare `stills:` means "whichever ones matter", which is the same judgement
+ * the printed strip makes. A list means exactly those steps, and that is the
+ * form the figure exists for: `stills: 0 6 14` is on entry, held, and on exit —
+ * the three pictures a loop invariant is argued with, and the reason they must
+ * be choosable rather than sampled.
+ */
+function chosenStills(directives: Map<string, string>, frames: number): number[] | 'auto' | null {
+  if (!directives.has('stills')) return null
+  const raw = (directives.get('stills') ?? '').trim()
+  if (raw === '' || raw === 'true' || raw === 'yes' || raw === 'on' || raw === 'auto') return 'auto'
+
+  return items(raw).map((one) => {
+    const at = Number(one)
+    if (!Number.isInteger(at)) throw new VizError(`\`${one}\` is not a step number`)
+    // Negative counts back from the end, so `stills: 0 -1` is start and finish
+    // without having to know how many steps were written.
+    const index = at < 0 ? frames + at : at
+    if (index < 0 || index >= frames) {
+      throw new VizError(`there is no step ${at} — the run has ${frames - 1}`)
+    }
+    return index
+  })
+}
+
+/**
+ * The same run, still.
  *
  * A PDF cannot play, and a single frozen frame of an animation is close to
  * useless — the start says nothing about the algorithm and the end says nothing
  * about how it got there. A textbook prints these as a strip of stills, so that
  * is what an export gets: the frames that carry a note, first and last always,
- * and enough of the rest to fill the strip.
+ * and enough of the rest to fill the strip. `stills:` asks for the same
+ * treatment on screen, and then the choice of frames is the author's.
  */
 export function drawAlgoFilm(source: string): {
   title?: string
@@ -838,18 +1004,25 @@ export function drawAlgoFilm(source: string): {
 } {
   const { frames, stage, directives } = prepare(source)
 
-  const wanted = new Set<number>([0, frames.length - 1])
-  frames.forEach((frame, at) => {
-    if (frame.note) wanted.add(at)
-  })
-  // Fill up to the cap with an even spread, so a run with no notes at all still
-  // shows its shape rather than only its ends.
-  for (let n = 0; wanted.size < Math.min(FILM_MAX, frames.length); n++) {
-    wanted.add(Math.round((n * (frames.length - 1)) / Math.min(FILM_MAX - 1, frames.length - 1)))
-    if (n > frames.length) break
+  const asked = chosenStills(directives, frames.length)
+  let chosen: number[]
+
+  if (Array.isArray(asked)) {
+    chosen = asked
+  } else {
+    const wanted = new Set<number>([0, frames.length - 1])
+    frames.forEach((frame, at) => {
+      if (frame.note) wanted.add(at)
+    })
+    // Fill up to the cap with an even spread, so a run with no notes at all still
+    // shows its shape rather than only its ends.
+    for (let n = 0; wanted.size < Math.min(FILM_MAX, frames.length); n++) {
+      wanted.add(Math.round((n * (frames.length - 1)) / Math.min(FILM_MAX - 1, frames.length - 1)))
+      if (n > frames.length) break
+    }
+    chosen = [...wanted].sort((a, b) => a - b).slice(0, FILM_MAX)
   }
 
-  const chosen = [...wanted].sort((a, b) => a - b).slice(0, FILM_MAX)
   const cells = chosen.map((at) => {
     stage.apply(frames[at], at > 0 ? frames[at - 1] : null)
     let note = ''

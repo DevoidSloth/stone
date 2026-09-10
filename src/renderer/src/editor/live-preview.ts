@@ -1,4 +1,4 @@
-import { syntaxTree } from '@codemirror/language'
+import { getIndentUnit, syntaxTree } from '@codemirror/language'
 import {
   type EditorState,
   EditorSelection,
@@ -22,6 +22,8 @@ import type { TaskStatus } from '@shared/types'
 import { cycleStatus, parseTaskLine, setStatusOnLine } from '@shared/task-syntax'
 import { parseEmbed } from '@shared/attachments'
 import { readStamp, stampInsertPoint } from '@shared/audio'
+import { safeColour } from '@shared/text-colour'
+import { fenceInfo as readFence } from '@shared/code-langs'
 import { toISODate } from '../lib/dates'
 import {
   TABLE_ROW_RE,
@@ -30,13 +32,19 @@ import {
   splitRow,
   tableSource
 } from './table'
+import { listGeometry, revealedPrefixes } from './bullets'
+import { subtreeEnd } from './lists'
 import { runWidgetRanges } from './run-code'
 import { vizKind } from '../viz'
+import { isDrawing as isAnimating } from './animate'
 import {
   ArrowWidget,
   CheckboxWidget,
+  CodeHeaderWidget,
   CollapsedWidget,
   FoldWidget,
+  FootnoteWidget,
+  ListMarkerWidget,
   MathWidget,
   MermaidWidget,
   VizWidget,
@@ -46,6 +54,7 @@ import {
   StampWidget,
   SvgWidget,
   TableWidget,
+  TocWidget,
   embedWidget,
   focusCell
 } from './widgets'
@@ -102,6 +111,15 @@ const BLOCK_ID_RE = /\s(\^[A-Za-z0-9-]+)\s*$/
 const FOOTNOTE_REF_RE = /\[\^([^\]]+)\]/g
 const FOOTNOTE_DEF_RE = /^\[\^([^\]]+)\]:/
 /**
+ * `^[the note itself, right here]`.
+ *
+ * The form that does not make you go and invent an identifier, keep it unique,
+ * and maintain a list at the bottom of the file — which is why it is the one
+ * people actually use. Drawn as a numbered marker with the text on hover, and
+ * the numbering runs in document order over the whole note.
+ */
+const INLINE_FOOTNOTE_RE = /(?<![\\\w])\^\[([^\]\n]+)\]/g
+/**
  * `$…$`. A `\$` is an escaped dollar and a lone `$` is just a dollar, so a
  * price mid-sentence never turns into an equation. Matches the exporter's
  * rule exactly — the two have to agree or a note prints differently to how it
@@ -109,8 +127,38 @@ const FOOTNOTE_DEF_RE = /^\[\^([^\]]+)\]:/
  */
 const INLINE_MATH_RE = /(?<![\\$])\$([^$\n]+?)(?<!\\)\$(?!\$)/g
 const HIGHLIGHT_RE = /==(?=\S)([^\n]*?\S)==/g
-/** `<u>underline</u>` — the tag, because markdown has no underline of its own. */
-const UNDERLINE_RE = /<u>(?=\S)([^\n]*?\S)<\/u>/gi
+
+/**
+ * The inline HTML tags that stand in for markdown Stone has no syntax for:
+ * underline, and the two that carry meaning in a formula or a citation rather
+ * than decoration. Written as tags because markdown never grew any of the
+ * three, and every renderer downstream already understands these.
+ */
+/**
+ * Colour, written as the tags every other renderer understands. The quotes are
+ * required and the value must be a hex — see `safeColour` — because this ends
+ * up in a `style` attribute and the source of it is a file from anywhere.
+ */
+const COLOUR_MARKUP = [
+  {
+    tag: 'span',
+    cls: 'tok-ink',
+    property: 'color',
+    re: /<span style="color:\s*([^";]+);?\s*">([\s\S]*?)<\/span>/gi
+  },
+  {
+    tag: 'mark',
+    cls: 'tok-wash',
+    property: 'background',
+    re: /<mark style="background:\s*([^";]+);?\s*">([\s\S]*?)<\/mark>/gi
+  }
+] as const
+
+const TAG_MARKUP = [
+  { name: 'u', cls: 'tok-underline', re: /<u>(?=\S)([^\n]*?\S)<\/u>/gi },
+  { name: 'sup', cls: 'tok-sup', re: /<sup>(?=\S)([^\n]*?\S)<\/sup>/gi },
+  { name: 'sub', cls: 'tok-sub', re: /<sub>(?=\S)([^\n]*?\S)<\/sub>/gi }
+] as const
 
 /**
  * Code is not prose, so the spellchecker has no business red-lining it. The
@@ -134,6 +182,19 @@ const ARROW_GLYPH: Record<string, string> = {
   'v|': '↓'
 }
 
+/**
+ * `%%a note to yourself%%`.
+ *
+ * Obsidian's comment syntax, and the one piece of markdown whose entire purpose
+ * is to be in the file and not in the output. Stone dims it rather than hiding
+ * it: this is an editor, and text that vanishes the moment the caret leaves the
+ * line is text you will eventually be surprised by. What it does not do is
+ * print — see `markdownToHtml`, which drops comments on the way to HTML.
+ */
+const COMMENT_RE = /%%([\s\S]*?)%%/g
+/** `%%` alone on a line, opening or closing a comment that spans lines. */
+const COMMENT_FENCE_RE = /^\s*%%\s*$/
+
 /** Inline code spans on a line, as `[start, end)` offsets including the ticks. */
 const INLINE_CODE_RE = /(`+)(?:[^`]|(?!\1)`)+\1/g
 
@@ -145,13 +206,168 @@ function inlineCodeSpans(text: string): Array<[number, number]> {
   return spans
 }
 
+/**
+ * Whether an `algo` block is waiting on a request that is actually running.
+ *
+ * The block says which request it belongs to, and only this session knows
+ * whether that request is still out — a placeholder left behind by a restart
+ * describes something nothing is going to finish, and the figure says so
+ * rather than shimmering at the reader forever.
+ */
+function awaitingClaude(body: string): boolean {
+  const id = /^\s*pending:\s*(\S+)\s*$/m.exec(body)?.[1]
+  return id !== undefined && isAnimating(id)
+}
+
+/** Cheap enough to run per line: does this line open a list item at all? */
+const LIST_LINE_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]/
+
+/**
+ * The last line of the document's leading YAML block, or 0 when it has none.
+ *
+ * Frontmatter looks like prose to every line-by-line scan in this file and is
+ * not: `- release` under a `tags:` key is a YAML sequence, and drawing a bullet
+ * on it would be the editor lying about what the file says.
+ */
+function frontmatterEnd(doc: Text): number {
+  if (doc.lines < 2 || doc.line(1).text.trim() !== '---') return 0
+  for (let n = 2; n <= doc.lines; n++) {
+    if (doc.line(n).text.trim() === '---') return n
+  }
+  return 0
+}
+
+/**
+ * What number each inline footnote is, keyed by where it starts.
+ *
+ * Counted from the top of the document rather than from the viewport: a
+ * footnote's number is its position in the note, and one that renumbered itself
+ * as you scrolled would be worse than no number at all.
+ */
+function inlineFootnoteNumbers(doc: Text, fences: Map<number, Fence>): Map<number, number> {
+  const numbers = new Map<number, number>()
+  let next = 1
+  for (let n = 1; n <= doc.lines; n++) {
+    if (fences.has(n)) continue
+    const line = doc.line(n)
+    INLINE_FOOTNOTE_RE.lastIndex = 0
+    let hit: RegExpExecArray | null
+    while ((hit = INLINE_FOOTNOTE_RE.exec(line.text)) !== null) {
+      numbers.set(line.from + hit.index, next++)
+    }
+  }
+  return numbers
+}
+
+/**
+ * Lines inside a `%%` … `%%` comment block, the fences included.
+ *
+ * A `%%` inside a code fence is content — a Jinja template, an Erlang macro —
+ * so the fence map is consulted rather than trusting the two per cent signs.
+ */
+function commentBlocks(doc: Text, fences: Map<number, Fence>): Set<number> {
+  const lines = new Set<number>()
+  let open = 0
+  for (let n = 1; n <= doc.lines; n++) {
+    if (fences.has(n)) continue
+    if (!COMMENT_FENCE_RE.test(doc.line(n).text)) {
+      if (open) lines.add(n)
+      continue
+    }
+    if (open) {
+      for (let i = open; i <= n; i++) lines.add(i)
+      open = 0
+    } else {
+      open = n
+    }
+  }
+  // An unclosed block runs to the end of the note, which is what the writer
+  // sees in Obsidian and what the exporter below will drop.
+  if (open) for (let n = open; n <= doc.lines; n++) lines.add(n)
+  return lines
+}
+
+// --------------------------------------------------------------- callouts
+
+/**
+ * A callout opener: `> [!note]`, with the fold marker and title Obsidian
+ * writes, and any number of `>` in front of it so a callout can sit inside a
+ * quote or inside another callout.
+ */
+const CALLOUT_OPEN_RE = /^(\s*(?:>[ \t]*)+)\[!(\w+)\]([-+])?[ \t]?/
+/** The `>` prefix of a quoted line, however deep. */
+const QUOTE_PREFIX_RE = /^(\s*(?:>[ \t]*)+)/
+
+export interface CalloutRun {
+  /** The line carrying `[!kind]`. */
+  start: number
+  /** The last line the callout owns. */
+  end: number
+  kind: string
+  /** How many `>` deep the opener sits. 1 is a callout in ordinary prose. */
+  depth: number
+  /** `-` opens collapsed, `+` opens expanded, `` is not foldable at all. */
+  fold: '' | '-' | '+'
+}
+
+/** How many `>` a line opens with. 0 for a line that is not quoted. */
+function quoteDepth(text: string): number {
+  const prefix = QUOTE_PREFIX_RE.exec(text)
+  if (!prefix) return 0
+  return (prefix[1].match(/>/g) ?? []).length
+}
+
+/**
+ * Every callout in the document, innermost last.
+ *
+ * A run ends at the first line that is not quoted at least as deeply as its
+ * opener, which is what lets `> > [!warning]` be a panel inside a panel and
+ * still end where the inner quoting stops. Both the tint and the fold read this
+ * — they have to agree about where a callout ends, or collapsing one would hide
+ * a different number of lines than it drew.
+ */
+function calloutRuns(doc: Text): CalloutRun[] {
+  const runs: CalloutRun[] = []
+  for (let n = 1; n <= doc.lines; n++) {
+    const opener = CALLOUT_OPEN_RE.exec(doc.line(n).text)
+    if (!opener) continue
+    const depth = (opener[1].match(/>/g) ?? []).length
+
+    let end = n
+    while (end + 1 <= doc.lines && quoteDepth(doc.line(end + 1).text) >= depth) end++
+
+    runs.push({
+      start: n,
+      end,
+      kind: opener[2].toLowerCase(),
+      depth,
+      fold: (opener[3] as '-' | '+' | undefined) ?? ''
+    })
+  }
+  // Shallow first, so a line covered by two runs takes the innermost one's
+  // colour: whoever writes last wins, and the innermost is written last.
+  return runs.sort((a, b) => a.start - b.start || a.depth - b.depth)
+}
+
 // ---------------------------------------------------------------- folding
 
-/** Headings and list items the user has collapsed, as start line numbers. */
+/** Headings, list items and callouts the user has collapsed, as start lines. */
 export const toggleFold = StateEffect.define<number>()
 
 export const foldedLines = StateField.define<Set<number>>({
-  create: () => new Set(),
+  /*
+   * A callout written `> [!note]-` opens collapsed, which is the whole reason
+   * Obsidian's fold marker exists: a long aside can sit in the document
+   * without being read every time the note is. `+` is the same callout stated
+   * the other way round, and starts open.
+   */
+  create: (state) => {
+    const folded = new Set<number>()
+    for (const run of calloutRuns(state.doc)) {
+      if (run.fold === '-' && run.end > run.start) folded.add(run.start)
+    }
+    return folded
+  },
   update(value, tr) {
     let next = value
     for (const effect of tr.effects) {
@@ -179,19 +395,21 @@ function sectionEnd(state: EditorState, lineNumber: number): number {
     return doc.lines
   }
 
-  const item = /^(\s*)(?:[-*+]|\d+[.)])\s/.exec(text)
-  if (item) {
-    const indent = item[1].length
-    let end = lineNumber
-    for (let n = lineNumber + 1; n <= doc.lines; n++) {
-      const line = doc.line(n).text
-      if (!line.trim()) continue
-      const childIndent = /^\s*/.exec(line)![0].length
-      if (childIndent <= indent) break
-      end = n
-    }
-    return end
+  // A callout owns the run of quoted lines under it. Only one written with a
+  // fold marker collapses: `> [!note]` with no marker is a panel the writer
+  // meant to be read, and giving every one of them a twisty would put a
+  // control on most of the callouts in most vaults.
+  const callout = CALLOUT_OPEN_RE.exec(text)
+  if (callout) {
+    if (!callout[3]) return lineNumber
+    const run = calloutRuns(doc).find((one) => one.start === lineNumber)
+    return run ? run.end : lineNumber
   }
+
+  // A list item owns its children, which is the same span the outline commands
+  // move and indent — folding one and dragging one must agree about where it
+  // ends, so both ask the same function.
+  if (LIST_LINE_RE.test(text)) return subtreeEnd(doc, lineNumber, getIndentUnit(state))
 
   return lineNumber
 }
@@ -254,7 +472,9 @@ export interface LivePreviewHandlers {
   onOpenWikilink: (target: string) => void
   onOpenUrl: (url: string) => void
   onSelectTag: (tag: string) => void
-  loadEmbed: (target: string) => Promise<{ title: string; body: string } | null>
+  loadEmbed: (
+    target: string
+  ) => Promise<{ title: string; body: string; missing?: boolean } | null>
   /** Open an embedded file — a PDF, or anything with no viewer here. */
   onOpenAsset: (target: string) => void
   /** Play a recording from a moment in it: an embed's play button, or a stamp. */
@@ -320,6 +540,55 @@ function scanFences(doc: Text): Map<number, Fence> {
     info.set(n, { lang, start, end: 0 })
   }
   return info
+}
+
+/**
+ * `levels: 2-3` inside a ```toc block — which headings to list.
+ *
+ * The default skips h1, because in a note whose title is already at the top of
+ * the page an h1 is usually that title repeated, and a contents list whose only
+ * entry is the name of the note it is in is furniture.
+ */
+const TOC_LEVELS_RE = /^\s*levels?\s*:\s*([1-6])\s*(?:-\s*([1-6]))?\s*$/m
+
+function tocRange(body: string): string {
+  const asked = TOC_LEVELS_RE.exec(body)
+  if (!asked) return '2-6'
+  return `${asked[1]}-${asked[2] ?? asked[1]}`
+}
+
+/** The note's headings, as a contents list. */
+function tocEntries(
+  doc: Text,
+  fences: Map<number, Fence>,
+  body: string
+): Array<{ level: number; text: string; line: number }> {
+  const [min, max] = tocRange(body).split('-').map(Number)
+  const entries: Array<{ level: number; text: string; line: number }> = []
+  const frontmatter = frontmatterEnd(doc)
+
+  for (let n = frontmatter + 1; n <= doc.lines; n++) {
+    if (fences.has(n)) continue
+    const heading = /^(#{1,6})\s+(.*)$/.exec(doc.line(n).text)
+    if (!heading) continue
+    const level = heading[1].length
+    if (level < min || level > max) continue
+    const text = heading[2].replace(/\s*\^[A-Za-z0-9-]+\s*$/, '').replace(/[*_`~]/g, '').trim()
+    if (text) entries.push({ level, text, line: n })
+  }
+  return entries
+}
+
+/**
+ * Fence languages that are drawn as something else entirely: a diagram, an
+ * equation, a query, a figure, a contents list. Everything else is code, and
+ * gets the header bar.
+ */
+const DRAWN_FENCES = new Set(['mermaid', 'svg', 'math', 'latex', 'stone', 'query', 'toc', 'contents'])
+
+function isPlainCode(lang: string): boolean {
+  const { name } = readFence(lang)
+  return !DRAWN_FENCES.has(name) && !vizKind(name)
 }
 
 /** `$$…$$` on a single line — display maths without the two extra lines. */
@@ -390,7 +659,8 @@ function computeBlockRegions(state: EditorState, handlers: LivePreviewHandlers):
     const fence = fences.get(n)
     if (!fence || fence.start !== n || fence.end <= n) continue
 
-    const lang = fence.lang.toLowerCase()
+    // `!` in front of the name only turns suggestions off — see `fenceInfo`.
+    const lang = readFence(fence.lang).name
     const isDiagram = lang === 'mermaid'
     // A drawing: the block holds SVG, for the pictures Mermaid has no grammar
     // for. Scrubbed before it is drawn — see `lib/svg`.
@@ -398,9 +668,11 @@ function computeBlockRegions(state: EditorState, handlers: LivePreviewHandlers):
     const isMath = lang === 'math' || lang === 'latex'
     // `stone` blocks are queries — a saved view, or one described in place.
     const isQuery = lang === 'stone' || lang === 'query'
+    // A `toc` block is the note's own headings, listed where it was written.
+    const isToc = lang === 'toc' || lang === 'contents'
     // `memory`, `tree` and `algo` blocks are program figures — see `viz/`.
     const figure = vizKind(lang)
-    if (!isDiagram && !isDrawing && !isMath && !isQuery && !figure) continue
+    if (!isDiagram && !isDrawing && !isMath && !isQuery && !isToc && !figure) continue
     if (sectionLive(fence.start, fence.end)) continue
 
     const source: string[] = []
@@ -411,14 +683,16 @@ function computeBlockRegions(state: EditorState, handlers: LivePreviewHandlers):
       fence.end,
       Decoration.replace({
         widget: figure
-          ? new VizWidget(figure, body)
+          ? new VizWidget(figure, body, figure === 'algo' && awaitingClaude(body))
           : isDiagram
             ? new MermaidWidget(body)
             : isDrawing
               ? new SvgWidget(body)
               : isQuery
                 ? new QueryWidget(body)
-                : new MathWidget(body, true),
+                : isToc
+                  ? new TocWidget(tocEntries(doc, fences, body), tocRange(body))
+                  : new MathWidget(body, true),
         block: true
       })
     )
@@ -546,6 +820,15 @@ function buildDecorations(
   const isLive = (pos: number): boolean => liveLines.has(doc.lineAt(pos).number)
 
   const fenceInfo = scanFences(doc)
+  const commentLines = commentBlocks(doc, fenceInfo)
+  const footnoteNumbers = inlineFootnoteNumbers(doc, fenceInfo)
+  const frontmatter = frontmatterEnd(doc)
+  const lists = listGeometry(
+    doc,
+    getIndentUnit(view.state),
+    (n) => fenceInfo.has(n) || n <= frontmatter
+  )
+  const rawPrefix = revealedPrefixes(view.state.selection, doc, lists)
 
   // ---- pass 1: inline tokens Stone owns, which lezer knows nothing about ----
 
@@ -555,6 +838,33 @@ function buildDecorations(
       const text = line.text
       const base = line.from
       const live = liveLines.has(line.number)
+
+      /*
+       * The opening line of a plain code fence, drawn as the block's header.
+       *
+       * Only for fences nothing else claims: a `mermaid`, `svg`, `stone` or
+       * `memory` block is replaced whole by its own widget, and a header on one
+       * would be a label on a picture. Bare ``` fences get one too — the copy
+       * button is the point, and the label is simply empty.
+       */
+      const fence = fenceInfo.get(line.number)
+      if (
+        !live &&
+        fence &&
+        fence.start === line.number &&
+        fence.end > line.number &&
+        !claimed.has(line.number) &&
+        isPlainCode(fence.lang)
+      ) {
+        const code: string[] = []
+        for (let i = fence.start + 1; i < fence.end; i++) code.push(doc.line(i).text)
+        pushReplace(
+          state,
+          base,
+          line.to,
+          Decoration.replace({ widget: new CodeHeaderWidget(fence.lang, code.join('\n')) })
+        )
+      }
 
       // Lines the block layer has replaced wholesale are not ours to decorate;
       // overlapping the two would put a mark inside a replaced range.
@@ -582,27 +892,49 @@ function buildDecorations(
 
       // `> [!tip] Heading` — hide the marker and bold what follows it. The
       // tint and the glyph already say what kind of callout this is.
-      const callout = /^(\s*>\s*)(\[!\w+\])[ \t]?/.exec(text)
+      //
+      // The fold marker goes with it. `-` and `+` are a *control*, not content:
+      // they say the callout collapses and how it opens, and leaving them on
+      // the page as two stray characters after the title is exactly the kind of
+      // syntax showing through that live preview exists to take away.
+      const callout = CALLOUT_OPEN_RE.exec(text)
       if (callout) {
+        const marker = `[!${callout[2]}]${callout[3] ?? ''}`
         const markFrom = base + callout[1].length
-        const markTo = markFrom + callout[2].length
+        const markTo = markFrom + marker.length
         if (live) {
           pushMark(state, markFrom, markTo, Decoration.mark({ class: 'tok-mark' }))
         } else {
-          pushReplace(state, markFrom, markTo + (callout[0].length - callout[1].length - callout[2].length))
+          // Swallow the trailing space too, so the title starts at the padding
+          // the callout reserves rather than one space inside it.
+          pushReplace(state, markFrom, base + callout[0].length)
         }
         if (line.to > markTo) {
           pushMark(state, markTo, line.to, Decoration.mark({ class: 'tok-callout-label' }))
         }
       }
 
+      /*
+       * The list prefix: indentation, marker and the gap after it, drawn as one
+       * thing in a column of its own.
+       *
+       * The *indentation* goes into the widget too, which is the whole reason
+       * a list can be laid out on an even grid while the file keeps the two,
+       * three or four spaces that were actually typed. It all comes back the
+       * moment the selection reaches into the prefix — see `revealedPrefixes`,
+       * which is deliberately narrower than the rest of this pass's `live`.
+       */
+      const item = lists.get(line.number)
+      const tidy = item !== undefined && !rawPrefix.has(line.number)
+
       const task = parseTaskLine(text, '', 0)
       if (task) {
         // Swallow the list marker along with the brackets, so the row reads as
         // a checkbox rather than as "- [ ]" with a box tacked on.
         const prefix = /^(\s*)(?:[-*+]|\d+[.)])\s+\[[ xX/-]\]/.exec(text)
-        const boxStart = base + (prefix ? prefix[1].length : text.indexOf('['))
-        const boxEnd = base + (prefix ? prefix[0].length : text.indexOf('[') + 3)
+        const boxStart = base + (tidy ? 0 : prefix ? prefix[1].length : text.indexOf('['))
+        const boxEnd =
+          base + (tidy ? item.prefix : prefix ? prefix[0].length : text.indexOf('[') + 3)
         pushReplace(
           state,
           boxStart,
@@ -613,6 +945,15 @@ function buildDecorations(
           const cls = task.status === 'done' ? 'tok-task-done' : 'tok-task-cancelled'
           pushMark(state, boxEnd, line.to, Decoration.mark({ class: cls }))
         }
+      } else if (tidy) {
+        pushReplace(
+          state,
+          base,
+          base + item.prefix,
+          Decoration.replace({
+            widget: new ListMarkerWidget(item.depth, item.ordered ? item.marker : null)
+          })
+        )
       }
 
       const scan = (
@@ -663,6 +1004,30 @@ function buildDecorations(
         Decoration.mark({ class: 'tok-footnote', attributes: { 'data-footnote': value.slice(2, -1) } })
       , 0)
 
+      // `^[an inline footnote]`. The aside is set as a marker rather than left
+      // in the middle of the sentence, which is the whole reason to write one
+      // — but only once the caret has left, because there is no editing text
+      // that has been replaced by a number.
+      INLINE_FOOTNOTE_RE.lastIndex = 0
+      let inlineNote: RegExpExecArray | null
+      while ((inlineNote = INLINE_FOOTNOTE_RE.exec(text)) !== null) {
+        const start = base + inlineNote.index
+        const end = start + inlineNote[0].length
+        const number = footnoteNumbers.get(start) ?? 1
+        if (live) {
+          pushMark(state, start, start + 2, Decoration.mark({ class: 'tok-mark' }))
+          pushMark(state, start + 2, end - 1, Decoration.mark({ class: 'tok-footnote-text' }))
+          pushMark(state, end - 1, end, Decoration.mark({ class: 'tok-mark' }))
+        } else {
+          pushReplace(
+            state,
+            start,
+            end,
+            Decoration.replace({ widget: new FootnoteWidget(number, inlineNote[1]) })
+          )
+        }
+      }
+
       if (FOOTNOTE_DEF_RE.test(text)) {
         pushMark(state, base, line.to, Decoration.mark({ class: 'tok-footnote-def' }))
       }
@@ -688,22 +1053,90 @@ function buildDecorations(
       }
 
       /*
-       * `<u>underline</u>`. Markdown has no underline — CommonMark left it out
-       * on purpose — so the tag is what everything downstream understands, and
-       * the tag itself is hidden until the caret comes to the line.
+       * The three tags markdown has no syntax for: `<u>`, `<sup>`, `<sub>`.
+       *
+       * CommonMark left all three out on purpose and expects the HTML instead,
+       * so the tag *is* the markdown here — it is what Obsidian, GitHub and
+       * this app's own exporter understand. The tags are hidden until the caret
+       * comes to the line, which is the same bargain every other marker makes.
        */
-      UNDERLINE_RE.lastIndex = 0
-      let underline: RegExpExecArray | null
-      while ((underline = UNDERLINE_RE.exec(text)) !== null) {
-        const start = base + underline.index
-        const end = start + underline[0].length
-        pushMark(state, start + 3, end - 4, Decoration.mark({ class: 'tok-underline' }))
-        if (live) {
-          pushMark(state, start, start + 3, Decoration.mark({ class: 'tok-mark' }))
-          pushMark(state, end - 4, end, Decoration.mark({ class: 'tok-mark' }))
-        } else {
-          pushReplace(state, start, start + 3)
-          pushReplace(state, end - 4, end)
+      /*
+       * Coloured text and coloured highlights, `<span style="color:…">` and
+       * `<mark style="background:…">`. The colour is read out of the document
+       * and put back into a style attribute, so only a hex value is honoured —
+       * see `safeColour`. Anything else is left showing as the tag it is.
+       */
+      for (const colour of COLOUR_MARKUP) {
+        colour.re.lastIndex = 0
+        let hit: RegExpExecArray | null
+        while ((hit = colour.re.exec(text)) !== null) {
+          const value = safeColour(hit[1])
+          if (!value) continue
+          const start = base + hit.index
+          const end = start + hit[0].length
+          const openLen = hit[0].indexOf('>') + 1
+          const closeLen = colour.tag.length + 3
+          pushMark(
+            state,
+            start + openLen,
+            end - closeLen,
+            Decoration.mark({
+              class: colour.cls,
+              attributes: { style: `${colour.property}: ${value}` }
+            })
+          )
+          if (live) {
+            pushMark(state, start, start + openLen, Decoration.mark({ class: 'tok-mark' }))
+            pushMark(state, end - closeLen, end, Decoration.mark({ class: 'tok-mark' }))
+          } else {
+            pushReplace(state, start, start + openLen)
+            pushReplace(state, end - closeLen, end)
+          }
+        }
+      }
+
+      for (const tag of TAG_MARKUP) {
+        tag.re.lastIndex = 0
+        let hit: RegExpExecArray | null
+        while ((hit = tag.re.exec(text)) !== null) {
+          const start = base + hit.index
+          const end = start + hit[0].length
+          const open = tag.name.length + 2
+          const close = tag.name.length + 3
+          pushMark(state, start + open, end - close, Decoration.mark({ class: tag.cls }))
+          if (live) {
+            pushMark(state, start, start + open, Decoration.mark({ class: 'tok-mark' }))
+            pushMark(state, end - close, end, Decoration.mark({ class: 'tok-mark' }))
+          } else {
+            pushReplace(state, start, start + open)
+            pushReplace(state, end - close, end)
+          }
+        }
+      }
+
+      /*
+       * `%%comment%%`. Dimmed rather than hidden, and the `%%` themselves go
+       * when the caret is elsewhere so the aside reads as an aside instead of
+       * as punctuation. A `%%` inside a code span is not a comment.
+       */
+      if (!commentLines.has(line.number)) {
+        let commentCode: Array<[number, number]> | null = null
+        COMMENT_RE.lastIndex = 0
+        let comment: RegExpExecArray | null
+        while ((comment = COMMENT_RE.exec(text)) !== null) {
+          commentCode ??= inlineCodeSpans(text)
+          const at = comment.index
+          if (commentCode.some(([from, until]) => at >= from && at < until)) continue
+          const start = base + at
+          const end = start + comment[0].length
+          pushMark(state, start + 2, end - 2, Decoration.mark({ class: 'tok-comment' }))
+          if (live) {
+            pushMark(state, start, start + 2, Decoration.mark({ class: 'tok-mark' }))
+            pushMark(state, end - 2, end, Decoration.mark({ class: 'tok-mark' }))
+          } else {
+            pushReplace(state, start, start + 2)
+            pushReplace(state, end - 2, end)
+          }
         }
       }
 
@@ -888,6 +1321,15 @@ function buildLineDecorations(view: EditorView): DecorationSet {
   const doc = view.state.doc
   const fenceState = { open: false, startLine: 0 }
   const lineClasses = new Map<number, string[]>()
+  // Custom properties a line needs, as declarations to be joined. More than one
+  // thing can want one — a list inside a callout wants both — so they collect
+  // rather than overwrite.
+  const lineStyles = new Map<number, string[]>()
+  const addStyle = (lineNumber: number, declaration: string): void => {
+    const existing = lineStyles.get(lineNumber) ?? []
+    existing.push(declaration)
+    lineStyles.set(lineNumber, existing)
+  }
   const folded = view.state.field(foldedLines, false) ?? new Set<number>()
 
   const add = (lineNumber: number, cls: string): void => {
@@ -899,16 +1341,8 @@ function buildLineDecorations(view: EditorView): DecorationSet {
   // Leading YAML frontmatter is real data, not prose. It is dimmed and set in
   // mono so it reads as a property block under the title rather than as body
   // copy the reader has to skip past.
-  let frontmatterEnd = 0
-  if (doc.lines > 1 && doc.line(1).text.trim() === '---') {
-    for (let n = 2; n <= doc.lines; n++) {
-      if (doc.line(n).text.trim() === '---') {
-        frontmatterEnd = n
-        break
-      }
-    }
-    for (let n = 1; n <= frontmatterEnd; n++) add(n, 'tok-line-fm')
-  }
+  const frontmatter = frontmatterEnd(doc)
+  for (let n = 1; n <= frontmatter; n++) add(n, 'tok-line-fm')
 
   // Fences must be tracked from the top of the document, not the viewport,
   // or a scrolled-into-view code block would lose its plate.
@@ -934,32 +1368,81 @@ function buildLineDecorations(view: EditorView): DecorationSet {
     if (folded.has(n)) add(n, 'tok-line-folded')
   }
 
+  // A `%%` block: a run of lines that are in the file and not in the export.
+  for (const n of commentBlocks(doc, scanFences(doc))) add(n, 'tok-line-comment')
+
   /*
    * Callouts: a blockquote opening with `> [!note]` becomes a tinted panel with
    * an icon, the way Notion's callout block reads. The whole run of `>` lines
    * belongs to the callout, so the first and last get the rounded corners and
    * the quote bar is suppressed for all of them.
    */
-  for (let n = 1; n <= doc.lines; n++) {
-    const opener = /^\s*>\s*\[!(\w+)\]/.exec(doc.line(n).text)
-    if (!opener) continue
-    const kind = opener[1].toLowerCase()
-
-    let last = n
-    while (last + 1 <= doc.lines && /^\s*>/.test(doc.line(last + 1).text)) last++
-
-    for (let i = n; i <= last; i++) {
+  /*
+   * Callouts are painted shallowest first, so a nested one lands on top of the
+   * panel holding it. Each line remembers which kind painted it last: that is
+   * the run enclosing the next one, and it is what the inner panel's margins
+   * are filled with — the strip either side of an inner callout has to be the
+   * outer callout's own tint, or the inner one looks like it has broken out.
+   */
+  const paintedBy = new Map<number, string>()
+  for (const run of calloutRuns(doc)) {
+    for (let i = run.start; i <= run.end; i++) {
+      const outer = paintedBy.get(i)
       const classes = lineClasses.get(i)
       if (classes) {
         const quote = classes.indexOf('tok-line-quote')
         if (quote !== -1) classes.splice(quote, 1)
+        // The innermost callout is the one whose colour a line takes, so a
+        // shallower run's tint comes off rather than fighting it in the
+        // cascade — two `tok-callout-*` classes on one line resolve by
+        // stylesheet order, which has nothing to do with which is inside which.
+        for (let c = classes.length - 1; c >= 0; c--) {
+          if (classes[c].startsWith('tok-callout-')) classes.splice(c, 1)
+        }
       }
       add(i, 'tok-line-callout')
-      add(i, `tok-callout-${kind}`)
+      add(i, `tok-callout-${run.kind}`)
+      // Depth 1 is a callout in prose; anything deeper is one inside a quote or
+      // inside another callout, and is inset so it reads as being held by it.
+      if (run.depth > 1) {
+        add(i, 'tok-line-callout--nested')
+        if (outer) add(i, `tok-callout-under-${outer}`)
+        // How many panels this one is inside, which is how far it insets. A
+        // third level can only paint the strip beside it in one colour — its
+        // parent's — so a very deep nest is drawn one shade short of exact.
+        // Two is what people write; the alternative is a gradient per depth.
+        addStyle(i, `--callout-nest: ${run.depth - 1}`)
+      }
+      paintedBy.set(i, run.kind)
     }
-    add(n, 'tok-line-callout-first')
-    add(last, 'tok-line-callout-last')
-    n = last
+    add(run.start, 'tok-line-callout-first')
+    add(run.end, 'tok-line-callout-last')
+    if (folded.has(run.start) && run.end > run.start) add(run.start, 'tok-line-callout--collapsed')
+  }
+
+  /*
+   * Lists, laid out on a grid.
+   *
+   * Two things come from the depth. The item hangs from a fixed column rather
+   * than from however many spaces were typed, so a list indented two spaces and
+   * one indented four look identical on the page. And the line is given a
+   * hanging indent, so an item that wraps continues under its own text instead
+   * of running back to the margin underneath its bullet — the single thing that
+   * most makes a long list read as a list.
+   *
+   * Both stand down when the marker itself is revealed, and only then: a
+   * hanging indent measured for a bullet that is not being drawn would put the
+   * text in the wrong place.
+   */
+  const lists = listGeometry(doc, getIndentUnit(view.state), (n) => {
+    const classes = lineClasses.get(n) ?? []
+    return classes.includes('tok-line-code') || classes.includes('tok-line-fm')
+  })
+  const rawPrefix = revealedPrefixes(view.state.selection, doc, lists)
+  for (const [lineNumber, item] of lists) {
+    add(lineNumber, 'tok-line-list')
+    if (!rawPrefix.has(lineNumber)) add(lineNumber, 'tok-line-list--tidy')
+    addStyle(lineNumber, `--list-depth: ${item.depth}`)
   }
 
   for (const [lineNumber, classes] of [...lineClasses.entries()].sort((a, b) => a[0] - b[0])) {
@@ -968,7 +1451,14 @@ function buildLineDecorations(view: EditorView): DecorationSet {
     // spellchecking rather than each token inside it. Frontmatter goes the same
     // way: a red line under a YAML key is noise, not a typo worth reporting.
     const prose = !classes.includes('tok-line-code') && !classes.includes('tok-line-fm')
-    const attributes = prose ? undefined : NO_SPELLCHECK
+    const style = lineStyles.get(lineNumber)?.join('; ')
+    const attributes = prose
+      ? style
+        ? { style }
+        : undefined
+      : style
+        ? { ...NO_SPELLCHECK, style }
+        : NO_SPELLCHECK
     builder.add(
       line.from,
       line.from,
@@ -1022,22 +1512,42 @@ const frontmatterFold = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field)
 })
 
-/** The collapse twisty, shown on hover in the margin beside foldable lines. */
+/**
+ * The collapse twisty, shown on hover in the margin beside foldable lines.
+ *
+ * A list item with children gets one as well as a heading. The machinery was
+ * already there — `sectionEnd` has always known what an item owns, and
+ * Ctrl/Cmd Shift H has always folded one — but with nothing drawn, the only way
+ * to find out that a list could collapse was to try it.
+ */
 function buildFoldHandles(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>()
   const folded = view.state.field(foldedLines, false) ?? new Set<number>()
+  const doc = view.state.doc
+  const fenceInfo = scanFences(doc)
+  const frontmatter = frontmatterEnd(doc)
+
   for (const { from, to } of view.visibleRanges) {
-    let line = view.state.doc.lineAt(from)
+    let line = doc.lineAt(from)
     while (line.from <= to) {
-      if (/^#{1,6}\s/.test(line.text) && isFoldable(view.state, line.number)) {
+      const heading = /^#{1,6}\s/.test(line.text)
+      const callout = CALLOUT_OPEN_RE.test(line.text)
+      // Depth is not needed here, only whether the line opens an item at all —
+      // and a `- flag` in a shell script or a YAML key is not one.
+      const item =
+        LIST_LINE_RE.test(line.text) && !fenceInfo.has(line.number) && line.number > frontmatter
+      if ((heading || item || callout) && isFoldable(view.state, line.number)) {
         builder.add(
           line.from,
           line.from,
-          Decoration.widget({ widget: new FoldWidget(folded.has(line.number)), side: -1 })
+          Decoration.widget({
+            widget: new FoldWidget(folded.has(line.number), heading || callout ? 'section' : 'item'),
+            side: -1
+          })
         )
       }
-      if (line.to >= view.state.doc.length) break
-      line = view.state.doc.lineAt(line.to + 1)
+      if (line.to >= doc.length) break
+      line = doc.lineAt(line.to + 1)
     }
   }
   return builder.finish()
@@ -1205,7 +1715,13 @@ export function livePreview(handlers: LivePreviewHandlers) {
       }
 
       update(update: ViewUpdate): void {
-        if (update.docChanged || update.viewportChanged || hasEffects(update)) {
+        // Selection too: a list line drops its grid while the caret is on it.
+        if (
+          update.docChanged ||
+          update.viewportChanged ||
+          update.selectionSet ||
+          hasEffects(update)
+        ) {
           this.decorations = buildLineDecorations(update.view)
         }
       }

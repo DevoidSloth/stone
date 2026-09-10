@@ -60,6 +60,7 @@ const LAYOUT: Record<string, (string | null)[]> = {
     null,
     'outline',
     'properties',
+    'code-inspector',
     null,
     'theme'
   ],
@@ -210,6 +211,13 @@ export function buildAppMenu(commands: MenuCommand[] = current): void {
   template.push({
     role: 'help',
     submenu: [
+      {
+        // The manual is a panel rather than a page, so this opens the inspector
+        // on it — which is also where Help is looked for first.
+        label: 'Stone Manual',
+        click: () => send('docs')
+      },
+      { type: 'separator' },
       {
         label: 'Check for Updates…',
         click: () => checkForUpdates(true)

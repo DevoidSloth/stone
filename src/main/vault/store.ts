@@ -4,6 +4,7 @@ import path from 'node:path'
 import chokidar, { type FSWatcher } from 'chokidar'
 import MiniSearch from 'minisearch'
 import type {
+  Backup,
   GraphData,
   GraphEdge,
   GraphNode,
@@ -22,6 +23,7 @@ import type {
   VaultStats
 } from '@shared/types'
 import { embedKind } from '@shared/attachments'
+import { splitTarget } from '@shared/sections'
 import { RESERVED_KEYS, inferProperties, relationTargets } from '@shared/properties'
 import { folderDefinedBy, folderNotePath, homeFolder } from '@shared/folder-note'
 import { parseNote, countWords, type ParsedNote } from './parse'
@@ -33,10 +35,12 @@ import {
   exists,
   hashContent,
   isIgnored,
+  listBackups,
   listFolders,
   listSnapshots,
   listTrash,
   movePath,
+  readBackup,
   readNote,
   readSnapshot,
   removeFolder,
@@ -48,6 +52,7 @@ import {
   trashNote,
   uniquePath,
   walkMarkdown,
+  writeBackup,
   writeNoteAtomic,
   writeSnapshot
 } from './fs'
@@ -320,16 +325,15 @@ goes back to being an ordinary note.
     return this.linkIndex.get(bare) ?? null
   }
 
-  /** Split a raw link into its note part and its in-note anchor. */
+  /**
+   * Split a raw link into its note part and its in-note anchor.
+   *
+   * The rule lives in `@shared/sections` because the editor and the exporter
+   * both have to agree with this about where a target ends and a fragment
+   * begins — they slice the section this points at.
+   */
   static splitTarget(target: string): { name: string; heading: string | null; block: string | null } {
-    const block = /\^([A-Za-z0-9-]+)\s*$/.exec(target)
-    const withoutBlock = block ? target.slice(0, block.index) : target
-    const hash = withoutBlock.indexOf('#')
-    return {
-      name: (hash === -1 ? withoutBlock : withoutBlock.slice(0, hash)).trim(),
-      heading: hash === -1 ? null : withoutBlock.slice(hash + 1).trim() || null,
-      block: block ? block[1] : null
-    }
+    return splitTarget(target)
   }
 
   /** The line a `[[Note#Heading]]` or `[[Note^block]]` should scroll to. */
@@ -882,10 +886,19 @@ goes back to being an ordinary note.
         }
       }
 
-      // Snapshot the version being replaced, not the one being written — the
-      // point of recovery is to get back what you had before the save.
-      if (this.snapshotsEnabled && previous !== null && previous !== content) {
-        await writeSnapshot(this.vaultPath, relPath, previous).catch(() => {})
+      // Archive the version being replaced, not the one being written — the
+      // point of recovery is to get back what you had before the save. The
+      // rolling snapshot and the permanent backup take the same stamp, so the
+      // two stores name the same version identically and the history panel can
+      // merge them instead of listing every save twice.
+      if (previous !== null && previous !== content) {
+        const stamp = Date.now()
+        if (this.snapshotsEnabled) {
+          await writeSnapshot(this.vaultPath, relPath, previous, stamp).catch(() => {})
+        }
+        // Not gated on a setting: backups are the floor under an accidental
+        // overwrite, and a floor you can switch off is not one.
+        await writeBackup(this.vaultPath, relPath, previous, stamp).catch(() => {})
       }
 
       const result = await writeNoteAtomic(absPath, content, expectedHash)
@@ -1366,6 +1379,18 @@ goes back to being an ordinary note.
   async snapshot(relPath: string, id: string): Promise<string | null> {
     if (!this.vaultPath) return null
     return readSnapshot(this.vaultPath, relPath, id)
+  }
+
+  // --------------------------------------------------------------- backups
+
+  async backups(relPath: string): Promise<Backup[]> {
+    if (!this.vaultPath) return []
+    return listBackups(this.vaultPath, relPath)
+  }
+
+  async backup(relPath: string, id: string): Promise<string | null> {
+    if (!this.vaultPath) return null
+    return readBackup(this.vaultPath, relPath, id)
   }
 
   // ----------------------------------------------------------- attachments

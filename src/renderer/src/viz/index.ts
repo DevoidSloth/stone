@@ -1,11 +1,13 @@
 /**
- * Program figures: the three fences, and the one call that draws them.
+ * Program figures: the fences, and the one call that draws them.
  *
  * `memory` for what the machine is holding, `boxes` for what refers to what,
- * `tree` for the shapes that arrive as arrays, `algo` for the ones that only
- * make sense moving. They share a house style, an error box, and this entry
- * point, which is all the editor, the print window and the exporter need to
- * know about them.
+ * `tree` for the shapes that arrive as arrays, `types` for how a design is put
+ * together, `hash` for the one structure whose picture has to be computed,
+ * `chart` for growth — predicted or measured — and `algo` for the ones that
+ * only make sense moving. They share a house style, an error box, and this
+ * entry point, which is all the editor, the print window and the exporter need
+ * to know about them.
  *
  * A figure that will not parse is never silently dropped. It comes back as a
  * dashed box saying which line it could not read, with the source still in it,
@@ -17,8 +19,11 @@ import { vizKind, type VizKind } from '@shared/viz-langs'
 import { html } from './svg'
 import { VizError } from './source'
 import { drawMemory } from './memory'
-import { drawTree } from './tree'
-import { drawAlgo, drawAlgoFilm } from './algo'
+import { drawTree, type Figure } from './tree'
+import { drawTypes } from './types'
+import { drawHash } from './hash'
+import { drawChart } from './chart'
+import { algoWaiting, drawAlgo, drawAlgoStrip, drawAlgoWaiting } from './algo'
 
 export { vizKind, type VizKind }
 
@@ -26,6 +31,24 @@ export interface Rendered {
   element: HTMLElement
   /** Stops anything still running. Safe to call more than once. */
   destroy: () => void
+}
+
+/** The still figures, by fence. `algo` is not here: it is the one that moves. */
+function still(kind: Exclude<VizKind, 'algo'>, source: string): Figure {
+  switch (kind) {
+    case 'memory':
+      return drawMemory(source)
+    case 'boxes':
+      return drawMemory(source, 'objects')
+    case 'types':
+      return drawTypes(source)
+    case 'hash':
+      return drawHash(source)
+    case 'chart':
+      return drawChart(source)
+    case 'tree':
+      return drawTree(source)
+  }
 }
 
 function errorBox(kind: VizKind, source: string, err: unknown): HTMLElement {
@@ -36,23 +59,24 @@ function errorBox(kind: VizKind, source: string, err: unknown): HTMLElement {
   ])
 }
 
-/** A figure, live: the animation plays, the rest are pictures. */
-export function renderViz(kind: VizKind, source: string): Rendered {
+/**
+ * A figure, live: the animation plays, the rest are pictures.
+ *
+ * `pending` is whether an `algo` block waiting on Claude is waiting on anything
+ * still running — the editor knows, and the figure has to be told, or a request
+ * lost to a restart goes on claiming an answer is coming.
+ */
+export function renderViz(kind: VizKind, source: string, pending = false): Rendered {
   try {
     if (kind === 'algo') {
-      const animation = drawAlgo(source)
+      const animation = drawAlgo(source, pending)
       if (animation.caption) {
         animation.element.appendChild(html('p', { class: 'viz__caption' }, [animation.caption]))
       }
       return { element: animation.element, destroy: animation.destroy }
     }
 
-    const figure =
-      kind === 'memory'
-        ? drawMemory(source)
-        : kind === 'boxes'
-          ? drawMemory(source, 'objects')
-          : drawTree(source)
+    const figure = still(kind, source)
     const element = html('figure', { class: `viz viz--${kind}` }, [
       figure.title ? html('div', { class: 'viz__title' }, [figure.title]) : null,
       html('div', { class: 'viz__stage' }, [figure.root]),
@@ -68,28 +92,20 @@ export function renderViz(kind: VizKind, source: string): Rendered {
  * A figure for paper.
  *
  * The same drawing, with nothing that needs a pointer: an animation becomes the
- * strip of stills described in `algo`, and the two still figures come through
+ * strip of stills described in `algo`, and the still figures come through
  * unchanged.
  */
 export function renderVizStill(kind: VizKind, source: string): HTMLElement {
   try {
     if (kind !== 'algo') return renderViz(kind, source).element
 
-    const film = drawAlgoFilm(source)
-    const strip = html('div', { class: 'viz__film' })
-    for (const cell of film.cells) {
-      strip.appendChild(
-        html('div', { class: 'viz__frame' }, [
-          html('div', { class: 'viz__stage' }, [cell.svg]),
-          html('p', { class: 'viz__note' }, [cell.note || `Step ${cell.step}`])
-        ])
-      )
-    }
-    return html('figure', { class: 'viz viz--algo viz--still' }, [
-      film.title ? html('div', { class: 'viz__title' }, [film.title]) : null,
-      strip,
-      film.caption ? html('figcaption', { class: 'viz__caption' }, [film.caption]) : null
-    ])
+    // A block still waiting on Claude has no frames to lay out as stills; it
+    // prints as the placeholder, which is the honest thing for a note printed
+    // before its figure arrived.
+    const waiting = algoWaiting(source)
+    if (waiting) return drawAlgoWaiting(waiting).element
+
+    return drawAlgoStrip(source).element
   } catch (err) {
     return errorBox(kind, source, err)
   }

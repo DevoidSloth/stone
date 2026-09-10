@@ -27,26 +27,57 @@ import {
   bracketMatching,
   indentOnInput,
   syntaxHighlighting,
-  HighlightStyle
+  HighlightStyle,
+  LanguageDescription
 } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { vim } from '@replit/codemirror-vim'
 import type { NoteMeta } from '@shared/types'
 import { cycleStatus, isTaskLine, parseTaskLine, setStatusOnLine } from '@shared/task-syntax'
 import { assetPathOf, isExternalUrl } from '@shared/attachments'
+import { fenceInfo } from '@shared/code-langs'
 import { isFoldable, livePreview, toggleFold } from './live-preview'
 import { blockHandles } from './blocks'
 import { notePathFacet } from './run-code'
 import { slashMenu } from './slash'
-import { insertMath, linkPastedUrl, makeLink, wrapSelection } from './format'
-import { continueTask, removeListMarkup } from './lists'
+import { codeComplete, inProse, latexComplete } from './intellisense'
+import { insertMath, linkPastedUrl, makeLink, setBlockKind, wrapSelection } from './format'
+import {
+  continueTask,
+  indentListItem,
+  moveListItemDown,
+  moveListItemUp,
+  outdentListItem,
+  removeListMarkup
+} from './lists'
 import { selectionToolbar } from './selection-toolbar'
 import { fontMetrics, widgetHeights } from './measure'
-import { blockInsertion, clearActiveEditor, setActiveEditor, trackFocus } from './insert'
+import {
+  blockInsertion,
+  clearActiveEditor,
+  registerEditor,
+  setActiveEditor,
+  trackFocus,
+  unregisterEditor
+} from './insert'
 import { stamps } from './stamps'
 import { seekPlayer } from '../audio/player'
 import { useStone } from '../store'
 import { describeError } from '../lib/errors'
+import { findEmoji } from '../lib/emoji'
+
+/**
+ * Which grammar highlights a fence.
+ *
+ * A list would do, except for the `!` that turns a block's suggestions off:
+ * `` ```!python `` is still Python and still has to be coloured like it, so the
+ * info string is read through `fenceInfo` before the name is looked up. Fuzzy
+ * matching is on, which is how `c++`, `js` and `Rust` all find their language.
+ */
+function fenceHighlighter(info: string): LanguageDescription | null {
+  const { name } = fenceInfo(info)
+  return name ? LanguageDescription.matchLanguageName(languages, name, true) : null
+}
 
 /**
  * CodeMirror injects its own base styles at a specificity plain CSS cannot beat,
@@ -108,6 +139,27 @@ const STONE_THEME_SPEC = ({
     backgroundColor: 'var(--bg-surface)'
   },
   '.cm-fat-cursor': { backgroundColor: 'var(--accent) !important', color: 'var(--accent-ink) !important' },
+
+  // The panel beside the completion list — a rendered equation, or a word
+  // about a name. Here rather than in CSS because the autocomplete package
+  // styles it in its own base theme, which no plain selector outranks; the
+  // list next to it needs no such help and stays in `editor.css`.
+  '.cm-tooltip.cm-completionInfo': {
+    backgroundColor: 'var(--bg-page)',
+    border: 'none',
+    borderRadius: 'var(--r-md)',
+    boxShadow: 'var(--shadow-md)',
+    padding: 'var(--sp-2) var(--sp-3)',
+    marginLeft: 'var(--sp-1)',
+    maxWidth: '260px',
+    fontFamily: 'var(--font-ui)',
+    fontSize: 'var(--t-xs)',
+    color: 'var(--text-muted)',
+    // The package sets `pre-line`, which is right for a paragraph of prose and
+    // wrong for KaTeX's markup, where it turns every line break in the HTML
+    // into a gap inside the equation.
+    whiteSpace: 'normal'
+  },
 
   // The find bar. Styled here rather than in CSS for the same reason as the
   // rest of this object: CodeMirror's own rules land at a specificity plain
@@ -302,7 +354,9 @@ export interface EditorProps {
   onOpenWikilink: (target: string) => void
   onSelectTag: (tag: string) => void
   /** Fetch a note's body for an `![[embed]]`. */
-  loadEmbed?: (target: string) => Promise<{ title: string; body: string } | null>
+  loadEmbed?: (
+    target: string
+  ) => Promise<{ title: string; body: string; missing?: boolean } | null>
   attachmentsFolder?: string
   vimMode?: boolean
   spellcheck?: boolean
@@ -379,6 +433,9 @@ export function Editor({
     let tabEscapes = false
 
     const wikilinkSource = (context: CompletionContext): CompletionResult | null => {
+      // Prose only. `[[` is a nested index in half the languages Stone runs, and
+      // a menu of note titles over `grid[[i]]` is noise — see `intellisense`.
+      if (!inProse(context.state, context.pos)) return null
       const match = context.matchBefore(/!?\[\[[^\]]*/)
       if (!match) return null
       const opening = context.state.sliceDoc(match.from, match.to).indexOf('[[')
@@ -393,7 +450,42 @@ export function Editor({
       }
     }
 
+    /**
+     * `:tada:` → 🎉.
+     *
+     * The shortcode is a way of typing an emoji without leaving the keyboard,
+     * not a way of storing one: what lands in the file is the character. Only
+     * fires on a colon that starts a word, so a time, a YAML key or a `::` in a
+     * snippet never opens it, and a single letter is required before it lists
+     * anything — an empty `:` would otherwise pop a menu over every clock.
+     */
+    const emojiSource = (context: CompletionContext): CompletionResult | null => {
+      if (!inProse(context.state, context.pos)) return null
+      const match = context.matchBefore(/(?:^|\s):[a-z0-9_+-]+/)
+      if (!match) return null
+      const raw = context.state.sliceDoc(match.from, match.to)
+      const at = raw.indexOf(':')
+      const query = raw.slice(at + 1)
+      if (query.length < 1) return null
+
+      const hits = findEmoji(query).slice(0, 30)
+      if (hits.length === 0) return null
+      return {
+        from: match.from + at,
+        to: match.to,
+        options: hits.map((emoji) => ({
+          label: `${emoji.char}  :${emoji.name}:`,
+          apply: emoji.char,
+          type: 'text'
+        })),
+        filter: false
+      }
+    }
+
     const tagSource = (context: CompletionContext): CompletionResult | null => {
+      // `#` opens a comment in half a dozen of the languages a fence can hold,
+      // and a preprocessor directive in the rest.
+      if (!inProse(context.state, context.pos)) return null
       const match = context.matchBefore(/#[\p{L}\p{N}_\-/]*/u)
       if (!match || match.from === match.to) return null
       return {
@@ -551,11 +643,18 @@ export function Editor({
       bracketMatching(),
       closeBrackets(),
       autocompletion({
-        override: [slashMenu, wikilinkSource, tagSource],
+        override: [
+          slashMenu,
+          wikilinkSource,
+          tagSource,
+          emojiSource,
+          latexComplete,
+          codeComplete
+        ],
         icons: false,
         closeOnBlur: true
       }),
-      markdown({ base: markdownLanguage, codeLanguages: languages, addKeymap: false }),
+      markdown({ base: markdownLanguage, codeLanguages: fenceHighlighter, addKeymap: false }),
       syntaxHighlighting(codeHighlight),
       EditorView.lineWrapping,
       EditorView.contentAttributes.of({ spellcheck: spellcheck ? 'true' : 'false' }),
@@ -636,6 +735,14 @@ export function Editor({
         { key: 'Mod-Shift-e', run: insertMath },
         { key: 'Mod-Enter', run: toggleTaskAtCursor },
         { key: 'Mod-Shift-h', run: toggleFoldAtCursor },
+        // The list keys everything else has: 8 is the bullet on most layouts,
+        // and it is what ProseMirror, Notion and Google Docs all chose.
+        { key: 'Mod-Shift-8', run: (v) => setBlockKind(v, 'bullet') },
+        // An outline moves by subtrees. These fall through to the stock
+        // "move line" when the caret is not in a list, so the key keeps its
+        // ordinary meaning in prose.
+        { key: 'Alt-ArrowUp', run: moveListItemUp },
+        { key: 'Alt-ArrowDown', run: moveListItemDown },
         ...closeBracketsKeymap,
         // Above the list keys: Enter belongs to the open completion menu first.
         ...completionKeymap,
@@ -670,12 +777,22 @@ export function Editor({
               tabEscapes = false
               return false
             }
-            return indentWithTab.run!(v)
+            // In a list, Tab nests; everywhere else it is still an indent.
+            return indentListItem(v) || indentWithTab.run!(v)
           },
-          shift: indentWithTab.shift
+          shift: (v) => outdentListItem(v) || indentWithTab.shift!(v)
         }
       ]),
       EditorView.updateListener.of((update) => {
+        // Where the caret is goes to the store on every selection change, so
+        // the Code panel can follow it. It is a no-op when the line has not
+        // changed, which is most keystrokes.
+        if (update.selectionSet || update.docChanged) {
+          const path = update.state.facet(notePathFacet)
+          const line = update.state.doc.lineAt(update.state.selection.main.head).number
+          if (path) useStone.getState().setCaret(path, line)
+        }
+
         if (!update.docChanged) return
         const next = update.state.doc.toString()
         emitted.current = next
@@ -721,12 +838,16 @@ export function Editor({
     // Claude's insertions go to the last editor focused; a note that has just
     // opened has not been clicked yet, so claim it now and let focus correct it.
     setActiveEditor(instance)
+    // And by name, for an answer that arrives long after the note it belongs to
+    // stopped being the one on screen.
+    registerEditor(docKey, instance)
 
     return () => {
       // Keep the state so the next visit resumes rather than restarts. Bounded,
       // because a long session opens more notes than anyone needs remembered.
       rememberDoc(docKey, instance.state, instance.scrollDOM.scrollTop)
       clearActiveEditor(instance)
+      unregisterEditor(docKey, instance)
       instance.destroy()
       view.current = null
     }

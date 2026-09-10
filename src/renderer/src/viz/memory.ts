@@ -317,7 +317,14 @@ function parseBoxes(
     // variable: the little box off to one side that the whole picture hangs
     // from. Anywhere else it would be a field, so it is only read this way
     // when there is no box open to attach it to.
-    if (style === 'objects' && !current && /^[A-Za-z_$][\w$]*\s*->/.test(line.text) && !/[{[(]/.test(line.text)) {
+    const points = /^[A-Za-z_$][\w$]*\s*->/.test(line.text) && !/[{[(]/.test(line.text)
+    // `n = 5` is the same little box with the value written in it. An `int` a
+    // method is holding is as much a part of the picture as the objects around
+    // it, and the alternative — a box titled `int` with one field in it — draws
+    // a primitive as though it were something the program could point at.
+    // Anything ending in a bracket is one of the three box forms, not a value.
+    const holds = /^[A-Za-z_$][\w$]*\s*=\s*\S/.test(line.text) && !/[}\])]\s*$/.test(line.text)
+    if (style === 'objects' && !current && (points || holds)) {
       const field = parseField(line.text, line.n)
       const box = newBox(field.name, field.name, 'stack', line.n)
       box.variable = true
@@ -451,7 +458,10 @@ function sizeBox(box: Box, style: Style): void {
       : textWidth(box.title, TITLE_SIZE) + (box.type ? textWidth(` ${box.type}`, NAME_SIZE) : 0)
 
   if (box.variable) {
-    box.w = VAR_W
+    const held = box.fields[0]?.value
+    // A pointer's box is a fixed little square; one with a value in it is as
+    // wide as the value, or the number it is holding gets an ellipsis.
+    box.w = held === undefined ? VAR_W : Math.max(VAR_W, textWidth(held, VALUE_SIZE) + 20)
     box.h = VAR_H
     return
   }
@@ -600,6 +610,16 @@ function drawBox(box: Box, style: Style): SVGGElement {
     const field = box.fields[0]
     if (field?.pointer) {
       group.appendChild(svg('circle', { class: 'viz-row__stud', cx: round(box.x + box.w / 2), cy: round(box.y + box.h / 2), r: 3 }))
+    } else if (field?.value !== undefined) {
+      group.appendChild(
+        label(
+          ellipsize(field.value, VALUE_SIZE, box.w - 12),
+          round(box.x + box.w / 2),
+          round(box.y + box.h / 2),
+          'viz-row__value',
+          VALUE_SIZE
+        )
+      )
     } else if (field?.nil) {
       group.appendChild(
         svg('line', {

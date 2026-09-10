@@ -8,19 +8,25 @@
  * where both sides can see it, and keeps the two from drifting apart.
  */
 
-export type VizKind = 'memory' | 'boxes' | 'tree' | 'algo'
+export type VizKind = 'memory' | 'boxes' | 'tree' | 'algo' | 'types' | 'hash' | 'chart'
 
 /*
- * Three names, and deliberately no aliases. `stack`, `heap` and `trace` all
- * read as obvious synonyms and all of them are things people paste under a
- * fence for other reasons — a stack trace most of all — and claiming a fence
- * that was never meant for us turns someone's pasted output into an error box.
+ * These names, and deliberately no aliases. `stack`, `heap`, `trace` and `uml`
+ * all read as obvious synonyms and all of them are things people paste under a
+ * fence for other reasons — a stack trace most of all, and PlantUML under
+ * `uml` — and claiming a fence that was never meant for us turns someone's
+ * pasted output into an error box. `plot`, `graph` and `table` are missing for
+ * the same reason: `graph` is Mermaid's own first word, and a `table` fence
+ * would swallow every pasted grid in the vault.
  */
 const LANGS: Record<string, VizKind> = {
   memory: 'memory',
   boxes: 'boxes',
   tree: 'tree',
-  algo: 'algo'
+  algo: 'algo',
+  types: 'types',
+  hash: 'hash',
+  chart: 'chart'
 }
 
 /** The figure a fence language draws, or null if it draws none. */

@@ -40,6 +40,29 @@ export function assertInsideVault(vaultPath: string, absPath: string): void {
   }
 }
 
+/** The write-once archive, relative to `.stone`. */
+const BACKUPS_DIR = 'backups'
+
+/** Whether a path lies inside the write-once backup archive. */
+export function isBackupPath(absPath: string): boolean {
+  const parts = path.resolve(absPath).split(path.sep)
+  const i = parts.indexOf('.stone')
+  return i !== -1 && parts[i + 1] === BACKUPS_DIR
+}
+
+/**
+ * Backups exist to survive the mistake that overwrote the note, so nothing in
+ * Stone — a save, a rename, a delete, a plugin — may write over one. The files
+ * are chmod 0444 on disk as well; this guard is what turns that into a clear
+ * refusal at the top of a write rather than an EACCES from somewhere deep
+ * inside one, half-done.
+ */
+export function assertNotBackup(absPath: string): void {
+  if (isBackupPath(absPath)) {
+    throw new Error(`Backups are immutable; refusing to modify ${path.basename(absPath)}.`)
+  }
+}
+
 export interface WalkedFile {
   absPath: string
   relPath: string
@@ -117,6 +140,7 @@ export async function writeNoteAtomic(
   content: string,
   expectedHash?: string
 ): Promise<WriteResult> {
+  assertNotBackup(absPath)
   const dir = path.dirname(absPath)
   await ensureDir(dir)
 
@@ -159,6 +183,7 @@ export async function writeNoteAtomic(
  * everything at the root.
  */
 export async function trashNote(vaultPath: string, absPath: string): Promise<string> {
+  assertNotBackup(absPath)
   const trashDir = path.join(vaultPath, '.trash')
   await ensureDir(trashDir)
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
@@ -288,6 +313,7 @@ export async function saveAttachment(
 ): Promise<string> {
   const dir = path.join(vaultPath, ...folder.split('/').filter(Boolean))
   assertInsideVault(vaultPath, dir)
+  assertNotBackup(dir)
   await ensureDir(dir)
 
   const ext = path.extname(suggestedName) || '.png'
@@ -321,7 +347,8 @@ function snapshotKey(relPath: string): string {
 export async function writeSnapshot(
   vaultPath: string,
   relPath: string,
-  content: string
+  content: string,
+  stamp: number = Date.now()
 ): Promise<void> {
   const dir = path.join(vaultPath, '.stone', 'snapshots', snapshotKey(relPath))
   await ensureDir(dir)
@@ -335,7 +362,7 @@ export async function writeSnapshot(
     if (previous === content) return
   }
 
-  await fs.writeFile(path.join(dir, `${Date.now()}.md`), content, 'utf8')
+  await fs.writeFile(path.join(dir, `${stamp}.md`), content, 'utf8')
   await fs.writeFile(path.join(dir, 'path'), relPath, 'utf8').catch(() => {})
 
   const all = (await fs.readdir(dir).catch(() => [])).filter((n) => n.endsWith('.md')).sort()
@@ -389,6 +416,115 @@ export async function readSnapshot(
   }
 }
 
+// ------------------------------------------------------------------ backups
+
+/**
+ * A write-once archive under `.stone/backups`.
+ *
+ * Snapshots roll: 25 per note, keyed by path, so an afternoon of saves pushes
+ * out the version you actually wanted and a rename starts the history over. A
+ * backup is written once under a name that is never reused, chmod'd read-only,
+ * and never pruned — the copy taken today is still there a thousand edits
+ * later. The cost is an archive that only grows, which is the price of a
+ * version nothing can take away.
+ */
+
+function backupRoot(vaultPath: string): string {
+  return path.join(vaultPath, '.stone', BACKUPS_DIR)
+}
+
+/** Backup ids are the save's timestamp, with ` -2`, `-3`… disambiguating a tie. */
+const BACKUP_ID_RE = /^\d+(-\d+)?$/
+
+function backupStamp(name: string): number {
+  return Number(name.replace(/\.md$/, '').split('-')[0]) || 0
+}
+
+async function backupFiles(dir: string): Promise<string[]> {
+  const names = (await fs.readdir(dir).catch(() => [])).filter((n) => n.endsWith('.md'))
+  // Numeric, not lexicographic: the ids are timestamps, and a tie-broken
+  // `…-2` must sort next to the `…` it followed rather than by string order.
+  return names.sort((a, b) => backupStamp(a) - backupStamp(b))
+}
+
+export async function writeBackup(
+  vaultPath: string,
+  relPath: string,
+  content: string,
+  stamp: number = Date.now()
+): Promise<void> {
+  const dir = path.join(backupRoot(vaultPath), snapshotKey(relPath))
+  await ensureDir(dir)
+
+  // Dedupe against the newest entry only, so a save that changed nothing adds
+  // nothing while a genuine A → B → A still keeps all three versions.
+  const existing = await backupFiles(dir)
+  const newest = existing[existing.length - 1]
+  if (newest) {
+    const previous = await fs.readFile(path.join(dir, newest), 'utf8').catch(() => null)
+    if (previous === content) return
+  }
+
+  // Two saves inside one millisecond must not land on the same name: the file
+  // is read-only the moment it exists, so the second write would fail and the
+  // version be lost rather than merely renamed.
+  let target = path.join(dir, `${stamp}.md`)
+  let n = 2
+  while (await exists(target)) {
+    target = path.join(dir, `${stamp}-${n}.md`)
+    n++
+  }
+
+  await fs.writeFile(target, content, { encoding: 'utf8', mode: 0o444 })
+  // `mode` is masked by the process umask at creation, so set it outright.
+  await fs.chmod(target, 0o444).catch(() => {})
+
+  // Records which note the hashed directory holds, for anyone reading the
+  // archive by hand. Written once, and read-only after that like the rest.
+  const marker = path.join(dir, 'path')
+  if (!(await exists(marker))) {
+    await fs.writeFile(marker, relPath, 'utf8').catch(() => {})
+    await fs.chmod(marker, 0o444).catch(() => {})
+  }
+}
+
+export async function listBackups(
+  vaultPath: string,
+  relPath: string
+): Promise<{ id: string; relPath: string; savedAt: number; size: number }[]> {
+  const dir = path.join(backupRoot(vaultPath), snapshotKey(relPath))
+  const out: { id: string; relPath: string; savedAt: number; size: number }[] = []
+  for (const name of await backupFiles(dir)) {
+    try {
+      const st = await fs.stat(path.join(dir, name))
+      out.push({
+        id: name.replace(/\.md$/, ''),
+        relPath,
+        savedAt: backupStamp(name) || st.mtimeMs,
+        size: st.size
+      })
+    } catch {
+      // Vanished between readdir and stat.
+    }
+  }
+  return out.sort((a, b) => b.savedAt - a.savedAt)
+}
+
+export async function readBackup(
+  vaultPath: string,
+  relPath: string,
+  id: string
+): Promise<string | null> {
+  // The id is a name we minted; anything else must not reach the fs.
+  if (!BACKUP_ID_RE.test(id)) return null
+  const dir = path.join(backupRoot(vaultPath), snapshotKey(relPath))
+  try {
+    return await fs.readFile(path.join(dir, `${id}.md`), 'utf8')
+  } catch {
+    return null
+  }
+}
+
 // ------------------------------------------------------------ folder shuffle
 
 export async function listFolders(vaultPath: string): Promise<string[]> {
@@ -421,6 +557,8 @@ export async function movePath(
   const to = toAbsPath(vaultPath, toRel)
   assertInsideVault(vaultPath, from)
   assertInsideVault(vaultPath, to)
+  assertNotBackup(from)
+  assertNotBackup(to)
 
   const resolvedFrom = path.resolve(from)
   const resolvedTo = path.resolve(to)
@@ -440,6 +578,7 @@ export async function movePath(
 export async function removeFolder(vaultPath: string, relPath: string): Promise<void> {
   const abs = toAbsPath(vaultPath, relPath)
   assertInsideVault(vaultPath, abs)
+  assertNotBackup(abs)
   if (path.resolve(abs) === path.resolve(vaultPath)) {
     throw new Error('The vault root cannot be deleted.')
   }
@@ -486,6 +625,7 @@ export async function appendLine(
   line: string,
   createWith?: string
 ): Promise<void> {
+  assertNotBackup(absPath)
   await ensureDir(path.dirname(absPath))
   if (!(await exists(absPath))) {
     await fs.writeFile(absPath, `${createWith ?? ''}${line}\n`, 'utf8')

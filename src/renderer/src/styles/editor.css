@@ -324,6 +324,28 @@
   color: var(--text-faint);
 }
 
+/*
+ * `<sup>` and `<sub>`. Raised and lowered with `position: relative` rather than
+ * with `vertical-align`, because the browser's own default for those tags also
+ * shrinks the line box — a footnote marker or an x₂ mid-paragraph would nudge
+ * every line it appears on a pixel taller than its neighbours, and a page of
+ * chemistry would ripple.
+ */
+.tok-sup,
+.tok-sub {
+  font-size: 0.75em;
+  position: relative;
+  line-height: 0;
+}
+
+.tok-sup {
+  bottom: 0.4em;
+}
+
+.tok-sub {
+  top: 0.25em;
+}
+
 /* Notion's inline code: red ink on a warm grey wash, no border. */
 .tok-code {
   font-family: var(--font-mono);
@@ -343,6 +365,19 @@
   border-radius: var(--r-xs);
   padding: 0.1em 0.15em;
   color: inherit;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/*
+ * A coloured run, and a coloured highlight. The colour itself arrives as an
+ * inline style from the document — all this contributes is the shape of the
+ * wash, which has to match `==highlight==` exactly or the two forms of the same
+ * gesture would look like different features.
+ */
+.tok-wash {
+  border-radius: var(--r-xs);
+  padding: 0.1em 0.15em;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
@@ -535,14 +570,267 @@
   border-radius: 0 0 var(--r-sm) var(--r-sm);
 }
 
-/* Checkbox widget rendered in place of `[ ]`. */
+/*
+ * The header bar, standing in for the ```` ```lang ```` line.
+ *
+ * It occupies that line rather than sitting above the block, so the plate and
+ * the height map are exactly what they were — the fence line was always there,
+ * and this only changes what is drawn on it. The copy button appears on hover,
+ * because a page of snippets should read as a document rather than as a row of
+ * controls.
+ */
+.cm-codehead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  font-family: var(--font-ui);
+}
+
+.cm-codehead__lang {
+  font-size: var(--t-2xs);
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--text-ghost);
+}
+
+.cm-codehead__copy {
+  padding: 1px var(--sp-2);
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-xs);
+  background: none;
+  font: inherit;
+  font-size: var(--t-2xs);
+  color: var(--text-faint);
+  cursor: pointer;
+  /* Quiet rather than hidden: a control nobody can see is a control nobody
+     finds, and the block's own top line is not somewhere the pointer goes. */
+  opacity: 0.45;
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+
+.cm-line.tok-line-code-first:hover .cm-codehead__copy,
+.cm-codehead__copy:focus-visible {
+  opacity: 1;
+}
+
+.cm-codehead__copy:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+/* --------------------------------------------------------------- lists */
+
+/*
+ * A list is drawn on a grid, not on its own indentation.
+ *
+ * What is in the file is two spaces, or four, or a tab — whatever was typed,
+ * and it is left alone. What is on the page is a fixed step per level, because
+ * the eye reads nesting by the distance between columns and a list that steps
+ * 4.5px at one level and 18px at the next reads as neither. The step is the
+ * same one Notion, Bear and Things use, and it is wide enough that a bullet and
+ * its parent's guide never touch.
+ *
+ * Every measurement below is in this one place, and the widths add up on
+ * purpose: the marker column is exactly the glyph plus its gap, so the padding
+ * that hangs the wrapped text and the margin that places the bullet are the
+ * same number arrived at twice.
+ */
+.cm-editor {
+  --list-glyph: 16px;
+  --list-gap: 8px;
+  --list-marker: calc(var(--list-glyph) + var(--list-gap));
+  --list-indent: 24px;
+  /* Overridden per line by live preview; 0 for a checkbox outside a list. */
+  --list-depth: 0;
+}
+
+.cm-line.tok-line-list {
+  position: relative;
+}
+
+/*
+ * The hanging indent, and the whole reason the marker widget swallows the
+ * item's indentation: the padding puts every wrapped line under the item's
+ * text, and the negative indent of the same size pulls the first line back out
+ * to where the marker belongs. Only lines the caret has left get it — on the
+ * line being edited the raw prefix is back, and it is a different width.
+ */
+.cm-line.tok-line-list--tidy {
+  padding-left: calc(var(--list-depth) * var(--list-indent) + var(--list-marker));
+  text-indent: calc(-1 * (var(--list-depth) * var(--list-indent) + var(--list-marker)));
+}
+
+/*
+ * `text-indent` inherits, and an inline-block is a block container.
+ *
+ * So every widget drawn inside a list item — the marker itself, the "n lines
+ * hidden" chip, an inline embed — starts its own first line with the hanging
+ * indent applied a second time, and its contents come out dozens of pixels to
+ * the left of the box they belong in. The property is only ever meant for the
+ * line, so it stops at the line.
+ */
+.cm-line.tok-line-list--tidy * {
+  text-indent: 0;
+}
+
+/*
+ * Nesting guides: one hairline down each ancestor's bullet column.
+ *
+ * Drawn per line rather than per list, so adjacent items stack their guides
+ * into one continuous rule and a blank line in the middle of a list breaks it,
+ * which is the honest picture — the guide says "these lines are under that
+ * one", and nothing else.
+ *
+ * Below the selection layer, at the depth the code plate uses and for the same
+ * reason: see `.cm-line.tok-line-code` above.
+ */
+.cm-line.tok-line-list--tidy::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--list-glyph) / 2);
+  width: calc(var(--list-depth) * var(--list-indent));
+  z-index: -10;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--border-hair) 0 1px,
+    transparent 1px var(--list-indent)
+  );
+}
+
+/*
+ * The bullet drawn in place of `-`, `*` or `+`.
+ *
+ * The box is fixed at the glyph column and the glyph is sized inside it, which
+ * is what keeps a row of rings the same height as a row of discs: an inline box
+ * with a height of its own contributes that height to the line whatever is
+ * drawn in it, so the type can be scaled for the eye without the list
+ * developing a limp. The vertical alignment is the checkbox's, so a task and a
+ * bullet in the same list sit on one line.
+ */
+.cm-bullet {
+  display: inline-block;
+  position: relative;
+  width: var(--list-glyph);
+  height: var(--list-glyph);
+  line-height: var(--list-glyph);
+  margin-left: calc(var(--list-depth) * var(--list-indent));
+  margin-right: var(--list-gap);
+  text-align: center;
+  color: var(--text-muted);
+  user-select: none;
+  /*
+   * The box is hung so that its centre lands on the middle of the text's
+   * x-height — the height the eye reads a line of lowercase at, and where a
+   * bullet has to sit or it looks like it belongs to the line above.
+   *
+   * Stated as an equation rather than as a magic number because both terms
+   * move: the box is a fixed 16px column, while the x-height tracks the
+   * editor's font-size setting. `0.26em` is half the x-height of all three
+   * faces the setting offers — Inter, Newsreader and Geist Mono agree on it to
+   * within a third of a pixel, which is closer than any single px value can
+   * stay across them.
+   */
+  vertical-align: calc(0.26em - var(--list-glyph) / 2);
+}
+
+/*
+ * The three markers, drawn rather than typed.
+ *
+ * These used to be the characters •, ◦ and ▪ scaled up by a per-level
+ * multiplier, and the trouble with that is vertical: every typeface puts the
+ * ink of those three glyphs at a different height above the baseline, and the
+ * multiplier magnifies the difference. In Geist Mono at 14.5px the ring is set
+ * on a 32px em, and it floated a pixel and a half above the middle of its own
+ * words while the disc above it sat correctly — one list, two alignments.
+ *
+ * A shape has no such opinion. Its centre is the centre of its box, in every
+ * face and at every size, so the level that is a ring lines up with the level
+ * that is a disc by construction. What the shapes do need is optical matching,
+ * because a ring reads lighter than a disc of the same width and a square reads
+ * heavier — hence three sizes rather than one, in `em` so they follow the
+ * editor's font size the way the type does.
+ */
+.cm-bullet:not(.cm-bullet--ordered)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  border-radius: var(--r-full);
+  background: currentcolor;
+}
+
+.cm-bullet[data-level='0']::before {
+  width: 0.36em;
+  height: 0.36em;
+}
+
+.cm-bullet[data-level='1']::before {
+  width: 0.44em;
+  height: 0.44em;
+  border: 0.1em solid currentcolor;
+  background: none;
+}
+
+.cm-bullet[data-level='2']::before {
+  width: 0.32em;
+  height: 0.32em;
+  border-radius: 1px;
+}
+
+/*
+ * An ordinal keeps its own characters — it is information, not decoration — and
+ * is set flush right in the marker column so that 9 and 10 line up on the dot.
+ * Past 99 the number overflows its column to the left rather than widening it,
+ * which keeps the text of every item in the list on the same grid.
+ *
+ * It aligns on the baseline, not on the x-height: a numeral is type, and type
+ * sits on the same line as the type beside it. Only the drawn markers need
+ * hanging by their middles.
+ */
+.cm-bullet--ordered {
+  vertical-align: baseline;
+  text-align: right;
+  white-space: pre;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+/*
+ * A collapsed item, ringed.
+ *
+ * The twisty says the same thing, but only while the pointer is in the margin.
+ * This is what tells a reader scrolling past that there is something under this
+ * line they cannot see.
+ *
+ * An inset shadow rather than a fill or a border: it is drawn inside the box
+ * the marker already occupies, so it is the same ring at every depth and around
+ * an ordinal as around a bullet, and it moves nothing.
+ */
+.cm-line.tok-line-folded .cm-bullet {
+  color: var(--text-strong);
+  border-radius: var(--r-full);
+  box-shadow: inset 0 0 0 1.5px var(--border);
+}
+
+/*
+ * Checkbox widget rendered in place of `[ ]`.
+ *
+ * Hung by the same equation as a bullet, so that a task and a bullet in the
+ * same list sit on one line in every typeface — which is the whole reason both
+ * are stated as a rule rather than as a number somebody once eyeballed.
+ */
 .cm-checkbox {
   display: inline-grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
-  margin-right: 8px;
-  vertical-align: -3px;
+  width: var(--list-glyph);
+  height: var(--list-glyph);
+  margin-left: calc(var(--list-depth) * var(--list-indent));
+  margin-right: var(--list-gap);
+  vertical-align: calc(0.26em - var(--list-glyph) / 2);
   border-radius: var(--r-xs);
   border: 1.4px solid var(--text-ghost);
   background: transparent;
@@ -604,15 +892,20 @@
   border: none;
   border-radius: var(--r-md);
   box-shadow: var(--shadow-md);
-  overflow: hidden;
   font-family: var(--font-ui);
   font-size: var(--t-base);
   padding: var(--sp-1);
+  /* Not `hidden`: the info panel is a child positioned outside this box, and
+     clipping the list's corners here clipped the whole preview away with it.
+     The rounding it was for belongs on the list, which is what overflows. */
+  overflow: visible;
 }
 
 .cm-tooltip.cm-tooltip-autocomplete > ul {
   max-height: 270px;
   font-family: inherit;
+  border-radius: var(--r-sm);
+  overflow: auto;
 }
 
 .cm-tooltip.cm-tooltip-autocomplete > ul > li {
@@ -635,6 +928,16 @@
   color: var(--text-ghost);
   font-style: normal;
   margin-left: var(--sp-2);
+}
+
+/* A command drawn as itself. Larger than the row it explains, because the
+   whole point is telling two symbols apart at a glance. */
+.cm-latex-preview {
+  color: var(--text-strong);
+  font-size: var(--t-lg);
+  line-height: 1.4;
+  text-align: center;
+  padding: var(--sp-1) 0;
 }
 
 /* --------------------------------------------------------------- backlinks */
@@ -711,6 +1014,7 @@
   z-index: var(--z-popover);
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 1px;
   padding: 3px;
   border-radius: var(--r-md);
@@ -762,6 +1066,80 @@
 .seltoolbar__btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+
+/*
+ * The colour swatches, on their own row under the bar.
+ *
+ * `flex-basis: 100%` rather than a popover: the row belongs to the bar, moves
+ * with it, and cannot end up orphaned on screen when the selection changes
+ * underneath. The bar is measured after it opens, so the whole thing is still
+ * placed above the selection rather than over it.
+ */
+.seltoolbar__palette {
+  flex-basis: 100%;
+  margin-top: 3px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-hair);
+}
+
+.seltoolbar__palette[hidden] {
+  display: none;
+}
+
+.seltoolbar__swatches {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 3px;
+}
+
+.seltoolbar__swatch-label {
+  width: 5.5em;
+  font-family: var(--font-ui);
+  font-size: var(--t-2xs);
+  color: var(--text-faint);
+}
+
+.seltoolbar__swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-full);
+  background: var(--swatch, transparent);
+  cursor: pointer;
+}
+
+/*
+ * A text colour is shown as ink on the panel, a highlight as the wash it
+ * actually paints — which is the difference between the two, drawn rather than
+ * captioned. The ring keeps a pale wash visible against the panel.
+ */
+.seltoolbar__swatch--ink {
+  box-shadow: inset 0 0 0 6px var(--bg-panel);
+}
+
+.seltoolbar__swatch--none {
+  position: relative;
+  background: transparent;
+}
+
+.seltoolbar__swatch--none::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-top: 1px solid var(--text-faint);
+  transform: rotate(-45deg);
+}
+
+.seltoolbar__swatch:hover {
+  border-color: var(--text-faint);
+}
+
+.seltoolbar__swatch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .seltoolbar__rule {

@@ -543,6 +543,96 @@ blockquote {
   margin: 0 0 0.5em;
 }
 
+/*
+ * A ```toc block inside the body.
+ *
+ * Distinct from the `.toc` contents *page* above, which is generated for the
+ * document as a whole and carries page numbers. This one is part of the note —
+ * the writer put it there — so it prints inline, and links rather than
+ * paginates.
+ */
+.md-toc {
+  margin: 0 0 1.4em;
+  padding-left: 1em;
+  border-left: 2px solid var(--border);
+}
+
+.md-toc__head {
+  margin: 0 0 0.4em;
+  font-family: var(--font-ui);
+  font-size: 8pt;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.md-toc__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.md-toc__row {
+  margin: 0.15em 0;
+  padding-left: calc(var(--toc-depth, 0) * 1.2em);
+  font-size: 10pt;
+}
+
+.md-toc__row a {
+  border-bottom: none;
+  color: var(--text-muted);
+}
+
+/*
+ * Footnotes.
+ *
+ * Both ways of writing one — `[^1]` with a definition below, and `^[in place]`
+ * — print as a numbered marker and a note in a list at the end. Endnotes rather
+ * than true bottom-of-page footnotes: paginating a note against the page it is
+ * cited on needs a typesetter, and a list under a rule is what every academic
+ * PDF exporter that is not one produces.
+ */
+.md-fn {
+  font-size: 0.72em;
+  line-height: 0;
+  position: relative;
+  bottom: 0.4em;
+}
+
+.md-fn a {
+  border-bottom: none;
+}
+
+.md-notes {
+  margin-top: 2em;
+  padding-top: 0.8em;
+  border-top: 1px solid var(--border);
+  font-size: 9pt;
+  color: var(--text-muted);
+  break-inside: avoid;
+}
+
+.md-notes__list {
+  margin: 0;
+  padding-left: 1.4em;
+}
+
+.md-note {
+  margin: 0 0 0.35em;
+}
+
+.md-note__back {
+  border-bottom: none;
+  color: var(--text-faint);
+}
+
+/* An embed whose `#Heading` names nothing — said plainly rather than silently
+   widened to the whole note. */
+.md-embed--missing {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
 /* ------------------------------------------------------------ inline marks */
 
 .doc a {

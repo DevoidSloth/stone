@@ -7,6 +7,8 @@ import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { TaskStatus } from '@shared/types'
 import { embedKind, resolveAssetUrl, withEmbedWidth, type EmbedSpec } from '@shared/attachments'
+import { splitTarget } from '@shared/sections'
+import { languageFor } from '@shared/code-langs'
 import { enqueueRender, openPdf } from '../lib/pdfjs'
 import { EmbeddedQuery } from '../components/EmbeddedQuery'
 import {
@@ -17,6 +19,8 @@ import {
   insertColumn,
   insertRow,
   setCell,
+  setAlignment,
+  nextAlignment,
   revealTableSource,
   setPendingFocus,
   takePendingFocus,
@@ -74,6 +78,65 @@ export class CheckboxWidget extends WidgetType {
     box.setAttribute('aria-checked', String(this.status === 'done'))
     box.setAttribute('tabindex', '-1')
     return box
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+
+/**
+ * How many marker shapes there are before the sequence repeats.
+ *
+ * Filled, hollow, square — the sequence Word, Notion and every outliner since
+ * has used, and the reason is that it survives being wrong: a reader who has
+ * lost track of which level they are on can tell two adjacent levels apart by
+ * shape alone, without counting indentation.
+ *
+ * The shapes themselves are drawn in CSS from `data-level`, not typed as •, ◦
+ * and ▪ — see `.cm-bullet` in editor.css for why a character cannot hold its
+ * height across the three typefaces the font setting offers.
+ */
+const BULLET_LEVELS = 3
+
+/**
+ * A list item's marker: `-` drawn as a bullet, or an ordinal set in its column.
+ *
+ * The widget stands in for the item's whole prefix — its indentation as well as
+ * its marker — which is what puts a nested item on an exact grid instead of on
+ * however many spaces were typed. The depth comes down as a custom property on
+ * the line, so the margin here and the hanging indent on the line can never
+ * disagree about which column the text starts in.
+ *
+ * As everywhere else in live preview, the caret arriving on the line takes the
+ * widget away again and the raw markdown comes back.
+ */
+export class ListMarkerWidget extends WidgetType {
+  constructor(
+    readonly depth: number,
+    /** The ordinal with its dot, or null for a bullet. */
+    readonly ordinal: string | null
+  ) {
+    super()
+  }
+
+  eq(other: ListMarkerWidget): boolean {
+    return other.depth === this.depth && other.ordinal === this.ordinal
+  }
+
+  toDOM(): HTMLElement {
+    const el = document.createElement('span')
+    el.className = this.ordinal === null ? 'cm-bullet' : 'cm-bullet cm-bullet--ordered'
+    if (this.ordinal === null) {
+      // Which shape this level gets, for the stylesheet to draw. The element
+      // holds no text: a bullet is a mark on the page rather than a character
+      // in the sentence, and the document's own `-` is what gets copied.
+      el.dataset.level = String(this.depth % BULLET_LEVELS)
+      el.setAttribute('aria-hidden', 'true')
+    } else {
+      el.textContent = this.ordinal
+    }
+    return el
   }
 
   ignoreEvent(): boolean {
@@ -621,7 +684,9 @@ export function embedWidget(
   attachmentsFolder: string,
   block: boolean,
   handlers: {
-    loadEmbed: (target: string) => Promise<{ title: string; body: string } | null>
+    loadEmbed: (
+      target: string
+    ) => Promise<{ title: string; body: string; missing?: boolean } | null>
     onOpenWikilink: (target: string) => void
     onOpenAsset: (target: string) => void
     onPlayAudio: (target: string, seconds: number) => void
@@ -715,7 +780,9 @@ export class FileEmbedWidget extends WidgetType {
 export class NoteEmbedWidget extends WidgetType {
   constructor(
     readonly target: string,
-    readonly load: (target: string) => Promise<{ title: string; body: string } | null>,
+    readonly load: (
+      target: string
+    ) => Promise<{ title: string; body: string; missing?: boolean } | null>,
     readonly onOpen: (target: string) => void
   ) {
     super()
@@ -756,6 +823,14 @@ export class NoteEmbedWidget extends WidgetType {
         return
       }
       head.textContent = note.title
+      // The note is there but the fragment names nothing in it — a renamed
+      // heading, or a block id that was edited away. Saying so beats quietly
+      // embedding the whole page, which is what this used to do.
+      if (note.missing) {
+        wrap.classList.add('cm-embed--missing')
+        body.textContent = `That note has no "${splitTarget(this.target).heading ?? `^${splitTarget(this.target).block}`}".`
+        return
+      }
       body.textContent = ''
       // Plain text, deliberately: rendering markdown here would mean a second
       // renderer to keep in step with the editor's, and an embed is a preview.
@@ -940,13 +1015,15 @@ export class VizWidget extends WidgetType {
 
   constructor(
     readonly kind: VizKind,
-    readonly source: string
+    readonly source: string,
+    /** Whether this block is waiting on a request that is still running. */
+    readonly pending = false
   ) {
     super()
   }
 
   eq(other: VizWidget): boolean {
-    return other.kind === this.kind && other.source === this.source
+    return other.kind === this.kind && other.source === this.source && other.pending === this.pending
   }
 
   get estimatedHeight(): number {
@@ -956,7 +1033,7 @@ export class VizWidget extends WidgetType {
   toDOM(): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = `cm-embed cm-embed--viz cm-embed--viz-${this.kind}`
-    this.figure = renderViz(this.kind, this.source)
+    this.figure = renderViz(this.kind, this.source, this.pending)
     wrap.appendChild(this.figure.element)
     return blockShell(wrap, 'wide')
   }
@@ -1068,6 +1145,13 @@ function renderCell(text: string, into: HTMLElement): void {
   if (rest.length > 0) into.appendChild(document.createTextNode(rest))
 }
 
+/** What each alignment is drawn as on the column's own button. */
+const ALIGN_GLYPH: Record<CellAlign, string> = {
+  left: '\u21e4',
+  center: '\u2194',
+  right: '\u21e5'
+}
+
 /**
  * A GFM table, drawn as a real table and edited in place.
  *
@@ -1127,16 +1211,66 @@ export class TableWidget extends WidgetType {
     /** Re-read the table from the document; edits move the lines under us. */
     const model = (): TableModel | null => findTable(view.state.doc, this.fromLine)
 
+    /**
+     * The alignment control on a column, in its header cell.
+     *
+     * One button cycling left → centre → right, because three buttons per
+     * column is a toolbar and this is a table. It writes the rule row — the
+     * `:---:` in the markdown — so the file says what the page shows, and it
+     * composes with whatever cell is being edited into a single write, the way
+     * every other structural change here does.
+     */
+    function alignControl(col: number, align: CellAlign): HTMLElement {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'cm-table__align'
+      button.contentEditable = 'false'
+      button.textContent = ALIGN_GLYPH[align]
+      button.title = `Aligned ${align === 'center' ? 'centre' : align} — click to change`
+      button.setAttribute('aria-label', `Column alignment: ${align}`)
+
+      button.addEventListener('mousedown', (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        const current = model()
+        if (!current) return
+        const next = nextAlignment(current.align[col] ?? 'left')
+        // A cell being typed into commits with the same write, so pressing this
+        // mid-edit never costs the word that was half-finished.
+        const editing = wrap.querySelector<HTMLElement>('[data-row]:focus')
+        if (editing) apply(editing, (staged) => setAlignment(staged, col, next))
+        else writeTable(view, current, setAlignment(current, col, next))
+      })
+
+      return button
+    }
+
     const cellsInto = (row: string[], parent: HTMLElement, tag: 'th' | 'td', r: number): void => {
       for (let i = 0; i < width; i++) {
-        const cell = document.createElement(tag)
+        const box = document.createElement(tag)
         const align = this.align[i] ?? 'left'
-        if (align !== 'left') cell.style.textAlign = align
+        if (align !== 'left') box.style.textAlign = align
+
+        /*
+         * A header cell holds its text in a span rather than being editable
+         * itself, so the alignment control can sit in the cell without being
+         * inside the text. Everything that reads a cell reads `textContent`,
+         * and a button living in that text would be written into the markdown
+         * the next time the cell was committed.
+         */
+        const cell = tag === 'th' ? document.createElement('span') : box
+        if (tag === 'th') {
+          box.className = 'cm-table__head'
+          cell.className = 'cm-table__cell cm-table__cell--head'
+          box.appendChild(cell)
+          box.appendChild(alignControl(i, align))
+        } else {
+          cell.className = 'cm-table__cell'
+        }
 
         // plaintext-only: pasted rich text would otherwise arrive as HTML that
         // has to be flattened back into one markdown cell.
         cell.contentEditable = 'plaintext-only'
-        cell.className = 'cm-table__cell'
         cell.dataset.row = String(r)
         cell.dataset.col = String(i)
 
@@ -1148,7 +1282,7 @@ export class TableWidget extends WidgetType {
         cell.dataset.source = source
         renderCell(source, cell)
 
-        parent.appendChild(cell)
+        parent.appendChild(box)
       }
     }
 
@@ -1369,14 +1503,207 @@ export function focusCell(cell: HTMLElement | null): void {
   selection?.addRange(range)
 }
 
+/**
+ * The bar across the top of a fenced code block: what language it is, and a
+ * button that copies it.
+ *
+ * It stands in for the ```` ```python ```` line itself rather than being added
+ * above it, because that line is already the block saying what it is — this
+ * only draws it as a label instead of as syntax. The caret landing on the line
+ * brings the backticks straight back, like every other marker here.
+ */
+export class CodeHeaderWidget extends WidgetType {
+  constructor(
+    /** The language as written, or '' for a bare fence. */
+    readonly lang: string,
+    /** The block's own text, for the copy button. */
+    readonly code: string
+  ) {
+    super()
+  }
+
+  eq(other: CodeHeaderWidget): boolean {
+    return other.lang === this.lang && other.code === this.code
+  }
+
+  toDOM(): HTMLElement {
+    const bar = document.createElement('span')
+    bar.className = 'cm-codehead'
+
+    const label = document.createElement('span')
+    label.className = 'cm-codehead__lang'
+    label.textContent = languageFor(this.lang)?.label ?? this.lang
+    bar.appendChild(label)
+
+    // Nothing to copy from an empty block, and a button that does nothing is
+    // worse than no button.
+    if (this.code.trim()) {
+      const copy = document.createElement('button')
+      copy.type = 'button'
+      copy.className = 'cm-codehead__copy'
+      copy.textContent = 'Copy'
+      copy.addEventListener('mousedown', (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        void navigator.clipboard.writeText(this.code).then(
+          () => {
+            copy.textContent = 'Copied'
+            setTimeout(() => {
+              if (copy.isConnected) copy.textContent = 'Copy'
+            }, 1200)
+          },
+          () => {
+            copy.textContent = 'Failed'
+          }
+        )
+      })
+      bar.appendChild(copy)
+    }
+
+    return bar
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+
+/**
+ * A table of contents, built from the note's own headings.
+ *
+ * Written as a ```toc fence so that it is a block in the file like every other
+ * block, and so a note that has one still says so in any other editor. The list
+ * is computed at render time rather than written into the document: a contents
+ * list that goes stale the moment a heading is renamed is worse than none, and
+ * the whole reason to have this rather than to type the list by hand.
+ */
+export class TocWidget extends WidgetType {
+  constructor(
+    readonly entries: Array<{ level: number; text: string; line: number }>,
+    /** The heading levels asked for, for `eq`. */
+    readonly range: string
+  ) {
+    super()
+  }
+
+  eq(other: TocWidget): boolean {
+    return (
+      other.range === this.range &&
+      other.entries.length === this.entries.length &&
+      other.entries.every(
+        (entry, i) =>
+          entry.text === this.entries[i].text &&
+          entry.level === this.entries[i].level &&
+          entry.line === this.entries[i].line
+      )
+    )
+  }
+
+  get estimatedHeight(): number {
+    return Math.max(1, this.entries.length) * 24 + 32
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const wrap = document.createElement('nav')
+    wrap.className = 'cm-toc'
+    wrap.setAttribute('aria-label', 'Contents')
+
+    const head = document.createElement('p')
+    head.className = 'cm-toc__head'
+    head.textContent = 'Contents'
+    wrap.appendChild(head)
+
+    if (this.entries.length === 0) {
+      const empty = document.createElement('p')
+      empty.className = 'cm-toc__empty'
+      empty.textContent = 'No headings yet.'
+      wrap.appendChild(empty)
+      return blockShell(wrap)
+    }
+
+    const top = Math.min(...this.entries.map((entry) => entry.level))
+    const list = document.createElement('ol')
+    list.className = 'cm-toc__list'
+
+    for (const entry of this.entries) {
+      const row = document.createElement('li')
+      row.className = 'cm-toc__row'
+      row.style.setProperty('--toc-depth', String(entry.level - top))
+
+      const link = document.createElement('button')
+      link.type = 'button'
+      link.className = 'cm-toc__link'
+      link.textContent = entry.text
+      link.addEventListener('mousedown', (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        const doc = view.state.doc
+        const line = doc.line(Math.min(Math.max(entry.line, 1), doc.lines))
+        view.dispatch({
+          selection: EditorSelection.cursor(line.from),
+          scrollIntoView: true
+        })
+        view.focus()
+      })
+
+      row.appendChild(link)
+      list.appendChild(row)
+    }
+
+    wrap.appendChild(list)
+    return blockShell(wrap)
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+
+/**
+ * An inline footnote, drawn as its number.
+ *
+ * `^[like this]` puts the aside where it was written, which is what makes the
+ * form worth having — and then takes it out of the sentence, which is what
+ * makes it a footnote. The text comes back on hover, and in full when the caret
+ * lands on the line.
+ */
+export class FootnoteWidget extends WidgetType {
+  constructor(
+    readonly number: number,
+    readonly text: string
+  ) {
+    super()
+  }
+
+  eq(other: FootnoteWidget): boolean {
+    return other.number === this.number && other.text === this.text
+  }
+
+  toDOM(): HTMLElement {
+    const el = document.createElement('sup')
+    el.className = 'tok-footnote tok-footnote--inline'
+    el.textContent = String(this.number)
+    el.title = this.text
+    return el
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+
 /** The twisty on a heading that owns a collapsible section. */
 export class FoldWidget extends WidgetType {
-  constructor(readonly collapsed: boolean) {
+  constructor(
+    readonly collapsed: boolean,
+    /** What it collapses, for the tooltip: a heading's section, or an item. */
+    readonly what: 'section' | 'item' = 'section'
+  ) {
     super()
   }
 
   eq(other: FoldWidget): boolean {
-    return other.collapsed === this.collapsed
+    return other.collapsed === this.collapsed && other.what === this.what
   }
 
   toDOM(): HTMLElement {
@@ -1384,7 +1711,7 @@ export class FoldWidget extends WidgetType {
     el.className = `cm-fold ${this.collapsed ? 'cm-fold--closed' : ''}`
     el.setAttribute('role', 'button')
     el.setAttribute('tabindex', '-1')
-    el.title = this.collapsed ? 'Expand section' : 'Collapse section'
+    el.title = `${this.collapsed ? 'Expand' : 'Collapse'} ${this.what === 'item' ? 'this item' : 'section'}`
     el.textContent = '▾'
     return el
   }

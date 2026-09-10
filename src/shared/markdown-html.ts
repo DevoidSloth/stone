@@ -21,7 +21,10 @@
 import { alignmentsOf, splitRow, TABLE_RULE_RE, type CellAlign } from './table-model'
 
 import { assetPathOf, isExternalUrl, parseEmbed, type EmbedSpec } from './attachments'
+import { sectionLabel, sliceSection, splitTarget } from './sections'
+import { safeColour } from './text-colour'
 import { vizKind } from './viz-langs'
+import { fenceInfo } from './code-langs'
 
 export interface Heading {
   level: number
@@ -48,6 +51,28 @@ export interface MarkdownOptions {
   embeds?: Record<string, string>
   /** Guards against an embed cycle. Internal. */
   depth?: number
+  /**
+   * Footnotes gathered so far. Internal: created by the top-level call and
+   * carried into every nested one, so a footnote written inside a callout or an
+   * embed still lands in the note list at the foot of the document.
+   */
+  footnotes?: FootnoteSink
+}
+
+/**
+ * The running footnote list.
+ *
+ * Numbering is by first *reference*, not by where the definition sits — that is
+ * the convention every typesetter uses, and it is the only one that survives
+ * definitions being kept in a block at the bottom of the file.
+ */
+export interface FootnoteSink {
+  /** Keys in the order their markers appeared. */
+  order: string[]
+  /** The markdown of each note, once its definition has been read. */
+  text: Map<string, string>
+  /** How many `^[inline]` notes have been seen, for their synthetic keys. */
+  inline: number
 }
 
 export interface MarkdownResult {
@@ -164,7 +189,34 @@ function inline(text: string, options: MarkdownOptions): string {
     hold(`<span class="md-math" data-tex="${escapeHtml(tex)}">${escapeHtml(tex)}</span>`)
   )
 
+  // Comments are removed before anything else is read: `%%…%%` is the one
+  // piece of markdown that means "in the file, not in the output".
+  work = work.replace(/%%[\s\S]*?%%/g, '')
+
   work = escapeHtml(work)
+
+  /*
+   * Footnotes, both ways of writing one: `[^id]` pointing at a definition
+   * elsewhere, and `^[the note itself]` written in place. Both come out as the
+   * same numbered marker, because on the page they are the same thing — the
+   * difference is only in how the file is kept.
+   */
+  const sink = options.footnotes
+  if (sink) {
+    work = work
+      .replace(/\^\[([^\]\n]+)\]/g, (_, body: string) => {
+        const key = `inline-${++sink.inline}`
+        sink.order.push(key)
+        sink.text.set(key, body)
+        return footnoteMarker(sink.order.length)
+      })
+      .replace(/\[\^([^\]]+)\]/g, (whole: string, id: string) => {
+        const key = `ref-${id.trim()}`
+        let at = sink.order.indexOf(key)
+        if (at === -1) at = sink.order.push(key) - 1
+        return footnoteMarker(at + 1)
+      })
+  }
 
   work = work
     // `![[image.png]]` — an embedded asset mid-sentence. A note embed is left
@@ -190,9 +242,33 @@ function inline(text: string, options: MarkdownOptions): string {
     .replace(/(^|\W)_([^_\n]+)_(?=\W|$)/g, '$1<em>$2</em>')
     .replace(/~~([^~]+)~~/g, '<del>$1</del>')
     .replace(/==([^=]+)==/g, '<mark>$1</mark>')
-    // `<u>` is the only markup the editor writes as a tag, so it comes back
-    // through the escaping as itself rather than as visible angle brackets.
-    .replace(/&lt;u&gt;([\s\S]*?)&lt;\/u&gt;/gi, '<u>$1</u>')
+    /*
+     * Colour, written as `<span style="color:…">` and `<mark
+     * style="background:…">`. Only a hex value is let back through: this puts a
+     * style attribute into HTML that is written to disk and opened in a
+     * browser, and the value came out of a note file — see `safeColour`. A
+     * colour that fails the check prints as plain text.
+     */
+    .replace(
+      /&lt;span style=&quot;color:\s*([^&;]+);?\s*&quot;&gt;([\s\S]*?)&lt;\/span&gt;/gi,
+      (whole: string, value: string, body: string) => {
+        const colour = safeColour(value)
+        return colour ? `<span style="color: ${colour}">${body}</span>` : whole
+      }
+    )
+    .replace(
+      /&lt;mark style=&quot;background:\s*([^&;]+);?\s*&quot;&gt;([\s\S]*?)&lt;\/mark&gt;/gi,
+      (whole: string, value: string, body: string) => {
+        const colour = safeColour(value)
+        return colour ? `<mark style="background: ${colour}">${body}</mark>` : whole
+      }
+    )
+    // `<u>`, `<sup>` and `<sub>` are markup the editor writes as tags, because
+    // markdown has no syntax for any of the three. They come back through the
+    // escaping as themselves rather than as visible angle brackets.
+    .replace(/&lt;(u|sup|sub)&gt;([\s\S]*?)&lt;\/\1&gt;/gi, (_, tag: string, body: string) =>
+      `<${tag.toLowerCase()}>${body}</${tag.toLowerCase()}>`
+    )
     // A bare URL still deserves to be a link on paper.
     .replace(/(^|\s)(https?:\/\/[^\s<]+)/g, '$1<a href="$2">$2</a>')
     // The escape has done its job of keeping the maths pattern away; the
@@ -224,6 +300,70 @@ const CALLOUT_TONES: Record<string, string> = {
   todo: 'info'
 }
 
+/**
+ * `levels: 2-3` inside a ```toc block. Defaults to skipping h1, which in a note
+ * with a title is the title said twice.
+ */
+function tocLevels(body: string): [number, number] {
+  const asked = /^\s*levels?\s*:\s*([1-6])\s*(?:-\s*([1-6]))?\s*$/m.exec(body)
+  if (!asked) return [2, 6]
+  const min = Number(asked[1])
+  return [min, asked[2] ? Number(asked[2]) : min]
+}
+
+/** Where a contents list will go, and which headings it wants. */
+interface TocSlot {
+  at: number
+  levels: [number, number]
+}
+
+function tocPlaceholder(at: number, body: string, slots: TocSlot[]): string {
+  slots.push({ at, levels: tocLevels(body) })
+  return ''
+}
+
+/** The list itself, once every heading in the document has been seen. */
+function tocHtml(headings: Heading[], [min, max]: [number, number]): string {
+  const listed = headings.filter((h) => h.level >= min && h.level <= max)
+  if (listed.length === 0) return ''
+  const top = Math.min(...listed.map((h) => h.level))
+  const rows = listed
+    .map(
+      (h) =>
+        `<li class="md-toc__row" style="--toc-depth:${h.level - top}">` +
+        `<a href="#${h.id}">${escapeHtml(h.text)}</a></li>`
+    )
+    .join('')
+  return `<nav class="md-toc" aria-label="Contents"><p class="md-toc__head">Contents</p><ol class="md-toc__list">${rows}</ol></nav>`
+}
+
+/** The superscript a footnote is referred to by, in the text. */
+function footnoteMarker(number: number): string {
+  return `<sup class="md-fn"><a href="#fn-${number}" id="fnref-${number}">${number}</a></sup>`
+}
+
+/**
+ * The notes themselves, at the foot of the document.
+ *
+ * Rendered last so that a footnote may contain anything a paragraph can — and
+ * capped, because a note that cites itself would otherwise be a loop rather
+ * than a mistake.
+ */
+function footnoteSection(sink: FootnoteSink, options: MarkdownOptions): string {
+  if (sink.order.length === 0) return ''
+  const rows: string[] = []
+  for (let i = 0; i < sink.order.length && i < 500; i++) {
+    const key = sink.order[i]
+    const body = sink.text.get(key)
+    rows.push(
+      `<li class="md-note" id="fn-${i + 1}">` +
+        `${body === undefined ? '<em>Missing note.</em>' : inline(body, options)}` +
+        ` <a class="md-note__back" href="#fnref-${i + 1}">\u21a9</a></li>`
+    )
+  }
+  return `<section class="md-notes"><ol class="md-notes__list">${rows.join('')}</ol></section>`
+}
+
 interface ListFrame {
   kind: 'ul' | 'ol'
   indent: number
@@ -233,6 +373,10 @@ interface ListFrame {
 
 export function markdownToHtml(markdown: string, options: MarkdownOptions = {}): MarkdownResult {
   const depth = options.depth ?? 0
+  // One sink for the whole document, created by the outermost call and passed
+  // down from there, so a footnote inside a callout numbers with the rest.
+  const footnotes: FootnoteSink = options.footnotes ?? { order: [], text: new Map(), inline: 0 }
+  options = { ...options, footnotes }
   const lines = stripFrontmatter(markdown).split(/\r?\n/)
   const out: string[] = []
   const headings: Heading[] = []
@@ -240,6 +384,10 @@ export function markdownToHtml(markdown: string, options: MarkdownOptions = {}):
 
   let fenceMark: string | null = null
   let fenceLang = ''
+  /** Inside a `%%` block, whose lines are dropped rather than rendered. */
+  let inComment = false
+  /** Where each ```toc block sits in `out`, to be filled in at the end. */
+  const tocs: TocSlot[] = []
   let fenceBody: string[] = []
   let mathBody: string[] | null = null
   const lists: ListFrame[] = []
@@ -319,6 +467,12 @@ export function markdownToHtml(markdown: string, options: MarkdownOptions = {}):
             // Same reasoning: the source travels, and whoever has a DOM draws it.
             : vizKind(fenceLang)
               ? `<figure class="md-viz" data-kind="${escapeHtml(vizKind(fenceLang) ?? '')}" data-src="${escapeHtml(body)}"><pre>${escapeHtml(body)}</pre></figure>`
+            // A ```toc fence is the note's own headings. It is emitted as an
+            // empty placeholder and filled in after the whole document has
+            // been read, because a contents list usually sits above the
+            // headings it lists and cannot be written before they are known.
+            : fenceLang === 'toc' || fenceLang === 'contents'
+              ? tocPlaceholder(out.length, body, tocs)
             // A ```math fence is display maths, the same as `$$`. The editor
             // has always drawn it that way; printing it as a code block was
             // the one place the two disagreed.
@@ -346,11 +500,29 @@ export function markdownToHtml(markdown: string, options: MarkdownOptions = {}):
       continue
     }
 
-    const fence = /^\s*(```|~~~)\s*([\w+-]*)/.exec(line)
+    /*
+     * `%%` … `%%` — a comment block. The one construct here whose whole point
+     * is not to be in the output, so it is dropped before anything else looks
+     * at it. Inside a code fence it is content, which is why this sits after
+     * the fence body above rather than before it.
+     */
+    if (inComment) {
+      if (/^\s*%%\s*$/.test(line)) inComment = false
+      continue
+    }
+    if (/^\s*%%\s*$/.test(line)) {
+      closeBlocks()
+      inComment = true
+      continue
+    }
+
+    // `!` is allowed in front of the name: it turns the editor's suggestions
+    // off for the block and means nothing at all out here — see `fenceInfo`.
+    const fence = /^\s*(```|~~~)\s*(!?[\w+-]*)/.exec(line)
     if (fence) {
       closeBlocks()
       fenceMark = fence[1]
-      fenceLang = fence[2].toLowerCase()
+      fenceLang = fenceInfo(fence[2]).name
       continue
     }
     // `$$…$$` written on one line, which is how most display maths gets typed.
@@ -429,6 +601,23 @@ export function markdownToHtml(markdown: string, options: MarkdownOptions = {}):
       continue
     }
 
+    /*
+     * `[^1]: the note`. A definition is not body text — it is the content of a
+     * marker somewhere above — so it comes out of the flow here and goes back
+     * in at the foot of the document. Printing these as paragraphs where they
+     * were written, which is what happened before, put the notes in the middle
+     * of the page under no heading at all.
+     */
+    const footnoteDef = /^\[\^([^\]]+)\]:\s*(.*)$/.exec(line)
+    if (footnoteDef) {
+      closeBlocks()
+      const key = `ref-${footnoteDef[1].trim()}`
+      footnotes.text.set(key, footnoteDef[2].trim())
+      // A definition nobody referenced still deserves to print, at the end.
+      if (!footnotes.order.includes(key)) footnotes.order.push(key)
+      continue
+    }
+
     // ---- an embed on a line of its own: a note is inlined, a file is a figure
     const embed = /^\s*!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]\s*$/.exec(line)
     const mdEmbed = /^\s*!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)\s*$/.exec(line)
@@ -445,12 +634,19 @@ export function markdownToHtml(markdown: string, options: MarkdownOptions = {}):
     }
 
     if (embed) {
-      const source = options.embeds?.[embed[1].split('#')[0]]
+      const { name, heading, block } = splitTarget(embed[1])
+      const source = options.embeds?.[name]
       if (source !== undefined && depth < MAX_EMBED_DEPTH) {
         closeBlocks()
-        const inner = markdownToHtml(source, { ...options, depth: depth + 1 })
+        // `![[Note#Heading]]` prints the section it names, the same one the
+        // editor draws. Printing the whole note instead would put pages of
+        // text where the writer asked for a paragraph.
+        const section = sliceSection(source, heading, block)
+        const label = sectionLabel(name, heading, block)
         out.push(
-          `<section class="md-embed"><p class="md-embed__from">${escapeHtml(embed[1])}</p>${inner.html}</section>`
+          section === null
+            ? `<section class="md-embed md-embed--missing"><p class="md-embed__from">${escapeHtml(label)}</p><p>No such section.</p></section>`
+            : `<section class="md-embed"><p class="md-embed__from">${escapeHtml(label)}</p>${markdownToHtml(section, { ...options, depth: depth + 1 }).html}</section>`
         )
         continue
       }
@@ -517,6 +713,13 @@ export function markdownToHtml(markdown: string, options: MarkdownOptions = {}):
     out.push(`<div class="md-math md-math--block" data-tex="${escapeHtml(tex)}">${escapeHtml(tex)}</div>`)
   }
   closeBlocks()
+
+  for (const slot of tocs) out[slot.at] = tocHtml(headings, slot.levels)
+
+  if (depth === 0) {
+    const notes = footnoteSection(footnotes, options)
+    if (notes) out.push(notes)
+  }
 
   return { html: out.join('\n'), headings }
 }

@@ -173,6 +173,30 @@ export function insertColumn(model: TableModel, at: number): TableEdit {
   return { rows, align, focus: { row: 0, col: index } }
 }
 
+/**
+ * Set a column's alignment — the `:` in the rule row.
+ *
+ * Alignment was the one thing about a table you could only change by dropping
+ * to markdown and counting colons, which is exactly the kind of pipe-counting
+ * the grid exists to stop. Serialising rewrites the rule row and re-pads every
+ * cell to match, so a column set to right-align looks right-aligned in the file
+ * as well as on the page.
+ */
+export function setAlignment(model: TableModel, col: number, align: CellAlign): TableEdit {
+  const rows = rectangular(model.rows, model.align)
+  const width = rows[0].length
+  const next = [...model.align]
+  while (next.length < width) next.push('left')
+  if (col < 0 || col >= width) return { rows, align: next, focus: { row: 0, col: 0 } }
+  next[col] = align
+  return { rows, align: next, focus: { row: 0, col } }
+}
+
+/** left → centre → right → left, which is how one button can offer three. */
+export function nextAlignment(align: CellAlign): CellAlign {
+  return align === 'left' ? 'center' : align === 'center' ? 'right' : 'left'
+}
+
 export function deleteRow(model: TableModel, at: number): TableEdit | null {
   const rows = rectangular(model.rows, model.align)
   // The header is the table's shape; removing it leaves something that is no

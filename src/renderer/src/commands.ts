@@ -17,6 +17,7 @@ import type { Settings } from '@shared/types'
 import { useStone } from './store'
 import { exportNoteToPdf } from './export-note'
 import { describeError } from './lib/errors'
+import { askForAnimation } from './editor/animate'
 import { activeEditor } from './editor/insert'
 import { insertPickedFiles } from './editor/slash'
 import { noteSessions, notePathFacet, restartSession, runFenceAtCursor, runFences } from './editor/run-code'
@@ -25,6 +26,8 @@ import { today } from './lib/dates'
 import { normaliseChord } from './lib/keys'
 import {
   IconBoard,
+  IconBook,
+  IconBraces,
   IconCalendar,
   IconDownload,
   IconPrint,
@@ -253,6 +256,19 @@ export const COMMANDS: CommandDef[] = [
     run: (ctx) => s().setClaude(true, ctx.query.trim())
   },
   {
+    id: 'claude-animation',
+    label: (ctx) =>
+      ctx.query.trim()
+        ? `Animate "${ctx.query.trim()}" with Claude`
+        : 'Animate an algorithm with Claude',
+    group: 'Create',
+    icon: IconPlay,
+    // No chord of its own. It is a slow, deliberate thing to ask for — once a
+    // page, not once a paragraph — and the palette is where it belongs.
+    defaultKeys: [],
+    run: (ctx) => void askForAnimation(ctx.query.trim())
+  },
+  {
     id: 'record',
     label: () => (s().recording ? 'Stop recording' : 'Record a lecture into this note'),
     group: 'Create',
@@ -449,6 +465,31 @@ export const COMMANDS: CommandDef[] = [
     run: () => {
       s().setView('notes')
       s().setSidePanel('properties')
+    }
+  },
+  {
+    id: 'code-inspector',
+    label: 'Inspect the code in this note',
+    group: 'Note',
+    icon: IconBraces,
+    defaultKeys: [],
+    run: () => {
+      s().setView('notes')
+      s().setSidePanel('code')
+    }
+  },
+  {
+    // The manual lives in the inspector, which only the notes view has a column
+    // for — so asking for it from the calendar goes to the note you were on,
+    // which is also where an example would have been inserted.
+    id: 'docs',
+    label: 'Open the manual',
+    group: 'Note',
+    icon: IconBook,
+    defaultKeys: [],
+    run: () => {
+      s().setView('notes')
+      s().openDocs()
     }
   },
   {

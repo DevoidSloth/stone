@@ -3,6 +3,7 @@ import { Decoration, WidgetType, type EditorView } from '@codemirror/view'
 import { languageFor, type CodeLanguage } from '@shared/code-langs'
 import { kernelFor, notebookMode } from '@shared/code-kernels'
 import type { CodeRunResult, CodeSessionInfo } from '@shared/types'
+import { describeError } from '../lib/errors'
 import { useStone } from '../store'
 
 /**
@@ -59,7 +60,17 @@ export interface RunState {
   /** Which session this run belonged to, so its count can be retired with it. */
   notePath: string | null
   langId: string | null
+  /**
+   * What the block was last asked for. A diagram runs the same code through the
+   * same consent and reports into the same bar, but it produces a figure in the
+   * note rather than output under it, so the bar has to know which it is.
+   */
+  kind: RunKind
+  /** A word about what a diagram did, where a run would have printed something. */
+  message: string | null
 }
+
+export type RunKind = 'run' | 'diagram'
 
 interface RunRequest {
   lang: string
@@ -69,6 +80,20 @@ interface RunRequest {
   notePath: string
   /** Whether to ask for the note's shared session. */
   session: boolean
+  kind: RunKind
+  /**
+   * The blocks a diagram has to run before this one, in the order they appear.
+   *
+   * A run joins the note's session and so already has whatever the blocks above
+   * it declared; a diagram cannot — it needs a JShell of its own, built through
+   * the API so the dumper can hold the objects rather than describe them. So
+   * the blocks above are handed over and re-run in front of it, which is what
+   * makes a block that only says `Board b = new CBoard(4);` drawable.
+   *
+   * Empty for a run, and for a note that is not a notebook: there, a block that
+   * shares nothing with its neighbours should not be given their declarations.
+   */
+  prelude?: string[]
 }
 
 const IDLE: RunState = {
@@ -80,7 +105,9 @@ const IDLE: RunState = {
   pending: null,
   ranCode: null,
   notePath: null,
-  langId: null
+  langId: null,
+  kind: 'run',
+  message: null
 }
 
 /** Notes a user opens in one sitting; the oldest results are dropped first. */
@@ -216,6 +243,7 @@ function listen(): void {
 }
 
 async function launch(key: string, request: RunRequest): Promise<void> {
+  if (request.kind === 'diagram') return await drawObjects(key, request)
   listen()
   const id = `run-${++seq}-${Date.now()}`
   keyOfRun.set(id, key)
@@ -228,7 +256,9 @@ async function launch(key: string, request: RunRequest): Promise<void> {
     pending: null,
     ranCode: request.code,
     notePath: request.notePath,
-    langId: request.langId
+    langId: request.langId,
+    kind: 'run',
+    message: null
   })
 
   try {
@@ -275,6 +305,7 @@ export function confirmRun(key: string): void {
 }
 
 export function dismissRun(key: string): void {
+  diagramTargets.delete(key)
   patch(key, { status: 'idle', pending: null })
 }
 
@@ -286,6 +317,161 @@ export function stopRun(key: string): void {
 export function clearRun(key: string): void {
   runs.delete(key)
   emit(key)
+}
+
+/*
+ * ------------------------------------------------------------- java objects
+ *
+ * Drawing what a Java block leaves in memory.
+ *
+ * The figure is not inferred from the source: main compiles the block, runs it
+ * in a jshell session, and walks the objects that are really there — so two
+ * variables that turned out to be one object come out as one box with two
+ * arrows into it. What comes back is `boxes` source, the same fence a person
+ * would have typed.
+ *
+ * Unlike a run, the result *is* written into the note. A run is something you
+ * did to the file and a figure is part of it: it renders in the note, prints
+ * with it, and survives being opened in another editor.
+ */
+
+/**
+ * What marks a `boxes` block as this button's work, so the next press replaces
+ * it rather than stacking a second figure under the first. `readSource` drops
+ * `#` lines, so it costs the drawing nothing — and a figure the user has moved
+ * or rewritten is no longer marked, and is left alone.
+ */
+const DIAGRAM_MARK = '# drawn from the Java block above'
+
+/** Where a diagram should go, and what it belongs to, while the block runs. */
+interface DiagramTarget {
+  fence: RunnableFence
+  view: EditorView
+}
+
+const diagramTargets = new Map<string, DiagramTarget>()
+
+/**
+ * The blocks a diagram has to stand on: the note's earlier blocks in the same
+ * language, in the order they appear.
+ *
+ * A note that declares its types in one block and uses them in the next is the
+ * ordinary shape of a lecture note, and it is the shape a session was built
+ * for. The drawer has no session, so it is given the text instead. Only in a
+ * notebook — where blocks are meant to go on from one another — and only the
+ * same language, since that is what a session is keyed by.
+ */
+function preludeFor(fence: RunnableFence, view: EditorView): string[] {
+  if (!notebookDoc(view.state.doc)) return []
+  return runnableFences(view.state.doc)
+    .filter((f) => f.index < fence.index && f.language.id === fence.language.id)
+    .map((f) => f.code)
+}
+
+export function startDiagram(
+  key: string,
+  fence: RunnableFence,
+  notePath: string,
+  view: EditorView
+): void {
+  diagramTargets.set(key, { fence, view })
+  startRun(key, {
+    lang: fence.info,
+    langId: fence.language.id,
+    code: fence.code,
+    notePath,
+    session: false,
+    kind: 'diagram',
+    prelude: preludeFor(fence, view)
+  })
+}
+
+async function drawObjects(key: string, request: RunRequest): Promise<void> {
+  patch(key, {
+    status: 'running',
+    kind: 'diagram',
+    chunks: [],
+    runId: null,
+    result: null,
+    error: null,
+    message: null,
+    pending: null,
+    ranCode: request.code,
+    notePath: request.notePath,
+    langId: request.langId
+  })
+
+  try {
+    const source = await window.stone.code.javaObjects({
+      code: request.code,
+      prelude: request.prelude ?? [],
+      notePath: request.notePath || null
+    })
+    patch(key, { status: 'done', message: writeDiagram(key, source) })
+  } catch (err) {
+    patch(key, { status: 'done', error: describeError(err) })
+  }
+}
+
+/**
+ * Put the figure under its block, and say what happened.
+ *
+ * The block is found again rather than trusted: running it took a second or two
+ * and the note is live the whole time, so the line numbers taken when the
+ * button was pressed may well have moved. Matching on the text is what makes an
+ * edit *elsewhere* in the note harmless, and an edit to this block honest — a
+ * figure of what the code used to be would be worse than none.
+ */
+function writeDiagram(key: string, source: string): string {
+  const target = diagramTargets.get(key)
+  diagramTargets.delete(key)
+  if (!target || !target.view.dom.isConnected) {
+    return 'Drawn, but the note had closed. Press Diagram again.'
+  }
+
+  const view = target.view
+  const fences = runnableFences(view.state.doc)
+  const same = fences[target.fence.index]
+  const fence =
+    same && same.code === target.fence.code
+      ? same
+      : fences.find((one) => one.code === target.fence.code)
+  if (!fence) return 'The block changed while it was running, so the figure was not written.'
+
+  const block = `\`\`\`boxes\n${DIAGRAM_MARK}\n${source.trim()}\n\`\`\``
+  const range = diagramRange(view.state.doc, fence.endLine)
+  view.dispatch({
+    changes: { from: range.from, to: range.to, insert: range.replacing ? block : `\n\n${block}` }
+  })
+  return range.replacing ? 'Figure redrawn below.' : 'Figure drawn below.'
+}
+
+/**
+ * The span the figure occupies: the one this block drew last time, or the empty
+ * point just after it.
+ *
+ * Only a `boxes` block carrying the marker is replaced. A figure the user wrote
+ * themselves, or moved, is theirs — the second press writes a new one rather
+ * than overwriting work Stone did not do.
+ */
+function diagramRange(doc: Text, endLine: number): { from: number; to: number; replacing: boolean } {
+  let n = endLine + 1
+  while (n <= doc.lines && doc.line(n).text.trim() === '') n++
+
+  if (
+    n < doc.lines &&
+    /^\s*```\s*boxes\s*$/.test(doc.line(n).text) &&
+    doc.line(n + 1).text.trim() === DIAGRAM_MARK
+  ) {
+    for (let close = n + 1; close <= doc.lines; close++) {
+      if (/^\s*```\s*$/.test(doc.line(close).text)) {
+        return { from: doc.line(n).from, to: doc.line(close).to, replacing: true }
+      }
+    }
+  }
+
+  const end = doc.line(endLine).to
+  return { from: end, to: end, replacing: false }
 }
 
 // ------------------------------------------------------------ finding blocks
@@ -382,7 +568,8 @@ function requestFor(fence: RunnableFence, notePath: string, notebook: boolean): 
     notePath,
     // Main has the last word — it knows whether this particular block can join
     // a session — but there is no point asking for one the language has none of.
-    session: notebook && kernelFor(fence.language.id) !== null
+    session: notebook && kernelFor(fence.language.id) !== null,
+    kind: 'run'
   }
 }
 
@@ -440,11 +627,18 @@ export function noteSessions(notePath: string): CodeSessionInfo[] {
 
 // ------------------------------------------------------------------- widget
 
-function button(label: string, cls: string, onClick: () => void, title?: string): HTMLButtonElement {
+function button(
+  label: string,
+  cls: string,
+  onClick: () => void,
+  title?: string,
+  disabled = false
+): HTMLButtonElement {
   const el = document.createElement('button')
   el.type = 'button'
   el.className = cls
   el.textContent = label
+  el.disabled = disabled
   if (title) el.title = title
   // Without this the editor takes the mousedown, moves the caret into the
   // block and re-renders the widget out from under the click.
@@ -463,6 +657,15 @@ function duration(ms: number): string {
 
 /** The right-hand half of the bar: what happened, in a few words. */
 function statusOf(state: RunState): { text: string; bad: boolean } {
+  // A diagram prints nothing and leaves no exit code: everything it has to say
+  // is one line, and the figure it wrote is the rest of the answer.
+  if (state.kind === 'diagram') {
+    if (state.status === 'running') {
+      return { text: 'Running the block and drawing it…', bad: false }
+    }
+    if (state.error) return { text: state.error, bad: true }
+    return { text: state.message ?? '', bad: false }
+  }
   if (state.status === 'queued') return { text: 'Waiting for the block above…', bad: false }
   if (state.status === 'starting') return { text: 'Starting the session…', bad: false }
   if (state.status === 'running') return { text: 'Running…', bad: false }
@@ -503,7 +706,7 @@ class RunWidget extends WidgetType {
     return 30
   }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const root = document.createElement('div')
     root.className = 'cm-block cm-run'
 
@@ -523,12 +726,36 @@ class RunWidget extends WidgetType {
         state.status === 'running' || state.status === 'queued' || state.status === 'starting'
       bar.replaceChildren()
 
+      // A diagram is the same block running, so it holds the same button — but
+      // it is not stoppable from here and pressing Run while it works would ask
+      // the same code to run twice over.
+      const drawing = busy && state.kind === 'diagram'
       bar.appendChild(
-        button(busy ? 'Stop' : 'Run', 'cm-run__go', () => {
-          if (busy) stopRun(this.key)
-          else startRun(this.key, requestFor(this.fence, this.notePath, this.notebook))
-        })
+        button(
+          busy && !drawing ? 'Stop' : 'Run',
+          'cm-run__go',
+          () => {
+            if (busy) stopRun(this.key)
+            else startRun(this.key, requestFor(this.fence, this.notePath, this.notebook))
+          },
+          undefined,
+          drawing
+        )
       )
+
+      // Java, and only Java: the figure comes from a jshell session holding the
+      // block's own objects, which no other language here can offer.
+      if (this.fence.language.id === 'java') {
+        bar.appendChild(
+          button(
+            drawing ? 'Drawing…' : 'Diagram',
+            'cm-run__act cm-run__act--lead',
+            () => startDiagram(this.key, this.fence, this.notePath, view),
+            'Run the block and draw the objects it leaves behind as a figure under it.',
+            busy
+          )
+        )
+      }
 
       const lang = document.createElement('span')
       lang.className = 'cm-run__lang'

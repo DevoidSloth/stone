@@ -221,25 +221,6 @@
   padding: var(--sp-1) var(--sp-2);
 }
 
-.cm-embed--pdf/* A drawing from an `svg` fence. Scaled to the column and given the text
-   colour, because a drawing that uses `currentColor` for its strokes is the
-   one kind that is legible in both themes. */
-.cm-embed--svg {
-  display: flex;
-  justify-content: center;
-  padding: var(--sp-2) 0;
-  color: var(--text);
-}
-
-.cm-embed--svg svg {
-  max-width: 100%;
-  height: auto;
-}
-
-.cm-embed--missing {
-  border-style: dashed;
-}
-
 /* A transcluded note reads as a quotation of another page, not as this one. */
 .cm-embed--note {
   border: 1px solid var(--border-hair);
@@ -499,8 +480,19 @@
 }
 
 .tok-line-heading:hover .cm-fold,
+.tok-line-list:hover .cm-fold,
 .cm-fold--closed {
   opacity: 1;
+}
+
+/*
+ * On a list item the twisty follows the item in, sitting in the channel between
+ * its own bullet and its parent's guide. At the margin that puts it exactly
+ * where a heading's twisty goes, which is the point: one column of controls
+ * down the left of the page, whatever it is that collapses.
+ */
+.cm-line.tok-line-list .cm-fold {
+  left: calc(var(--list-depth) * var(--list-indent) - 20px);
 }
 
 .cm-fold:hover {
@@ -587,8 +579,38 @@
   color: var(--text-muted);
 }
 
+/*
+ * An inline `^[…]` footnote. The marker is a `<sup>`, so it needs no raising of
+ * its own; what it does need is to look like the `[^1]` markers beside it,
+ * because on the page the two forms are the same thing.
+ */
+.tok-footnote--inline {
+  font-size: 0.82em;
+  cursor: help;
+}
+
+/* The aside itself, while the caret is on its line and it is being written. */
+.tok-footnote-text {
+  color: var(--text-muted);
+  font-size: 0.94em;
+}
+
 .tok-wikilink--embed {
   color: var(--purple);
+}
+
+/*
+ * `%%a comment%%`, and the `%%` … `%%` block form.
+ *
+ * Set in the same faint ink as an anchor and italicised, so a commented line is
+ * distinguishable from prose at a glance down the page without being unreadable
+ * when you actually want to read it. It does not print — the exporter drops it
+ * — and that is the entire reason to write one.
+ */
+.tok-comment,
+.cm-line.tok-line-comment {
+  color: var(--text-ghost);
+  font-style: italic;
 }
 
 /* ------------------------------------------------------- editable tables */
@@ -608,6 +630,54 @@
   background: var(--bg-surface);
   box-shadow: inset 0 0 0 2px var(--accent);
   border-radius: 2px;
+}
+
+/*
+ * A header cell is a container, not the editable box — its text lives in a
+ * span so the alignment button can sit in the cell without being part of the
+ * text that gets written back to the markdown.
+ */
+.cm-table__head {
+  position: relative;
+}
+
+.cm-table__cell--head {
+  display: block;
+}
+
+/*
+ * The alignment control: one button per column, cycling left, centre, right.
+ *
+ * Alignment used to be reachable only by dropping the table to markdown and
+ * counting colons in the rule row, which is exactly the pipe-counting the grid
+ * exists to end. Hidden until the table is hovered, like the Markdown button.
+ */
+.cm-table__align {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--text-ghost);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+
+.cm-table:hover .cm-table__align,
+.cm-table__align:focus-visible {
+  opacity: 1;
+}
+
+.cm-table__align:hover {
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
 /*
@@ -694,6 +764,13 @@
 }
 
 .cm-run__act + .cm-run__act {
+  margin-left: 0;
+}
+
+/* Drawing the block is something done *to* the block, like running it, so it
+   keeps Run company on the left rather than starting the right-hand group of
+   things done with a result. */
+.cm-run__act--lead {
   margin-left: 0;
 }
 
@@ -789,4 +866,63 @@
 
 .cm-run__actions .cm-run__act {
   margin-left: 0;
+}
+
+/* ------------------------------------------------------------- contents */
+
+/*
+ * A ```toc block: the note's own headings, listed where it was written.
+ *
+ * Deliberately quieter than the prose around it — a contents list is
+ * navigation, and navigation that outshouts the document it points into is the
+ * one thing worse than having to scroll. The rule down the left is the same
+ * hairline the outline panel uses, so the two read as the same object in two
+ * places.
+ */
+.cm-toc {
+  padding: var(--sp-2) 0 var(--sp-2) var(--sp-4);
+  border-left: 2px solid var(--border-hair);
+  font-family: var(--font-ui);
+}
+
+.cm-toc__head {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--t-2xs);
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--text-ghost);
+}
+
+.cm-toc__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cm-toc__row {
+  margin: 0;
+  padding-left: calc(var(--toc-depth, 0) * var(--sp-4));
+}
+
+.cm-toc__link {
+  display: block;
+  width: 100%;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  text-align: left;
+  font: inherit;
+  font-size: var(--t-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.cm-toc__link:hover {
+  color: var(--accent);
+}
+
+.cm-toc__empty {
+  margin: 0;
+  font-size: var(--t-sm);
+  color: var(--text-ghost);
 }

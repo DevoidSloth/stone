@@ -131,6 +131,7 @@ function TabStrip({ paneIndex }: { paneIndex: number }) {
   const splitPane = useStone((s) => s.splitPane)
   const moveTab = useStone((s) => s.moveTab)
   const closeOtherTabs = useStone((s) => s.closeOtherTabs)
+  const keepTab = useStone((s) => s.keepTab)
   const closeTabsToRight = useStone((s) => s.closeTabsToRight)
   const tabToNewPane = useStone((s) => s.tabToNewPane)
   const setPaneDrag = useStone((s) => s.setPaneDrag)
@@ -155,10 +156,20 @@ function TabStrip({ paneIndex }: { paneIndex: number }) {
     const relPath = tab?.relPath ?? ''
     const target = isDocTarget(relPath) ? docPathOf(relPath) : relPath
     return [
+      ...(tab?.preview
+        ? [
+            {
+              id: 'keep',
+              label: 'Keep open',
+              run: () => keepTab(paneIndex, tabId)
+            }
+          ]
+        : []),
       {
         id: 'close',
         label: 'Close',
         keys: 'Mod+W',
+        separated: tab?.preview,
         run: () => closeTab(paneIndex, tabId)
       },
       {
@@ -248,7 +259,11 @@ function TabStrip({ paneIndex }: { paneIndex: number }) {
               draggable
               role="tab"
               aria-selected={index === pane.active}
+              data-preview={tab.preview || undefined}
               data-dragging={drag?.kind === 'tab' && drag.tabId === tab.id}
+              // A second click on a preview tab is someone saying they are
+              // staying, exactly as it is in an editor's tab strip.
+              onDoubleClick={() => keepTab(paneIndex, tab.id)}
               onContextMenu={(event) => openMenu(event, tabMenu(tab.id, index))}
               onDragStart={(event) => {
                 event.dataTransfer.effectAllowed = 'move'

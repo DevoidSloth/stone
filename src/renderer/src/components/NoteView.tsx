@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { readFrontmatterKey, setFrontmatterKey, yamlScalar } from '@shared/frontmatter'
 import { ancestorFolders, folderDefinedBy, folderName } from '@shared/folder-note'
+import { sectionLabel, sliceSection, splitTarget } from '@shared/sections'
 import { useStone } from '../store'
 import { Editor } from '../editor/Editor'
 import { activeEditor } from '../editor/insert'
@@ -106,14 +107,38 @@ export function NoteView({ relPath, paneIndex }: { relPath: string; paneIndex: n
     void renameNote(relPath, next)
   }
 
-  /** Fetch a note's body for an `![[embed]]` in the editor. */
-  const loadEmbed = async (target: string): Promise<{ title: string; body: string } | null> => {
+  /**
+   * Fetch a note's body for an `![[embed]]` in the editor.
+   *
+   * `![[Note#Heading]]` embeds that heading's section and `![[Note#^id]]` that
+   * one block — the fragment is the whole point of writing it, and inlining
+   * the entire page instead is a different note from the one asked for. A
+   * fragment that matches nothing says so rather than widening to the page.
+   */
+  const loadEmbed = async (
+    target: string
+  ): Promise<{ title: string; body: string; missing?: boolean } | null> => {
     const hit = await window.stone.notes.resolveLink(target).catch(() => null)
     if (!hit) return null
     const embedded = await window.stone.notes.get(hit.relPath)
     if (!embedded) return null
+
+    const { heading, block } = splitTarget(target)
     const body = embedded.content.replace(/^---[\s\S]*?---\n?/, '').trim()
-    return { title: embedded.title, body }
+    const title = sectionLabel(embedded.title, heading, block)
+    if (!heading && !block) return { title, body }
+
+    const section = sliceSection(body, heading, block)
+    if (section === null) return { title, body: '', missing: true }
+
+    // The section's own heading line is dropped: the embed's title bar already
+    // says which heading this is, and the widget shows plain text, so leaving
+    // it in would print a literal `## Second part` under a heading that reads
+    // "Source › Second part". The exporter keeps it — there it becomes a real
+    // heading rather than two hash marks.
+    const lines = section.split('\n')
+    const trimmed = /^#{1,6}\s/.test(lines[0]) ? lines.slice(1) : lines
+    return { title, body: trimmed.join('\n').trim() }
   }
 
   // Sans is the default; serif and mono are the opt-ins.

@@ -11,18 +11,28 @@ import type { EditorView } from '@codemirror/view'
  */
 
 /** Markers that wrap a run of text, longest first so `**` beats `*`. */
-export type InlineMarker = '**' | '*' | '~~' | '==' | '`' | '_' | '<u>' | '$'
+export type InlineMarker =
+  | '**'
+  | '*'
+  | '~~'
+  | '=='
+  | '`'
+  | '_'
+  | '$'
+  | '<u>'
+  | '<sup>'
+  | '<sub>'
 
 /**
  * The closing half of a marker.
  *
- * Every markdown marker closes with itself. Underline has none — CommonMark
- * deliberately leaves it out, and `__text__` is bold — so it borrows the HTML
- * tag that Obsidian, GitHub and this app's own exporter all pass through, and
- * that one closes differently.
+ * Every markdown marker closes with itself. Underline, superscript and
+ * subscript have none — CommonMark deliberately leaves all three out, and
+ * `__text__` is bold — so they borrow the HTML tags that Obsidian, GitHub and
+ * this app's own exporter all pass through, and those close differently.
  */
 function closerOf(marker: InlineMarker): string {
-  return marker === '<u>' ? '</u>' : marker
+  return marker.startsWith('<') ? `</${marker.slice(1)}` : marker
 }
 
 /** Trailing and leading whitespace inside a selection is not part of the word. */
@@ -359,6 +369,60 @@ export function makeWikilink(view: EditorView): boolean {
   return true
 }
 
+/**
+ * Paint the selection, or strip the paint off it.
+ *
+ * `kind` picks which of the two colours a run can carry: the ink, written as a
+ * `<span style="color:…">`, or the wash behind it, written as a `<mark>`. A
+ * null colour removes that wrapper, and applying a second colour replaces the
+ * first rather than nesting — two spans deep, the inner one wins and the outer
+ * one is invisible markup nobody can see to delete.
+ */
+export function applyColour(
+  view: EditorView,
+  kind: 'ink' | 'wash',
+  colour: string | null
+): boolean {
+  const { from, to } = view.state.selection.main
+  if (from === to) return false
+
+  const tag = kind === 'ink' ? 'span' : 'mark'
+  const property = kind === 'ink' ? 'color' : 'background'
+  const strip =
+    kind === 'ink'
+      ? /^<span style="color:[^"]*">([\s\S]*)<\/span>$/i
+      : /^<mark style="background:[^"]*">([\s\S]*)<\/mark>$/i
+
+  const inner = trimmedRange(view.state.sliceDoc(from, to), from)
+
+  /*
+   * A run that is already painted is repainted, not wrapped again — whether the
+   * selection took the tags in with it or stopped at the words between them.
+   * The second case is the common one: double-clicking a coloured word selects
+   * the word, and wrapping that would leave an outer span nobody can see to
+   * delete and an inner one doing all the work.
+   */
+  const opener =
+    kind === 'ink' ? /<span style="color:[^"]*">$/i : /<mark style="background:[^"]*">$/i
+  const closer = kind === 'ink' ? /^<\/span>/i : /^<\/mark>/i
+  const before = view.state.sliceDoc(Math.max(0, inner.from - 80), inner.from)
+  const after = view.state.sliceDoc(inner.to, Math.min(view.state.doc.length, inner.to + 8))
+  const around = opener.exec(before)
+  const wrapped = around !== null && closer.test(after)
+
+  const start = wrapped ? inner.from - around[0].length : inner.from
+  const end = wrapped ? inner.to + closer.exec(after)![0].length : inner.to
+  const bare = wrapped ? inner.text : (strip.exec(inner.text)?.[1] ?? inner.text)
+  const insert = colour ? `<${tag} style="${property}: ${colour}">${bare}</${tag}>` : bare
+
+  view.dispatch({
+    changes: { from: start, to: end, insert },
+    selection: EditorSelection.range(start, start + insert.length)
+  })
+  view.focus()
+  return true
+}
+
 /** Strip every inline marker from the selection, leaving the words. */
 export function clearFormatting(view: EditorView): boolean {
   const { from, to } = view.state.selection.main
@@ -369,7 +433,11 @@ export function clearFormatting(view: EditorView): boolean {
     .replace(/(\*|_)(.*?)\1/g, '$2')
     .replace(/~~(.*?)~~/g, '$1')
     .replace(/==(.*?)==/g, '$1')
-    .replace(/<u>([\s\S]*?)<\/u>/gi, '$1')
+    .replace(/<(u|sup|sub)>([\s\S]*?)<\/\1>/gi, '$2')
+    // A colour is formatting too, and Tx is the one button that says so.
+    .replace(/<span style="(?:color|background)[^"]*">([\s\S]*?)<\/span>/gi, '$1')
+    .replace(/<mark(?: style="[^"]*")?>([\s\S]*?)<\/mark>/gi, '$1')
+    .replace(/%%([\s\S]*?)%%/g, '$1')
     .replace(/`([^`]*)`/g, '$1')
     .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target: string, alias?: string) =>
       (alias ?? target).trim()

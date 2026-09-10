@@ -61,7 +61,16 @@ export default async function signMac(context) {
       // notarisation requires it. It costs nothing on a self-signed build.
       hardenedRuntime: true,
       entitlements: 'build/entitlements.mac.plist',
-      signatureFlags: ['runtime']
+      signatureFlags: ['runtime'],
+      // A trusted timestamp is what lets a signature outlive the certificate
+      // that made it, which matters for a Developer ID build and not at all for
+      // a local one — the self-signed certificate is regenerated long before it
+      // expires. It also costs a round trip to timestamp.apple.com per signed
+      // file, so an offline machine cannot make a local build at all: codesign
+      // fails with "a timestamp was expected but was not found". Skipping it
+      // for the self-signed case keeps local builds working without a network,
+      // while a real release identity still gets timestamped.
+      timestamp: identity.kind === 'self-signed' ? 'none' : undefined
     })
   })
 

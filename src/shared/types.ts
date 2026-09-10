@@ -371,6 +371,17 @@ export interface Snapshot {
   size: number
 }
 
+/**
+ * A permanent copy kept under `.stone/backups`. Same shape as a Snapshot, but
+ * the file behind it is read-only, never reused, and never rotated out.
+ */
+export interface Backup {
+  id: string
+  relPath: string
+  savedAt: number
+  size: number
+}
+
 // ----------------------------------------------------------------- comments
 
 export interface Comment {
@@ -599,7 +610,15 @@ export interface PrintPayload {
  * allowed tools, and answers over several turns. `lecture` is not offered in
  * the dialog; it is what the transcript panel asks with.
  */
-export type ClaudeMode = 'diagram' | 'drawing' | 'structure' | 'code' | 'text' | 'agent' | 'lecture'
+export type ClaudeMode =
+  | 'diagram'
+  | 'drawing'
+  | 'structure'
+  | 'animation'
+  | 'code'
+  | 'text'
+  | 'agent'
+  | 'lecture'
 
 /** How much of the note goes out with the prompt. */
 export type ClaudeContext = 'none' | 'selection' | 'note'

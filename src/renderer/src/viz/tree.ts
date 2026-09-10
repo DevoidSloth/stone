@@ -18,8 +18,20 @@
 
 import { accentStyle, arrowDefs, ellipsize, label, round, svg, textWidth } from './svg'
 import { annotate, isNull, items, readSource, VizError, type Annotated } from './source'
+import { readRecurrence, solve, type Solved } from './recurrence'
 
-export const TREE_KEYS = ['title', 'bst', 'heap', 'level', 'traverse', 'caption'] as const
+export const TREE_KEYS = [
+  'title',
+  'bst',
+  'heap',
+  'level',
+  'traverse',
+  'caption',
+  'recurrence',
+  'depth',
+  'cost',
+  'total'
+] as const
 
 export interface TreeNode extends Annotated {
   children: Array<TreeNode | null>
@@ -44,13 +56,16 @@ const LEVEL_H = 66
 const NULL_W = 16
 const PAD = 16
 
-function node(from: Annotated): TreeNode {
+function node(from: Annotated, boxed = false): TreeNode {
   const width = textWidth(from.label, LABEL_SIZE)
   const subWidth = from.sub ? textWidth(from.sub, SUB_SIZE) : 0
   // A short label gets a circle, which is what a tree of numbers is drawn with
   // everywhere; anything longer gets a box, because a circle wide enough for
-  // `left_child` is a stadium and reads as a state machine.
-  const isRound = from.label.length <= 3 && !from.sub
+  // `left_child` is a stadium and reads as a state machine. `boxed` is for the
+  // trees whose labels are of mixed length by construction — `n`, `n/2`,
+  // `n/16` — where letting each node pick would draw three different shapes
+  // for what is obviously one kind of thing.
+  const isRound = !boxed && from.label.length <= 3 && !from.sub
   return {
     ...from,
     children: [],
@@ -171,6 +186,54 @@ function fromOutline(lines: Array<{ text: string; indent: number; n: number }>):
   return root
 }
 
+/**
+ * The tree a recurrence unrolls into.
+ *
+ * Every node is a call, labelled with the size of the problem it was handed, so
+ * the picture answers "how small has it got by level three" by being read
+ * rather than by being calculated. The bottom row is the base case: the
+ * recursion has stopped, and what is left is the count of leaves, which is the
+ * other half of where the answer comes from.
+ */
+function fromRecurrence(sizes: string[], branch: number): TreeNode {
+  const total = sizes.reduce((sum, _, level) => sum + Math.pow(branch, level), 0)
+  if (total > 64) {
+    throw new VizError(
+      `${total} calls is more than a figure can show. Lower \`depth:\`, or fewer subproblems.`
+    )
+  }
+
+  const build = (level: number): TreeNode => {
+    const made = node({ label: sizes[level] }, true)
+    if (level < sizes.length - 1) {
+      made.children = Array.from({ length: branch }, () => build(level + 1))
+    }
+    return made
+  }
+  return build(0)
+}
+
+/**
+ * The recurrence a `tree` block was given, already solved.
+ *
+ * Read in one place and used in two — the builder needs the sizes, the drawing
+ * needs the costs — so that a block cannot end up with a tree of one shape and
+ * a cost column belonging to another.
+ */
+function recurrenceOf(directives: Map<string, string>): { solved: Solved; branch: number; source: string } | null {
+  const written = directives.get('recurrence')
+  if (written === undefined) return null
+
+  const rec = readRecurrence(written)
+  const asked = Number(directives.get('depth'))
+  // Three levels below the root is the figure everyone draws for a binary
+  // recurrence. A three-way one has twenty-seven leaves by then and is a mile
+  // wide, so it gets one level fewer unless the block asks for more.
+  const fallback = rec.branch >= 3 ? 2 : 3
+  const depth = Number.isInteger(asked) && asked >= 1 && asked <= 8 ? asked : fallback
+  return { solved: solve(rec, depth), branch: rec.branch, source: rec.source }
+}
+
 // -------------------------------------------------------------------- layout
 
 /** The horizontal room a subtree needs, including the gaps inside it. */
@@ -277,6 +340,9 @@ export function buildTree(
   directives: Map<string, string>,
   lines: Array<{ text: string; indent: number; n: number }>
 ): TreeNode {
+  const unrolled = recurrenceOf(directives)
+  if (unrolled) return fromRecurrence(unrolled.solved.sizes, unrolled.branch)
+
   const builders = (['bst', 'heap', 'level'] as const).filter((key) => directives.has(key))
   if (builders.length > 1) {
     throw new VizError(`pick one of ${builders.join(', ')} — they each describe the whole tree`)
@@ -439,10 +505,75 @@ export interface Figure {
   caption?: string
 }
 
+/**
+ * Where each level of the tree sits vertically.
+ *
+ * Taken from the nodes rather than from the depth arithmetic, so a level whose
+ * nodes are taller than the rest — one carrying a sub-label — still has its
+ * cost written down beside the middle of it.
+ */
+function levelRows(tree: TreeNode): number[] {
+  const rows: number[][] = []
+  const walk = (current: TreeNode, depth: number): void => {
+    ;(rows[depth] ??= []).push(current.cy)
+    for (const child of current.children) if (child) walk(child, depth + 1)
+  }
+  walk(tree, 0)
+  return rows.map((row) => row.reduce((sum, one) => sum + one, 0) / row.length)
+}
+
+const COST_SIZE = 11
+const COST_GAP = 22
+
+/**
+ * The column down the right-hand side: what each level costs, and the sum.
+ *
+ * A leader runs from the tree to each figure because the column is far enough
+ * away to be a separate thing, and a number in the margin that the reader has
+ * to guess the owner of is worse than no number. The rule above the total is
+ * the one every worked solution draws, and it is doing real work: it says the
+ * thing below is a sum of the things above, which is the entire argument.
+ */
+function costColumn(rows: number[], costs: string[], total: string | undefined): { group: SVGGElement; width: number; bottom: number } {
+  const group = svg('g', { class: 'viz-cost' })
+  const shown = Math.min(rows.length, costs.length)
+  const widest = Math.max(
+    ...costs.slice(0, shown).map((one) => textWidth(one, COST_SIZE)),
+    total ? textWidth(total, COST_SIZE) : 0
+  )
+
+  for (let level = 0; level < shown; level++) {
+    const y = rows[level]
+    group.appendChild(
+      svg('line', { class: 'viz-cost__leader', x1: 0, y1: round(y), x2: round(COST_GAP - 6), y2: round(y) })
+    )
+    group.appendChild(label(costs[level], COST_GAP, round(y), 'viz-cost__value', COST_SIZE, 'start'))
+  }
+
+  let bottom = rows[shown - 1] ?? 0
+  if (total) {
+    const rule = bottom + 20
+    group.appendChild(
+      svg('line', {
+        class: 'viz-cost__rule',
+        x1: COST_GAP,
+        y1: round(rule),
+        x2: round(COST_GAP + widest),
+        y2: round(rule)
+      })
+    )
+    group.appendChild(label(total, COST_GAP, round(rule + 14), 'viz-cost__total', COST_SIZE, 'start'))
+    bottom = rule + 22
+  }
+
+  return { group, width: COST_GAP + widest, bottom }
+}
+
 export function drawTree(source: string): Figure {
   const { directives, lines } = readSource(source, TREE_KEYS)
 
   const tree = buildTree(directives, lines)
+  const unrolled = recurrenceOf(directives)
 
   const order = directives.get('traverse')?.toLowerCase()
   let caption = directives.get('caption')
@@ -459,8 +590,24 @@ export function drawTree(source: string): Figure {
   const shapes = svg('g', { class: 'viz-nodes' })
   for (const one of all) shapes.appendChild(drawTreeNode(one))
 
-  const title = directives.get('title')
-  const view = { x: -PAD, y: top - PAD, w: width + PAD * 2, h: bottom - top + PAD * 2 }
+  // `cost:` written out wins over a solved recurrence, so a block can keep the
+  // generated tree and say something the algebra could not — the levels of a
+  // recurrence whose cost has a log in it, most often.
+  const written = directives.get('cost')
+  const costs = written !== undefined ? written.split(',').map((one) => one.trim()) : unrolled?.solved.costs
+  const total = directives.get('total') ?? (written === undefined ? unrolled?.solved.total : undefined)
+  const column = costs?.length ? costColumn(levelRows(tree), costs, total) : null
+  if (column) shapes.appendChild(column.group)
+  if (column) column.group.setAttribute('transform', `translate(${round(width + 8)} 0)`)
+  if (unrolled && !caption) caption = unrolled.solved.reason
+
+  const title = directives.get('title') ?? (unrolled ? `T(n) = ${unrolled.source.replace(/^\s*T\s*\(\s*n\s*\)\s*=\s*/i, '')}` : undefined)
+  const view = {
+    x: -PAD,
+    y: top - PAD,
+    w: width + (column ? column.width + 8 : 0) + PAD * 2,
+    h: Math.max(bottom, column?.bottom ?? 0) - top + PAD * 2
+  }
 
   const root = svg(
     'svg',

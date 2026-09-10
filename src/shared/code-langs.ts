@@ -245,6 +245,174 @@ export function javaEntryCall(code: string): string | null {
 }
 
 /**
+ * A Java block as jshell would take it: what to declare, and what to run.
+ *
+ * Drawing the objects a block leaves behind means having them in a live VM
+ * with names on them, and jshell is the only Java that keeps a name and a
+ * value together after the code that made them has finished. So a block is
+ * handed over in two parts.
+ *
+ * `source` is the block itself, snippet by snippet — jshell holds declarations
+ * and runs statements, so a script goes over untouched. `statements` is the
+ * body of `main`, and exists because a program's interesting objects are its
+ * *locals*: run `main` as a method and everything it built goes out of scope
+ * with the call, while running its body at the top level leaves every local
+ * standing as a jshell variable with its own name. The class around it is
+ * still declared, so `new Node()` inside that body means what it meant.
+ *
+ * The one thing that body loses is the class's own scope: an unqualified call
+ * to a sibling helper is not resolvable at the top level. That is reported
+ * when it happens rather than guessed at here.
+ */
+export interface JavaSnippets {
+  /** The block, for jshell to split into snippets and evaluate in order. */
+  source: string
+  /** The body of `main`, run afterwards, or empty when the block is a script. */
+  statements: string
+  /**
+   * The entry class's own helpers, offered again at the top level.
+   *
+   * A `static class Node` beside `main` is `Main.Node` from outside the class,
+   * and the body of `main` says `Node`. Declaring those members again outside
+   * the class is what lets that body run where it can be seen. They are
+   * offered rather than required: one that does not stand on its own out there
+   * is dropped, and the block is no worse off than if this had not been tried.
+   */
+  aliases: string[]
+}
+
+/** Why a block cannot be drawn this way, or the two parts to feed jshell. */
+export function javaSnippets(code: string): JavaSnippets | { reason: string } {
+  if (!code.trim()) return { reason: 'The block is empty.' }
+  if (!javaComplete(code)) {
+    return { reason: 'The block’s brackets do not balance, so there is nothing to run yet.' }
+  }
+
+  const shape = scanJava(code)
+  if (shape.packageName) {
+    return {
+      reason:
+        `jshell has no packages, and this block declares \`${shape.packageName}\`. ` +
+        'Take the package line off to draw it.'
+    }
+  }
+
+  if (shape.mainAt < 0) return { source: code, statements: '', aliases: [] }
+
+  // A block with statements of its own is already a script: it runs as it is
+  // written, and running `main` on top of it would do the same work twice. A
+  // compact source file — Java 25's bare `void main()`, with no class around it
+  // — is not that, even though its declaration counts as loose: the only thing
+  // outside a type there *is* the entry point.
+  const inType = shape.types.some((type) => shape.mainAt > type.index && shape.mainAt < type.end)
+  if (inType && shape.looseCode) return { source: code, statements: '', aliases: [] }
+
+  const body = javaMainBody(code, shape)
+  if (body === null) return { source: code, statements: '', aliases: [] }
+  return { source: code, statements: body, aliases: javaHelpers(code, shape) }
+}
+
+/**
+ * The nested types and static methods sitting beside `main`.
+ *
+ * Only those two kinds. A nested type and a static helper are exactly what the
+ * body of `main` reaches for by bare name, and both mean the same thing
+ * wherever they are declared. Fields are deliberately left where they are: a
+ * static field copied out to the top level would be a second piece of storage
+ * with the same name as the first, and the two would drift apart the moment
+ * anything assigned to either.
+ */
+function javaHelpers(code: string, shape: JavaShape): string[] {
+  const owner = shape.types
+    .filter((type) => type.index < shape.mainAt && shape.mainAt < type.end)
+    .pop()
+  if (!owner) return []
+
+  const text = blankJavaLiterals(code)
+  const depth = javaDepths(text)
+
+  let open = -1
+  for (let i = owner.index; i < owner.end; i++) {
+    if (depth[i] === 0 && text[i] === '{') {
+      open = i
+      break
+    }
+  }
+  if (open < 0) return []
+
+  const out: string[] = []
+  let at = open + 1
+  while (at < owner.end) {
+    // Whitespace and the stray semicolons that are legal between members.
+    if (/[\s;]/.test(text[at])) {
+      at++
+      continue
+    }
+
+    const member = memberEnd(text, depth, at, owner.end)
+    if (member <= at) break
+    const source = code.slice(at, member)
+    // The one member being run rather than declared.
+    if (!(shape.mainAt >= at && shape.mainAt < member)) {
+      const head = text.slice(at, member).split('{')[0]
+      const isType = /\b(?:class|interface|enum|record)\s+[A-Za-z_$]/.test(head)
+      const isStaticMethod =
+        /\bstatic\b/.test(head) && /[A-Za-z_$][\w$]*\s*\([^)]*\)\s*$/.test(head.trim())
+      if (isType || isStaticMethod) out.push(source)
+    }
+    at = member
+  }
+  return out
+}
+
+/** Past one member of a type body: its closing brace, or its semicolon. */
+function memberEnd(text: string, depth: Int32Array, at: number, limit: number): number {
+  const level = depth[at]
+  for (let i = at; i < limit; i++) {
+    if (depth[i] === level && text[i] === ';') return i + 1
+    if (depth[i] === level && text[i] === '{') {
+      for (let j = i + 1; j < limit; j++) {
+        if (depth[j] === level + 1 && text[j] === '}') {
+          // `class X { };` and `int[] a = { 1 };` both carry one afterwards.
+          return j + 1 < limit && text[j + 1] === ';' ? j + 2 : j + 1
+        }
+      }
+      return limit
+    }
+  }
+  return limit
+}
+
+/**
+ * The text between the braces of `main`.
+ *
+ * Positions come from the blanked copy, where a `{` inside a string is not a
+ * brace, but the text returned is cut from the real source so the statements
+ * are the ones the user wrote.
+ */
+function javaMainBody(code: string, shape: JavaShape): string | null {
+  const text = blankJavaLiterals(code)
+  const depth = javaDepths(text)
+  const level = depth[shape.mainAt]
+
+  let open = -1
+  for (let i = shape.mainAt; i < text.length; i++) {
+    if (depth[i] === level && text[i] === '{') {
+      open = i
+      break
+    }
+    // A bodiless declaration — `abstract void main();` — has nothing to run.
+    if (depth[i] === level && text[i] === ';') return null
+  }
+  if (open < 0) return null
+
+  for (let i = open + 1; i < text.length; i++) {
+    if (depth[i] === level + 1 && text[i] === '}') return code.slice(open + 1, i)
+  }
+  return null
+}
+
+/**
  * Whether a block is a whole number of Java snippets.
  *
  * A session is fed over a pipe, and jshell answers an unclosed brace by waiting
@@ -482,6 +650,34 @@ for (const language of CODE_LANGUAGES) {
   for (const alias of language.aliases) BY_ALIAS.set(alias, language)
 }
 
+/** What a fence's info string says, once the suggestion marker is off it. */
+export interface FenceInfo {
+  /** The language name alone, lowercased: `js` out of `` ```js {highlight} ``. */
+  name: string
+  /** Whether the block wants suggestions as you type. */
+  hints: boolean
+}
+
+/**
+ * A fence's info string, read.
+ *
+ * A `!` in front of the language — ```` ```!python ```` — turns the editor's
+ * suggestions off for that one block. It is the only thing the mark does:
+ * the block still highlights, still runs, still gets its header bar, because
+ * "stop guessing at what I am typing" and "this is not Python" are different
+ * requests and only the first one is being made. Transcribing a listing out of
+ * a book is the case it exists for — every popup there is in the way.
+ *
+ * Everything that asks what language a fence is goes through here, so the mark
+ * is stripped in one place rather than in each of them.
+ */
+export function fenceInfo(info: string): FenceInfo {
+  const first = info.trim().toLowerCase().split(/[\s,{]/)[0] ?? ''
+  return first.startsWith('!')
+    ? { name: first.slice(1), hints: false }
+    : { name: first, hints: true }
+}
+
 /**
  * The language a fence's info string names, or null when nothing runs it.
  *
@@ -494,7 +690,7 @@ export function languageFor(
   info: string,
   overrides: Record<string, string> = {}
 ): CodeLanguage | null {
-  const name = info.trim().toLowerCase().split(/[\s,{]/)[0]
+  const { name } = fenceInfo(info)
   if (!name) return null
 
   const known = BY_ALIAS.get(name)

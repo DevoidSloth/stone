@@ -1,8 +1,8 @@
 /**
  * Reading the source of a program figure.
  *
- * All three fences share a shape: a few `key: value` directives, then a body
- * whose indentation carries structure. They also share a set of trailing
+ * The fences share a shape: a few `key: value` directives, then a body whose
+ * indentation carries structure. They also share a set of trailing
  * annotations — a colour, a highlight, a second line of text — because a
  * figure is worth much less if the one node you are talking about cannot be
  * picked out from the rest.

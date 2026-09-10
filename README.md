@@ -95,6 +95,20 @@ note would become an all-day event and bury the real calendar.
 `[[Wikilinks]]` resolve by filename or title, and each note lists its backlinks.
 Renaming a note rewrites every link that pointed at it.
 
+A link or an embed can name part of a note rather than the whole of it:
+
+| Write | Gets you |
+| --- | --- |
+| `[[Note#Heading]]` | A link that scrolls to that heading |
+| `![[Note#Heading]]` | That heading's section, embedded in place |
+| `![[Note#Heading#Sub]]` | Just the subsection |
+| `![[Note#^block-id]]` | The one paragraph carrying that `^block-id` |
+
+A section runs from its heading to the next heading at the same level or above.
+Rename the heading and the embed says it cannot find the section rather than
+quietly widening to the whole page — a silent wrong answer being worse than a
+loud missing one. The same slicing is used on screen and in the PDF export.
+
 ## Calendar integration
 
 Stone reads four sources and merges them into one view.
@@ -145,6 +159,17 @@ What Stone does instead is make writes safe for that arrangement:
 - **Debounced watching.** Sync engines rewrite files in bursts, so every path is
   debounced and settled before reindexing.
 - **Deletes go to `.trash`** inside the vault, not to `unlink`.
+- **Version history, in two tiers.** Every save that changes a note archives the
+  version it replaced. `.stone/snapshots` keeps a rolling 25 per note and can be
+  switched off in settings; `.stone/backups` keeps every one of them
+  permanently, is never pruned, and cannot be switched off. Both stores name a
+  version by the same timestamp, so the history panel shows one row per version
+  and marks the permanent ones `kept`.
+- **Backups are immutable.** Each backup is written once under a name that is
+  never reused and then chmod'd `0444`. No save, rename, delete, or plugin can
+  write inside `.stone/backups` — the vault refuses the path outright rather
+  than failing halfway through. The archive only ever grows; pruning it is a
+  deliberate act you take from a shell, not something Stone can do to you.
 
 For iCloud, turn off "Optimise Mac Storage" for the vault folder; for Drive and
 OneDrive, mark it available offline. Stone skips `.icloud` placeholder stubs, but
@@ -161,6 +186,8 @@ an evicted file is a file it cannot read.
 | `Ctrl/Cmd 1-8` | Today, Notes, Calendar, Tasks, Graph, Views, Canvas, Documents |
 | `Ctrl/Cmd B` `I` | Bold, italic |
 | `Ctrl/Cmd Shift M` | Highlight |
+| `Ctrl/Cmd Shift 8` | Bullet list |
+| `Tab` `Alt ↑↓` | Nest a list item, move one (with its children) |
 | `Ctrl/Cmd Enter` | Turn the line into a task, or cycle its status |
 | `Ctrl/Cmd Shift Enter` | Run the code block the cursor is in |
 
@@ -205,6 +232,150 @@ Every button is a toggle and shows its state, so pressing bold on text that is
 already bold unwraps it rather than nesting a second pair of asterisks. The bar
 waits for the pointer to come up before it appears, so it never chases a drag,
 and `Esc` dismisses it without losing the selection.
+
+The **&#9679;** button opens a row of colours — seven as ink, the same seven as
+a highlight behind the words, and a crossed-out swatch on each row to take the
+colour off again. Colour is written as `<span style="color: #e05252">` and
+`<mark style="background: #…">`, which is the HTML Obsidian, GitHub and Stone's
+own exporter all understand, so a coloured note keeps its colour outside Stone.
+The palette is mid-tone ink and translucent washes on purpose: a note is read in
+both themes, and a colour picked against white and read against near-black has
+to clear both grounds.
+
+### Marks markdown never grew
+
+| Write | Gets you |
+| --- | --- |
+| `==text==` | A yellow highlight |
+| `<u>text</u>` | Underline |
+| `<sup>2</sup>` | Superscript — x&sup2;, a citation marker |
+| `<sub>2</sub>` | Subscript — H&#8322;O, an index |
+| `^[an aside]` | An inline footnote, numbered where it sits |
+| `%%private%%` | A comment: in the file, never in the export |
+
+CommonMark leaves underline, superscript and subscript out and expects the HTML
+instead, so the tag *is* the markdown here. Each hides its own tags until the
+caret reaches the line.
+
+Footnotes work both ways round: `[^1]` with a definition further down, and
+`^[the note itself, here]` for the one you would otherwise never bother to
+write. Both print as a numbered marker and a note in a list at the foot of the
+document.
+
+A comment can span lines — `%%` alone on a line opens one, the next `%%` closes
+it. Commented text is dimmed rather than hidden, because this is an editor and
+text that vanishes when the caret leaves is text you will be surprised by later.
+What it never reaches is a PDF, an HTML export, the Tasks view or the calendar:
+commenting a task out really does park it.
+
+Type `:` and a word for emoji — `:tada:`, `:rocket:`, `:warning:`. What lands in
+the file is the character, never the shortcode.
+
+### Callouts
+
+```markdown
+> [!warning]- Collapsible, and starts collapsed
+> The `-` after the kind makes a callout fold. `+` makes it foldable
+> but leaves it open.
+```
+
+`[!note]`, `[!tip]`, `[!warning]`, `[!danger]`, `[!quote]`, `[!success]`,
+`[!bug]` and `[!example]` each have their own tint and glyph. Callouts nest: a
+`> >` line inside one opens a second panel held by the first, drawn inset with
+its own tint rather than stacking a second wash over the first — two washes
+multiplied together read as a shade of the outer panel, not as a panel.
+
+### Contents
+
+````markdown
+```toc
+levels: 2-3
+```
+````
+
+The note's own headings, listed where the block sits and clickable. Built from
+the document every time it is drawn, so it cannot go stale: rename a heading and
+the contents follow. `levels:` defaults to `2-6`, because in a note with a title
+an `h1` is usually the title said twice.
+
+### Code blocks
+
+Every fenced block is topped by a bar naming its language, with a **Copy**
+button on the right. The bar stands in for the ```` ``` ```` line rather than
+sitting above it — that line was always there, and this only draws it as a label
+instead of as syntax. The backticks come back when the caret lands on it.
+
+Typing inside one suggests names. Three sources, in the order they are worth
+having: what the block itself declares, what the blocks above it in the same
+language declared — the session they all run into, which is the thing nothing
+else on the page tells you — and then the language's own keywords and builtins.
+It is not a language server and does not pretend to be: the declarations are
+read off the source the way the **Code** inspector reads them, and a suggestion
+after a `.` is a common method rather than a checked one. A note is twenty lines
+of Python in a page of prose, not a repository, and that is the honest size of
+the answer.
+
+A `!` in front of the language turns suggestions off for that one block:
+
+````markdown
+```!python
+for i in range(3):
+    print(i)
+```
+````
+
+The mark means nothing else. The block still highlights, still runs, still gets
+its header bar — because "stop guessing at what I am typing" and "this is not
+Python" are different requests, and only the first one is being made.
+Transcribing a listing out of a book is the case it exists for.
+
+### Maths
+
+`$x$` is an inline equation and `$$` on its own line opens a display one, both
+rendered by KaTeX. Inside either, `\` opens a menu of LaTeX commands with the
+symbol each one draws beside its name, and the selected one rendered beside the
+list — because nobody remembers whether "much less than" is `\ll` or `\lll`,
+they remember the shape. Searching matches what a symbol *is* as well as what it
+is called, so `union`, `fraction` and `much less` all find theirs.
+
+Commands arrive complete. `\frac` puts the caret in the numerator, `\left(`
+brings its `\right)` along, and `\begin{` offers whole environments —
+`aligned`, `cases`, `pmatrix` — already closed, with a row of `&` showing where
+the columns go.
+
+### Lists
+
+A list is drawn on a grid rather than on its own indentation. Whatever is in the
+file — two spaces, four, a tab — is what stays in the file; what appears on the
+page is one fixed step per level, a bullet that changes shape as it nests
+(&bull;, &#9702;, &#9642;), a hairline down each ancestor's column, and a hanging
+indent so an item that wraps continues under its own text instead of running
+back to the margin under its bullet. Numbers keep their own characters, set
+flush right so that 9 and 10 line up on the dot.
+
+The raw prefix comes back when the selection reaches into it, and only then.
+Clicking into the third word of an item three levels deep does not swap the grid
+for eight literal spaces and a hyphen — that would jump the line, and everything
+under it, sideways for markup nobody was about to edit. Arrow left from the
+start of the text and the marker appears, whole and editable.
+
+| Key | Does |
+| --- | --- |
+| `Tab` / `Shift Tab` | Nest the item under the one above, or lift it back out |
+| `Alt ↑` / `Alt ↓` | Move the item past its neighbour |
+| `Ctrl/Cmd Shift 8` | Turn the line into a bullet, or back into a paragraph |
+| `Ctrl/Cmd Shift H` | Collapse the item, or the section |
+
+Each of those moves the item's children with it, which is the whole difference
+between an outline and a stack of lines: nesting a parent nests everything under
+it, and moving one leaves nothing orphaned behind. An ordered list is renumbered
+afterwards — except one written as `1.` on every line, which is legal CommonMark
+and a deliberate style, and is left exactly as it was typed.
+
+An item with children gets a collapse arrow in the margin on hover, and a ring
+around its marker while it is closed, so a folded item is visible without
+hovering it. Outside a list every one of these keys means what it always did:
+`Tab` indents, `Alt ↑` moves the line.
 
 ### Hyperlinks
 
@@ -253,9 +424,15 @@ structural key — never on each keystroke, since a write rebuilds the table and
 would pull the node out from under the caret. A cell edit and the row it
 triggers are one write, so `Tab` off the last cell is one undo step.
 
-Alignment colons, a malformed rule row and an escaped pipe can still only be
-fixed in the source, so **Markdown** on the table's top-right corner (on hover)
-drops it back to raw text. Move the caret out of the table to return to the grid.
+Hovering the table puts a small &#8676; on each header cell: click it to cycle
+that column through left, centre and right. It writes the colons in the rule row
+and re-pads every cell to match, so the file says what the page shows. If a cell
+is mid-edit the alignment change composes with it into a single write, the way
+every other structural change here does.
+
+A malformed rule row and an escaped pipe can still only be fixed in the source,
+so **Markdown** on the table's top-right corner (on hover) drops it back to raw
+text. Move the caret out of the table to return to the grid.
 
 ## Architecture
 
@@ -409,17 +586,66 @@ Runs stop at a time limit — thirty seconds out of the box — and the whole
 process group is killed, so a shell line that spawns something else does not
 leave it behind.
 
+### Drawing a Java block's objects
+
+A Java block has a second button: **Diagram**. It runs the block and writes a
+[`boxes`](#boxes--what-refers-to-what) figure under it of the objects it left
+behind — the variables, what they point at, and what those point at in turn.
+
+The figure is drawn from the objects, not from the source. The block is
+compiled and run in a jshell session, and a helper evaluated in that same
+session walks what is actually on the heap when it stops. So two variables that
+turned out to be the same object come out as one box with two arrows into it,
+a list that shares its tail with another shares it on the page, and a cycle is
+drawn as a cycle. That is the whole reason to press the button rather than draw
+it yourself: the diagram is usually wanted precisely when the aliasing is not
+what you think it is.
+
+What becomes a root depends on the shape of the block, the same way running it
+does:
+
+| Block | Roots |
+| --- | --- |
+| Statements, with or without classes | Every variable it declares |
+| A class with a `main` | The locals of `main` |
+
+A program's locals only survive to be drawn because the statements of `main`
+are run at the top level rather than called — a returned method takes its
+locals with it. Its class is still declared, and the nested types and static
+helpers beside `main` are offered at the top level too, so `new Node(…)` and
+`chain(3)` mean what they meant. What that cannot reach is the class's own
+fields: an unqualified `count` in `main` is `Main.count` from outside, and the
+error says so.
+
+Arrays, lists, sets and maps are drawn as themselves rather than as their
+internals; anything from the platform — a `LocalDate`, a `BigDecimal` — is
+drawn as what it prints as, since its seven private fields are not what anyone
+means by the date. Big graphs stop at forty objects and say so.
+
+The figure goes into the note, because a figure is part of the file in a way
+that a run's output is not: it renders, it prints, it exports, and it opens in
+any other editor as the text it is. Pressing Diagram again replaces the one it
+wrote last time rather than stacking a second underneath — a `# drawn from the
+Java block above` comment is how it knows which is its. Move it, or edit it,
+and it is yours: the next press writes a new one and leaves yours alone.
+
+Drawing runs the block, so it is behind the same one-time question the Run
+button is, and stops at the same time limit. It needs a JDK — 11 or newer — on
+the path your terminal uses.
+
 ## Program figures
 
-Four fences for the pictures a programmer draws on a whiteboard: what refers to
-what, what is in memory, what shape a tree is, and what an algorithm does over
-time. They render in the editor as you type, print into an export, and are plain
-text in the file like everything else, so a note that draws one still reads as
-source in any other editor.
+Seven fences for the pictures a programmer draws on a whiteboard: what refers to
+what, what is in memory, what shape a tree is, how a design is put together,
+where a key lands, how something grows, and what an algorithm does over time.
+They render in the editor as you type, print into an export, and are plain text
+in the file like everything else, so a note that draws one still reads as source
+in any other editor.
 
-Mermaid stays the right tool for a flowchart or a class diagram. These are for
-the three things it cannot do: a pointer, a lopsided binary tree, and a
-sequence of states.
+Mermaid stays the right tool for a flowchart or a state machine. These are for
+the things it cannot do: a pointer, a lopsided binary tree, a type hierarchy
+that reads like the declarations it came from, a table of buckets with the
+collisions worked out, and a sequence of states.
 
 ### `memory` — stack, heap, and the pointers between
 
@@ -505,7 +731,9 @@ Three shapes, and the conventions are fixed rather than optional:
 
 - **A variable** is `name -> target`: a small box with its name outside it,
   because the name is what the box is *called*, not what it holds. `-> null`
-  strikes it through.
+  strikes it through, and `name = 5` writes a value in the same little box —
+  the `int` a method is holding is as much a part of the picture as the objects
+  around it.
 - **An object** is `id Type:` with its fields indented, or `id Type { … }` on one
   line. **The title is the type**, centred. The `id` never appears in the
   drawing — it is only how the source wires the arrows up, and in the program
@@ -524,6 +752,9 @@ box self-contained so the layout can move it without dragging labels around.
 A pointer to a box that does not exist is an error naming the line, rather than
 a silently missing arrow — a diagram where a typo looks like an unset pointer is
 worse than no diagram.
+
+A Java block will write one of these for you from the objects it actually
+leaves behind — see [Drawing a Java block's objects](#drawing-a-java-blocks-objects).
 
 ### `tree` — the shapes that arrive as arrays
 
@@ -545,6 +776,165 @@ should. That is the whole reason not to use a `flowchart` here.
 
 `traverse: inorder` (or `preorder`, `postorder`, `level`) numbers the nodes in
 visit order and captions the sequence.
+
+### `tree` — a recurrence, unrolled
+
+```tree
+recurrence: 2T(n/2) + n
+```
+
+Give it the right-hand side and it draws the recursion tree with what each level
+costs down the right, and the sum under a rule. The arithmetic is exact and
+symbolic, so mergesort's column reads `n`, `n`, `n`, `n` — which is not a
+coincidence to be pointed out afterwards but the visible reason the answer has a
+`log n` in it.
+
+| Directive | Does |
+| --- | --- |
+| `recurrence: 2T(n/2) + n` | Builds the tree and works out the levels |
+| `recurrence: T(n-1) + n` | Subtractive: a chain rather than a fan |
+| `depth: 4` | Levels below the root — 3, or 2 when it branches wide |
+| `cost: n, n/2, n/4` | Write the levels yourself, on any tree |
+| `total: Θ(n)` | The line under the rule |
+
+The sum is the master theorem applied, and the case it fell into becomes the
+caption: the leaves dominate, the root dominates, or every level costs the same.
+Costs are `1`, `n`, `n^2` and multiples of them. A cost with a `log` in it is
+refused by name rather than guessed at — `cost:` is how you write those levels
+out, and it works on any tree, so a BST or an outline can carry a column too.
+
+### `hash` — a table, with the collisions in it
+
+```hash
+buckets: 7
+keys: 12 44 13 88 23 94 11
+```
+
+This is the one figure the app *computes*. Every other fence draws something you
+could point at in your own source; which bucket a key lands in is the answer to
+an arithmetic question, and the whole reason for drawing it is that the answer
+is not the one you guessed. So you give it the keys and the table size, and it
+hashes them, resolves the collisions, and draws what came out — with the load
+factor, the longest chain and how much of the table is empty written underneath.
+
+| Directive | Does |
+| --- | --- |
+| `buckets: 7` | The table size — 8 by default |
+| `keys: 12 44 13` | Inserted in this order |
+| `probe: chain` | Or `linear`, `quadratic`, `double` — open addressing |
+| `hash: mod` | Or `java`, `length`, `first`, `sum`; guessed from the keys |
+| `load: 0.75` | Double and rehash when it gets fuller than this |
+| `remove: 44` | Deletes — a tombstone, where a probe has to run past it |
+| `show: hash` | Each key's raw hash, under it |
+
+Numbers go through `k mod m` and words through Java's `String.hashCode`, spelled
+as the JDK spells it — a figure claiming to be a `HashMap` is one. Under open
+addressing each key carries how many probes it cost and an arc runs from the
+bucket it wanted to the one it settled for, which is the number the chaining
+picture cannot show and the reason open addressing is taught at all.
+
+To draw a table out of a book instead, write the buckets yourself and leave
+`keys:` off:
+
+```hash
+buckets: 4
+1: apple banana
+3: cherry
+```
+
+You cannot do both. A computed table and a typed one would disagree, and the
+computed one is the point.
+
+### `chart` — growth, predicted or measured
+
+```chart
+x: 1..40
+mark: 14 n₀
+f = 3n + 40
+cg = n^2 / 4
+```
+
+Two figures in a course on algorithms are charts and nothing else will do. The
+definition of big-O drawn out — `f(n)` under `c·g(n)` from some `n₀` onwards,
+where the whole content is the crossing — and the one at the other end of the
+subject: the times you actually measured, plotted against `n`, which is how you
+find out that your `O(n log n)` sort has an `O(n²)` line in it. A series here is
+either an expression or a row of numbers, and they draw the same way on the same
+axes.
+
+| Line or directive | Does |
+| --- | --- |
+| `n^2 / 4` | A curve, labelled with itself |
+| `f = 3n + 40` | The same, named |
+| `measured: 12 26 55` | Readings — drawn dashed, with dots |
+| `x: 1..64` | The domain; or `x: 1 2 4 8` to name the points |
+| `y: 0..500` | Fix the vertical range |
+| `log: xy` | Logarithmic axes — `log: y` for one of them |
+| `mark: 14 n₀` | A rule across, labelled |
+| `bars:` | Bars rather than lines |
+| `xlabel:` / `ylabel:` | Names the axes — x is `n` unless you say otherwise |
+
+Juxtaposition is multiplication, because nobody writing about algorithms writes
+`n * Math.log2(n)`: `2n`, `n log n` and `3n^2 log n` all parse as themselves.
+`log` is base two with no way to change it — in this subject an unqualified log
+has been base two for fifty years, and a plot that quietly drew the natural log
+would be wrong by a constant factor in a picture whose whole subject is constant
+factors. `ln`, `log2` and `log10` say so explicitly.
+
+Curves are named at their right-hand end rather than in a legend, because a
+legend makes you look away from the picture, match a colour and look back. On
+log-log axes a polynomial is a straight line whose slope is its exponent, so
+"is this quadratic or is it n log n" stops being an opinion about the shape of a
+curve.
+
+### `types` — classes, interfaces, and what extends what
+
+```types
+abstract class Animal
+interface Winged
+class Dog extends Animal
+class Bird extends Animal implements Winged
+```
+
+The figure a design document opens with, written as the declarations it is a
+picture of. One type a line:
+
+| Written | Draws |
+| --- | --- |
+| `class Dog` | A plain box |
+| `abstract class Animal` | The name in italics, `abstract class` under it |
+| `interface Winged` | A dashed box — also `enum` and `record` |
+| `class Dog extends Animal` | A solid edge up to `Animal` |
+| `class Bird implements Winged` | A dashed edge — realising, not extending |
+| `class Bird < Animal, Winged` | The short form: a subtype of both |
+| *(indented under a type)* | Its fields and methods, in a compartment |
+
+This is deliberately not a `tree`. A tree gives every node one parent, and a
+hierarchy stops being a tree the moment it is worth drawing — `Bird` is under
+both `Animal` and `Winged`. So a type names as many supertypes as it has, and
+nothing in the source says where anything goes: a type sits one row below the
+deepest thing it inherits from, and slides along that row to keep its edges
+short and uncrossed. Add a type in the middle and the picture rearranges itself
+instead of breaking.
+
+The arrowhead is UML's hollow triangle and always points at the **supertype**,
+so the figure says which way the relation runs without a legend. A class under
+an interface is drawn dashed whether or not `implements` was written — it is the
+only thing it could be doing. A supertype nothing declares is drawn as a plain
+class, which is what makes `Dog < Animal` a two-box figure on its own, and what
+makes a misspelt supertype arrive as a box of its own rather than as nothing.
+
+```types
+title: Ciphers
+interface Cipher
+  encrypt(String): String
+  decrypt(String): String
+abstract class Substitution implements Cipher
+  alphabet: char[]
+class Caesar extends Substitution
+class Vigenere extends Substitution
+  key: String
+```
 
 ### `algo` — an algorithm, running
 
@@ -572,7 +962,7 @@ the transport under the figure plays, steps and scrubs them.
 | `mark i sorted` | A lasting mark; `mark 0..3 done` for a span |
 | `unmark i` / `unmark all` | Takes it off |
 | `at lo 0` | A named pointer under a slot; `at lo off` removes it |
-| `range window 2 5` | A bracket over a span |
+| `range 2 5` | A bracket over a span; `range window 2 5` labels it |
 | `push v` / `pop` | And `enqueue` / `dequeue`, `insert i v`, `remove i` |
 | `visit 7` | In a tree, addressed by the node's label |
 | `note …` | The caption for this frame onward |
@@ -588,9 +978,60 @@ runs it round, and `speed:` is the milliseconds a frame is held.
 Printing cannot play, so an `algo` block exports as a strip of stills — the
 frames that carry a note, plus the ends — which is how a textbook prints one.
 
+`stills:` asks for that strip on screen as well, and then you choose the frames:
+
+```algo
+array: 5 3 8 1 9 2
+stills: 0 4 -1
+---
+range sorted 0 0
+note On entry: b = 0, nothing is sorted
+compare 0 1
+swap 0 1
+range sorted 0 1
+note Held: 0..b is sorted, b..n is not
+mark 0..5 sorted
+range sorted 0 5
+note On exit: b = n, so all of it is sorted
+```
+
+This is the loop invariant figure, and it is a still one on purpose. An
+invariant is not an animation — it is three pictures, on entry, held, and on
+exit, and the argument is what stayed true across them. A block with `stills:`
+gets no transport, because the figure is not about time. Steps count from zero
+and a negative one counts from the end, so `0 -1` is start and finish without
+having to know how many steps you wrote; a bare `stills:` picks them the way
+printing does.
+
+### Asking Claude for one
+
+Writing thirty steps out by hand is the reason most people never draw one of
+these. **Animate an algorithm** in the command palette, or `/animated` in a
+note, asks Claude for the whole run: name the algorithm, and the block appears
+in the note immediately as a row of empty slots, with the request going on
+behind it.
+
+Nothing is blocked while it works. The placeholder is ordinary source —
+
+```algo
+pending: mtsr2tuc1
+prompt: Selection sort over 7 2 9 4
+```
+
+— so it holds the space the figure will need, says what it is for, and is still
+legible in another editor or after a restart. Keep writing underneath it; when
+the answer lands it replaces exactly those lines, as one edit, with the caret
+and the undo history where you left them. It goes to the note it was asked
+from, so it is safe to move on to another one, and a request that fails leaves
+the block behind with the reason and the prompt still in it rather than
+vanishing.
+
+A selection is context rather than the question: highlight your own quicksort,
+ask for "this, on 7 2 9 4", and it animates what you highlighted.
+
 ### Shared annotations
 
-After any label, in any of the three: `*` rings it, `~` fades it, `#red` (also
+After any label, in any of them: `*` rings it, `~` fades it, `#red` (also
 green, blue, yellow, purple, gray) colours it from the theme's own palette, and
 `| text` adds a second, smaller line. Ask Claude for one with **Structure** mode
 in the Claude dialog.
@@ -716,3 +1157,14 @@ draw into. It can add commands, respond to events, and read and write notes.
   the one destructive action and it takes the selection, not the board.
 - There is still no mobile app. The vault is markdown in a synced folder, so
   Obsidian on a phone reads the notes — but not Stone's tasks or calendar.
+- No column layouts. Notion's side-by-side blocks would need the editor to flow
+  lines into two columns while they stay editable, which CodeMirror lays out one
+  line at a time and cannot do; the alternative — a read-only widget you edit as
+  source — needs a second markdown renderer inside the editor, and keeping two
+  renderers in step is the thing this codebase most deliberately avoids.
+- A URL is a link, not a preview card. Unfurling one means fetching the page,
+  which is a network request per link from an app that otherwise makes none.
+- Checkbox statuses are the four Stone models: `[ ]`, `[/]`, `[x]`, `[-]`. Extra
+  ones like Obsidian's `[?]` would have to mean something to the Tasks view, the
+  calendar and every query, so they are a data-model change rather than a
+  formatting one.

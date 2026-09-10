@@ -1,5 +1,6 @@
 /*
- * Program figures: the `memory`, `tree` and `algo` fences.
+ * Program figures: the `memory`, `boxes`, `tree`, `types`, `hash`, `chart`
+ * and `algo` fences.
  *
  * Everything here is drawn in SVG by `viz/`, which computes its geometry from
  * the mono advance width — so the one rule this file must never break is that
@@ -71,6 +72,15 @@
   stroke-width: 1.4;
 }
 
+/* UML's generalisation head. Filled with the page rather than left open, so
+   the edge ends at the triangle's base instead of running on through it. */
+.viz-arrowhead--hollow {
+  fill: var(--bg-page);
+  stroke: var(--viz-line);
+  stroke: context-stroke;
+  stroke-width: 1.25;
+}
+
 /* Nodes — a tree, or a node in an animated traversal. */
 
 .viz-node__shape {
@@ -87,6 +97,31 @@
 
 .viz-node__sub {
   fill: var(--text-faint);
+}
+
+/* An interface, in a type hierarchy: the same box, with a dashed border. A type
+   with no implementation behind it is not a solid thing, and the dashes say so
+   before the word under the name is read. The fill stays — an edge passing
+   behind a box must not read as an edge ending in it. */
+.viz-node__shape--open {
+  stroke-dasharray: 5 3;
+}
+
+/* An abstract type's name is set in italics — UML's own convention, and the
+   only one of its conventions that survives being drawn in a mono face. */
+.viz-node__label--abstract {
+  font-style: italic;
+}
+
+.viz-type__member {
+  fill: var(--text-muted);
+}
+
+/* Realisation — a class under an interface — is dashed, generalisation is
+   solid. Both carry the same hollow head, because both are a subtype
+   relationship and the head is what says which end is the supertype. */
+.viz-edge--implements {
+  stroke-dasharray: 5 4;
 }
 
 .viz-node__hole {
@@ -280,6 +315,132 @@
   }
 }
 
+/* Hash tables — a column of buckets, and whatever hangs off them. */
+
+/* An empty bucket is drawn, never skipped: half the lesson of a hash table is
+   how much of it is empty at a load factor of 0.5. Dashed, so a row with
+   nothing in it is legible as a row and not as a gap in the figure. */
+.viz-hash__slot--empty {
+  fill: none;
+  stroke: var(--border);
+  stroke-dasharray: 3 3;
+}
+
+.viz-hash__tombstone {
+  fill: var(--text-ghost);
+}
+
+/* The arc from the bucket a key wanted to the one it got. Dashed because it is
+   not a link that exists in the data structure — it is the history of a walk,
+   and drawing it like a pointer would invite the reader to think the table
+   stores it. */
+.viz-hash__probe {
+  fill: none;
+  stroke: var(--purple);
+  stroke-width: 1.1;
+  stroke-dasharray: 3 2.5;
+  opacity: 0.85;
+}
+
+.viz-hash__probe-count {
+  fill: var(--purple);
+  font-weight: 600;
+}
+
+/* Recursion trees — the cost of each level, down the right-hand side. */
+
+.viz-cost__leader {
+  stroke: var(--border);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+}
+
+.viz-cost__value {
+  fill: var(--text-faint);
+}
+
+/* The sum, and the rule that says it is one. Set in the body colour where the
+   levels above it are faint: the eye should land here last and stay. */
+.viz-cost__rule {
+  stroke: var(--viz-line);
+  stroke-width: 1;
+}
+
+.viz-cost__total {
+  fill: var(--text);
+  font-weight: 600;
+}
+
+/* Charts. */
+
+.viz-chart__axis {
+  fill: none;
+  stroke: var(--viz-line);
+  stroke-width: 1.25;
+}
+
+/* Gridlines are the one thing in these figures allowed to be nearly invisible.
+   They are there to be measured against when the reader asks a question of the
+   chart, and to disappear the rest of the time. */
+.viz-chart__gridline {
+  stroke: var(--border-hair);
+  stroke-width: 1;
+}
+
+.viz-chart__tick {
+  fill: var(--text-ghost);
+  font-variant-numeric: tabular-nums;
+}
+
+.viz-chart__axis-label {
+  fill: var(--text-faint);
+}
+
+.viz-chart__line {
+  fill: none;
+  stroke: var(--viz-accent);
+  stroke-width: 1.75;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+/* A measured series is drawn as what it is: a handful of readings with a line
+   through them. The dashes say the line between two measurements is an
+   assumption, which on a timing plot it always is. */
+.viz-chart__series.is-measured .viz-chart__line {
+  stroke-dasharray: 5 3;
+  stroke-width: 1.5;
+}
+
+.viz-chart__dot {
+  fill: var(--viz-accent);
+  stroke: var(--bg-page);
+  stroke-width: 1;
+}
+
+.viz-chart__bar {
+  fill: color-mix(in srgb, var(--viz-accent) 62%, var(--bg-page));
+  stroke: var(--viz-accent);
+  stroke-width: 1;
+}
+
+.viz-chart__name {
+  fill: var(--viz-accent);
+  font-weight: 600;
+}
+
+/* `n₀` and its like: a rule the eye can find without it competing with the
+   curves it is there to mark a crossing of. */
+.viz-chart__mark {
+  stroke: var(--text-ghost);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+.viz-chart__mark-label {
+  fill: var(--text-faint);
+}
+
 /* ------------------------------------------------------------------ states */
 
 .is-marked > .viz-node__shape,
@@ -413,8 +574,10 @@
 /* ------------------------------------------------------- printed and broken */
 
 /*
- * A run, printed. Paper cannot play, so the frames that carry a note are laid
- * out as a strip of stills — which is how a textbook prints one anyway.
+ * A run, held still. Paper cannot play, so the frames that carry a note are
+ * laid out as a strip — which is how a textbook prints one anyway — and a
+ * `stills:` block asks for the same treatment on screen, where the figure is an
+ * argument about what stayed true rather than about what happened next.
  */
 .viz__film {
   display: grid;
@@ -432,6 +595,42 @@
 .viz__frame .viz__note {
   margin-top: var(--sp-1);
   min-height: 0;
+}
+
+/* ---------------------------------------------- a figure not drawn yet */
+
+/* A block Claude has been asked for and has not answered. It stands in the
+   note holding the space the figure will need, so the writing underneath it
+   does not jump when the answer lands, and the sweep across the empty slots is
+   the only thing saying anything is still going on. */
+.viz--waiting .viz__title {
+  font-weight: 500;
+  color: var(--text-faint);
+}
+
+.viz-cell__shape--waiting {
+  fill: var(--bg-surface);
+  stroke: var(--border);
+  stroke-dasharray: 4 3;
+  animation: viz-waiting 1.6s ease-in-out infinite;
+}
+
+@keyframes viz-waiting {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 0.85;
+  }
+}
+
+/* A request that failed keeps the same shape and stops moving: the slots are
+   the space the figure would have had, and nothing is coming to fill them. */
+.viz--waiting.is-failed .viz-cell__shape--waiting {
+  animation: none;
+  opacity: 0.3;
 }
 
 .viz--broken {

@@ -505,3 +505,103 @@
   font-weight: 600;
   color: var(--callout-ink, var(--text-faint));
 }
+
+/*
+ * A callout inside a quote or inside another callout.
+ *
+ * The inner panel is inset on both sides, and the strip either side of it is
+ * filled with the *outer* callout's tint — which is the whole trick. A line in
+ * CodeMirror is one box the full width of the column, so an inner panel cannot
+ * be a smaller box sitting inside a larger one; what it can be is the same box
+ * painted in two colours. The border does that: the border area takes the
+ * enclosing panel's colour, `background-clip` keeps the inner tint off it, and
+ * the result reads as one panel held inside another.
+ *
+ * A margin was the obvious thing and is wrong: it shifts the line right without
+ * narrowing it, so the inner panel hangs past the right edge of the one that is
+ * supposed to contain it.
+ *
+ * The limit is that a border takes one colour, so this is exact to two levels —
+ * a panel inside a panel, which is what people write. Deeper than that, each
+ * level still steps in, but the whole margin beside it is painted in its
+ * immediate parent's tint rather than in a band per ancestor. Getting that last
+ * case exact needs a gradient with a stop per level and a custom property per
+ * ancestor, which is a lot of machinery for a callout three deep.
+ */
+.cm-line.tok-line-callout--nested {
+  padding-left: calc(var(--sp-5) + var(--callout-nest, 1) * var(--sp-4));
+  padding-right: calc(var(--sp-4) + var(--callout-nest, 1) * var(--sp-4));
+}
+
+.cm-line.tok-line-callout--nested::after {
+  border-left: calc(var(--callout-nest, 1) * var(--sp-4)) solid
+    var(--callout-outer, transparent);
+  border-right: calc(var(--callout-nest, 1) * var(--sp-4)) solid
+    var(--callout-outer, transparent);
+  background-clip: padding-box;
+}
+
+/* The glyph follows the panel in, so it sits inside the inner one's padding. */
+.cm-line.tok-line-callout--nested.tok-line-callout-first::before {
+  left: calc(12px + var(--callout-nest, 1) * var(--sp-4));
+}
+
+/*
+ * The tint a nested panel's margins are filled with: the kind of the callout
+ * enclosing it, which is why these are a second set of names rather than the
+ * same ones — a line carries both, and each has to reach a different property.
+ */
+.tok-callout-under-note,
+.tok-callout-under-info,
+.tok-callout-under-question,
+.tok-callout-under-abstract,
+.tok-callout-under-summary,
+.tok-callout-under-todo {
+  --callout-outer: var(--blue-soft);
+}
+
+.tok-callout-under-tip,
+.tok-callout-under-success,
+.tok-callout-under-done,
+.tok-callout-under-hint,
+.tok-callout-under-check {
+  --callout-outer: var(--green-soft);
+}
+
+.tok-callout-under-warning,
+.tok-callout-under-caution,
+.tok-callout-under-attention {
+  --callout-outer: var(--yellow-soft);
+}
+
+.tok-callout-under-danger,
+.tok-callout-under-error,
+.tok-callout-under-bug {
+  --callout-outer: var(--red-soft);
+}
+
+.tok-callout-under-quote,
+.tok-callout-under-example {
+  --callout-outer: var(--purple-soft);
+}
+
+/*
+ * A collapsed callout is one line, so it takes both roundings — the line
+ * holding its bottom edge is inside the fold and never drawn.
+ */
+.cm-line.tok-line-callout--collapsed::after {
+  border-radius: var(--r-sm);
+}
+
+.cm-line.tok-line-callout--collapsed {
+  padding-bottom: calc(var(--sp-3) + var(--sp-2));
+}
+
+/*
+ * The twisty, on a callout written `> [!note]-`. It sits in the same left
+ * column as a heading's and a list item's rather than inside the tint: one
+ * column of controls down the page, whatever it is that collapses.
+ */
+.cm-line.tok-line-callout:hover .cm-fold {
+  opacity: 1;
+}

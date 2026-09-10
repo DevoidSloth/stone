@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type {
+  Backup,
   CalEvent,
   CalendarAccount,
   Comment,
@@ -52,6 +53,8 @@ export type SidePanel =
   | 'localgraph'
   | 'history'
   | 'transcript'
+  | 'code'
+  | 'docs'
 
 export interface Toast {
   id: number
@@ -71,6 +74,13 @@ export interface Tab {
   relPath: string
   history: string[]
   index: number
+  /**
+   * A preview tab, the way an editor's is: opened by a single click, shown in
+   * italics, and reused by the next thing opened rather than piling up. One
+   * per pane at most. Anything that says "I mean to stay here" — editing it,
+   * double-clicking it, dragging it — keeps it.
+   */
+  preview: boolean
 }
 
 export interface Pane {
@@ -84,6 +94,23 @@ export interface Pane {
    * so an untouched pane is exactly 1.
    */
   size: number
+}
+
+/**
+ * Where an open should land.
+ *
+ * The default is the editor's own: the pane's preview tab, reused. `newTab`
+ * asks for a tab of its own, `keep` for a kept tab rather than a preview one,
+ * and `inPlace` navigates the tab already on screen — which is what following
+ * a link inside a note does, so that the tab's own Back still leads home.
+ */
+export interface OpenOpts {
+  pane?: number
+  newTab?: boolean
+  keep?: boolean
+  inPlace?: boolean
+  /** Line to reveal once the note is open, from a `[[Note#Heading]]` jump. */
+  line?: number
 }
 
 /**
@@ -237,8 +264,20 @@ interface StoneState {
   mentions: Mention[]
   comments: Comment[]
   snapshots: Snapshot[]
+  /** Permanent copies; these outlive the rolling snapshot window. */
+  backups: Backup[]
   sidePanel: SidePanel
   panelOpen: boolean
+  /** Which manual topic the Docs panel is reading, or null for its index. */
+  docsTopic: string | null
+  /**
+   * Where the caret is, so the Code panel can say which block you are in.
+   *
+   * Published by the editor on every selection change rather than read out of
+   * it on demand: a panel cannot subscribe to a CodeMirror view it does not
+   * own, and polling for a caret is how a panel ends up a frame behind.
+   */
+  caret: { relPath: string; line: number } | null
 
   trash: TrashEntry[]
 
@@ -258,7 +297,7 @@ interface StoneState {
   /** Pick a folder to watch. Resolves false when the picker was dismissed. */
   addLibraryFolder: (mode: 'index' | 'copy') => Promise<boolean>
   removeLibraryFolder: (id: string) => Promise<void>
-  openDocument: (absPath: string, opts?: { newTab?: boolean; pane?: number }) => void
+  openDocument: (absPath: string, opts?: OpenOpts) => void
 
   /**
    * The Today view's journal is bound to the day's note specifically, kept
@@ -313,7 +352,7 @@ interface StoneState {
   loadLocalGraph: () => Promise<void>
   patchNoteMeta: (relPath: string, patch: Partial<NoteMeta>) => void
 
-  openNote: (relPath: string, opts?: { newTab?: boolean; pane?: number; line?: number }) => Promise<void>
+  openNote: (relPath: string, opts?: OpenOpts) => Promise<void>
   openTarget: (target: string) => Promise<void>
   closeTab: (paneIndex: number, tabId: string) => void
   /** Close every tab in the pane except one — the menu action people expect. */
@@ -321,6 +360,10 @@ interface StoneState {
   /** Close everything to the right of a tab, for pruning a long session. */
   closeTabsToRight: (paneIndex: number, tabId: string) => void
   focusTab: (paneIndex: number, tabIndex: number) => void
+  /** Turn a preview tab into one that stays — the editor's "Keep Open". */
+  keepTab: (paneIndex: number, tabId: string) => void
+  /** Keep whichever tab is showing this target, wherever it is. */
+  keepOpen: (target: string) => void
   focusPane: (paneIndex: number) => void
   splitPane: () => void
   closePane: (paneIndex: number) => void
@@ -340,14 +383,10 @@ interface StoneState {
   saveDoc: (relPath: string) => Promise<void>
   consumeReveal: (relPath: string) => void
 
-  createNote: (
-    title: string,
-    folder?: string,
-    opts?: { pane?: number; newTab?: boolean }
-  ) => Promise<void>
+  createNote: (title: string, folder?: string, opts?: OpenOpts) => Promise<void>
   createFromTemplate: (title: string, templateRelPath: string) => Promise<void>
   /** Open the note that defines a folder, writing a starter one if needed. */
-  openFolderNote: (folderRel: string, opts?: { newTab?: boolean; pane?: number }) => Promise<void>
+  openFolderNote: (folderRel: string, opts?: OpenOpts) => Promise<void>
   deleteNote: (relPath: string) => Promise<void>
   renameNote: (relPath: string, title: string) => Promise<void>
   moveNote: (relPath: string, folder: string) => Promise<void>
@@ -384,6 +423,7 @@ interface StoneState {
   removeComment: (id: string) => Promise<void>
   loadSnapshots: () => Promise<void>
   restoreSnapshot: (id: string) => Promise<void>
+  restoreBackup: (id: string) => Promise<void>
 
   saveView: (view: SavedView) => Promise<void>
   deleteView: (id: string) => Promise<void>
@@ -413,6 +453,9 @@ interface StoneState {
   toggleAgenda: () => void
   setSidePanel: (panel: SidePanel) => void
   togglePanel: () => void
+  /** Open the manual, at a topic when one is named. */
+  openDocs: (topic?: string | null) => void
+  setCaret: (relPath: string, line: number) => void
 
   // ---------------------------------------------------------------- audio
   /** The recording in progress, or null. There is only ever one microphone. */
@@ -491,8 +534,67 @@ export function applyThemeAttribute(theme: Settings['theme']): void {
 }
 let dailyTimer: ReturnType<typeof setTimeout> | null = null
 
-function makeTab(relPath: string): Tab {
-  return { id: nextId('tab'), relPath, history: [relPath], index: 0 }
+function makeTab(relPath: string, preview = false): Tab {
+  return { id: nextId('tab'), relPath, history: [relPath], index: 0, preview }
+}
+
+/** Point a tab at something else, pushing onto its own back stack. */
+function navigate(tab: Tab, target: string, preview: boolean): Tab {
+  if (tab.relPath === target) return { ...tab, preview: tab.preview && preview }
+  const history = [...tab.history.slice(0, tab.index + 1), target].slice(-HISTORY_LIMIT)
+  return { ...tab, relPath: target, history, index: history.length - 1, preview }
+}
+
+/**
+ * Put a target in a pane the way an editor does.
+ *
+ * A single click is a *preview*: it lands in the pane's one preview tab,
+ * replacing whatever was in it, so browsing the sidebar leaves one tab behind
+ * rather than twenty. Ask for it again and you get the tab you already have.
+ * Everything that says you mean to stay — editing, double-clicking, dragging,
+ * an explicit new tab — keeps the tab, and the next preview then opens beside
+ * it instead of over it.
+ *
+ * New tabs land immediately right of the active one, so an opened note sits
+ * next to the one it was opened from rather than at the far end of a long strip.
+ */
+function place(panes: Pane[], paneIndex: number, target: string, opts: OpenOpts): Pane[] {
+  const pane = panes[paneIndex]
+  if (!pane) return panes
+
+  const preview = !opts.keep && !opts.newTab
+  const put = (tabs: Tab[], active: number): Pane[] =>
+    panes.map((p, i) => (i === paneIndex ? { ...p, tabs, active } : p))
+
+  if (!opts.newTab) {
+    // Already open here: show it, and let a keeping open pin it where it sits.
+    const open = pane.tabs.findIndex((t) => t.relPath === target)
+    if (open !== -1) {
+      const tabs = preview
+        ? pane.tabs
+        : pane.tabs.map((t, i) => (i === open ? { ...t, preview: false } : t))
+      return put(tabs, open)
+    }
+
+    // Following a link is navigation inside the tab you are reading, not an
+    // open somewhere else, so it moves that tab and leaves its status alone.
+    const reuse = opts.inPlace
+      ? pane.active
+      : preview
+        ? pane.tabs.findIndex((t) => t.preview)
+        : -1
+    if (reuse !== -1 && pane.tabs[reuse]) {
+      const tabs = pane.tabs.map((t, i) =>
+        i === reuse ? navigate(t, target, opts.inPlace ? t.preview : preview) : t
+      )
+      return put(tabs, reuse)
+    }
+  }
+
+  const tabs = [...pane.tabs]
+  const at = tabs.length === 0 ? 0 : Math.min(pane.active + 1, tabs.length)
+  tabs.splice(at, 0, makeTab(target, preview))
+  return put(tabs, at)
 }
 
 /** Past three columns a pane is narrower than a line of prose is long. */
@@ -519,11 +621,18 @@ function settle(
 
   const weight = (pane: Pane): number => (pane.size > 0 ? pane.size : 1)
   const total = next.reduce((sum, pane) => sum + weight(pane), 0)
-  next = next.map((pane) => ({
-    ...pane,
-    active: Math.max(0, Math.min(pane.active, pane.tabs.length - 1)),
-    size: (weight(pane) / total) * next.length
-  }))
+  next = next.map((pane) => {
+    const active = Math.max(0, Math.min(pane.active, pane.tabs.length - 1))
+    // Folding two splits together can bring two preview tabs into one pane,
+    // and a preview tab only means anything while there is one of it: the one
+    // being looked at stays provisional, the rest have earned their place.
+    const previews = pane.tabs.filter((tab) => tab.preview).length
+    const tabs =
+      previews > 1
+        ? pane.tabs.map((tab, i) => (i === active ? tab : { ...tab, preview: false }))
+        : pane.tabs
+    return { ...pane, tabs, active, size: (weight(pane) / total) * next.length }
+  })
 
   const preferred = preferId ? next.findIndex((pane) => pane.id === preferId) : -1
   const activePane = preferred !== -1 ? preferred : Math.max(0, Math.min(fallback, next.length - 1))
@@ -559,8 +668,11 @@ export const useStone = create<StoneState>((set, get) => ({
   mentions: [],
   comments: [],
   snapshots: [],
+  backups: [],
   sidePanel: 'backlinks',
   panelOpen: false,
+  docsTopic: null,
+  caret: null,
 
   trash: [],
 
@@ -855,27 +967,7 @@ export const useStone = create<StoneState>((set, get) => ({
 
     set((state) => {
       const paneIndex = Math.min(opts.pane ?? state.activePane, state.panes.length - 1)
-      const panes = state.panes.map((pane, index) => {
-        if (index !== paneIndex) return pane
-
-        const existing = pane.tabs.findIndex((t) => t.relPath === relPath)
-        if (existing !== -1 && !opts.newTab) return { ...pane, active: existing }
-
-        if (opts.newTab || pane.tabs.length === 0) {
-          const tabs = [...pane.tabs, makeTab(relPath)]
-          return { ...pane, tabs, active: tabs.length - 1 }
-        }
-
-        // Reuse the current tab, pushing onto its history and dropping whatever
-        // was ahead of it — the same contract a browser's address bar has.
-        const tabs = pane.tabs.map((tab, i) => {
-          if (i !== pane.active) return tab
-          if (tab.relPath === relPath) return tab
-          const history = [...tab.history.slice(0, tab.index + 1), relPath].slice(-HISTORY_LIMIT)
-          return { ...tab, relPath, history, index: history.length - 1 }
-        })
-        return { ...pane, tabs }
-      })
+      const panes = place(state.panes, paneIndex, relPath, opts)
 
       return {
         panes,
@@ -915,7 +1007,7 @@ export const useStone = create<StoneState>((set, get) => ({
     try {
       const hit = await window.stone.notes.resolveLink(target)
       if (hit) {
-        await get().openNote(hit.relPath, { line: hit.line ?? undefined })
+        await get().openNote(hit.relPath, { line: hit.line ?? undefined, inPlace: true })
         return
       }
     } catch {
@@ -933,7 +1025,7 @@ export const useStone = create<StoneState>((set, get) => ({
       get().documents.find((d) => d.name.toLowerCase() === needle) ??
       get().documents.find((d) => d.name.toLowerCase().startsWith(needle))
     if (doc) {
-      get().openDocument(doc.path)
+      get().openDocument(doc.path, { inPlace: true })
       return
     }
 
@@ -994,26 +1086,7 @@ export const useStone = create<StoneState>((set, get) => ({
     const target = docTarget(absPath)
     set((state) => {
       const paneIndex = Math.min(opts.pane ?? state.activePane, state.panes.length - 1)
-      const panes = state.panes.map((pane, index) => {
-        if (index !== paneIndex) return pane
-
-        const existing = pane.tabs.findIndex((t) => t.relPath === target)
-        if (existing !== -1 && !opts.newTab) return { ...pane, active: existing }
-
-        if (opts.newTab || pane.tabs.length === 0) {
-          const tabs = [...pane.tabs, makeTab(target)]
-          return { ...pane, tabs, active: tabs.length - 1 }
-        }
-
-        const tabs = pane.tabs.map((tab, i) => {
-          if (i !== pane.active) return tab
-          if (tab.relPath === target) return tab
-          const history = [...tab.history.slice(0, tab.index + 1), target].slice(-HISTORY_LIMIT)
-          return { ...tab, relPath: target, history, index: history.length - 1 }
-        })
-        return { ...pane, tabs }
-      })
-
+      const panes = place(state.panes, paneIndex, target, opts)
       return { panes, activePane: paneIndex, activeRelPath: target, view: 'notes' }
     })
   },
@@ -1073,6 +1146,37 @@ export const useStone = create<StoneState>((set, get) => ({
     if (relPath) void hydrate(relPath, set, get)
   },
 
+  keepTab(paneIndex, tabId) {
+    set((state) => ({
+      panes: state.panes.map((pane, index) =>
+        index !== paneIndex
+          ? pane
+          : { ...pane, tabs: pane.tabs.map((t) => (t.id === tabId ? { ...t, preview: false } : t)) }
+      )
+    }))
+  },
+
+  /**
+   * Keep every tab showing this target.
+   *
+   * Buffers are shared between panes, so a note being typed into is being kept
+   * everywhere it is on screen — a preview tab that quietly vanished from the
+   * split next door while its text was being edited would be a lost edit.
+   */
+  keepOpen(target) {
+    set((state) => {
+      if (!state.panes.some((pane) => pane.tabs.some((t) => t.preview && t.relPath === target))) {
+        return state
+      }
+      return {
+        panes: state.panes.map((pane) => ({
+          ...pane,
+          tabs: pane.tabs.map((t) => (t.relPath === target ? { ...t, preview: false } : t))
+        }))
+      }
+    })
+  },
+
   focusPane(paneIndex) {
     set((state) => {
       const pane = state.panes[paneIndex]
@@ -1122,7 +1226,8 @@ export const useStone = create<StoneState>((set, get) => ({
       const position = source?.tabs.findIndex((t) => t.id === from.tabId) ?? -1
       if (!source || position === -1) return state
 
-      const tab = source.tabs[position]
+      // Nobody drags a tab they were done with: a moved tab is a kept tab.
+      const tab = { ...source.tabs[position], preview: false }
       // Within one strip, lifting the tab out shifts every later slot down by
       // one — so the slot it was aimed at moves too.
       let index = to.index
@@ -1154,7 +1259,12 @@ export const useStone = create<StoneState>((set, get) => ({
       // column count holds and the cap has nothing to say about it.
       if (source.tabs.length > 1 && state.panes.length >= MAX_PANES) return state
 
-      const pane: Pane = { id: nextId('pane'), tabs: [tab], active: 0, size: 1 }
+      const pane: Pane = {
+        id: nextId('pane'),
+        tabs: [{ ...tab, preview: false }],
+        active: 0,
+        size: 1
+      }
       const panes = state.panes.map((p, i) =>
         i === from.pane ? { ...p, tabs: p.tabs.filter((t) => t.id !== from.tabId) } : p
       )
@@ -1280,6 +1390,10 @@ export const useStone = create<StoneState>((set, get) => ({
       return { docs: { ...state.docs, [relPath]: { ...doc, content, dirty: true } } }
     })
 
+    // Typing into a note is the clearest statement there is that you meant to
+    // open it, so it stops being a preview the moment it is edited.
+    get().keepOpen(relPath)
+
     const existing = saveTimers.get(relPath)
     if (existing) clearTimeout(existing)
     saveTimers.set(
@@ -1340,7 +1454,9 @@ export const useStone = create<StoneState>((set, get) => ({
       // Empty body: the filename is the title, so an H1 would just duplicate it.
       const { relPath } = await window.stone.notes.create(target, title, '')
       await get().refreshVault()
-      await get().openNote(relPath, opts)
+      // A note you just made is a note you meant to open, so it never lands in
+      // the preview tab that the next click would take back.
+      await get().openNote(relPath, { keep: true, ...opts })
       set({ view: 'notes' })
     } catch (err) {
       get().toast(describeError(err), 'error')
@@ -1351,7 +1467,7 @@ export const useStone = create<StoneState>((set, get) => ({
     try {
       const { relPath } = await window.stone.templates.create(title, templateRelPath)
       await get().refreshVault()
-      await get().openNote(relPath)
+      await get().openNote(relPath, { keep: true })
       set({ view: 'notes' })
     } catch (err) {
       get().toast(describeError(err), 'error')
@@ -1751,14 +1867,18 @@ export const useStone = create<StoneState>((set, get) => ({
   async loadSnapshots() {
     const relPath = get().activeRelPath
     if (!relPath) {
-      set({ snapshots: [] })
+      set({ snapshots: [], backups: [] })
       return
     }
-    try {
-      set({ snapshots: await window.stone.snapshots.list(relPath) })
-    } catch {
-      set({ snapshots: [] })
-    }
+    // Both stores, settled independently: with snapshots switched off the
+    // backups are the whole history, and a failure to read one should not
+    // blank the other.
+    const [snapshots, backups] = await Promise.all([
+      window.stone.snapshots.list(relPath).catch(() => []),
+      window.stone.backups.list(relPath).catch(() => [])
+    ])
+    if (get().activeRelPath !== relPath) return
+    set({ snapshots, backups })
   },
 
   async restoreSnapshot(id) {
@@ -1769,6 +1889,19 @@ export const useStone = create<StoneState>((set, get) => ({
       await get().openNote(relPath)
       await get().loadSnapshots()
       get().toast('Earlier version restored.', 'success')
+    } catch (err) {
+      get().toast(describeError(err), 'error')
+    }
+  },
+
+  async restoreBackup(id) {
+    const relPath = get().activeRelPath
+    if (!relPath) return
+    try {
+      await window.stone.backups.restore(relPath, id)
+      await get().openNote(relPath)
+      await get().loadSnapshots()
+      get().toast('Backup restored.', 'success')
     } catch (err) {
       get().toast(describeError(err), 'error')
     }
@@ -1905,6 +2038,16 @@ export const useStone = create<StoneState>((set, get) => ({
   },
   togglePanel() {
     set((s) => ({ panelOpen: !s.panelOpen }))
+  },
+  openDocs(topic = null) {
+    // A named topic always wins, so a command that opens one is not a no-op
+    // when the panel is already showing something else.
+    set({ sidePanel: 'docs', panelOpen: true, ...(topic === null ? {} : { docsTopic: topic }) })
+  },
+  setCaret(relPath, line) {
+    const caret = get().caret
+    if (caret && caret.relPath === relPath && caret.line === line) return
+    set({ caret: { relPath, line } })
   },
 
   // ---------------------------------------------------------------- audio

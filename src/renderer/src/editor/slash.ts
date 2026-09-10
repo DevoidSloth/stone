@@ -2,6 +2,8 @@ import type { Completion, CompletionContext, CompletionResult } from '@codemirro
 import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { useStone } from '../store'
+import { askForAnimation } from './animate'
+import { inProse } from './intellisense'
 
 /**
  * The slash menu.
@@ -73,6 +75,15 @@ const BLOCKS: Block[] = [
     snippet: '> [!warning] |',
     wholeLine: true
   },
+  {
+    label: 'Collapsible callout',
+    detail: 'A panel that starts folded',
+    keywords: 'callout fold collapse collapsed toggle hide aside details',
+    // The `-` is Obsidian's fold marker: it says the callout collapses, and
+    // that it opens collapsed. `+` is the same panel starting open.
+    snippet: '> [!note]- |\n> ',
+    wholeLine: true
+  },
   { label: 'Divider', detail: 'A horizontal rule', keywords: 'hr rule line separator', snippet: '---\n|', wholeLine: true },
   {
     label: 'Code block',
@@ -134,11 +145,50 @@ const BLOCKS: Block[] = [
     wholeLine: true
   },
   {
+    label: 'Type hierarchy',
+    detail: 'Classes and interfaces, and what extends what',
+    keywords:
+      'types type hierarchy class interface inheritance extends implements subtype uml design document abstract',
+    snippet:
+      '```types\nabstract class Animal\ninterface Winged\nclass Dog extends Animal\nclass Bird extends Animal implements Winged|\n```\n',
+    wholeLine: true
+  },
+  {
+    label: 'Recursion tree',
+    detail: 'A recurrence, unrolled, with what each level costs',
+    keywords:
+      'recurrence recursion tree master theorem cost level mergesort divide conquer complexity solve big-o',
+    snippet: '```tree\nrecurrence: 2T(n/2) + n|\n```\n',
+    wholeLine: true
+  },
+  {
+    label: 'Hash table',
+    detail: 'Buckets, chains and collisions, worked out for you',
+    keywords: 'hash table bucket chain collision probe linear quadratic load factor rehash map dictionary',
+    snippet: '```hash\nbuckets: 7\nkeys: 12 44 13 88 23 94 11|\n```\n',
+    wholeLine: true
+  },
+  {
+    label: 'Chart',
+    detail: 'Growth curves, or timings you measured',
+    keywords: 'chart plot graph growth curve big-o complexity benchmark timing measure axis log data',
+    snippet: '```chart\nx: 1..64\nn\nn log n\nn^2|\n```\n',
+    wholeLine: true
+  },
+  {
     label: 'Algorithm run',
     detail: 'An array and the steps, played back',
     keywords: 'algorithm animation sort search step trace array stack queue playback',
     snippet:
       '```algo\narray: 5 3 8 1\n---\ncompare 0 1\nswap 0 1\nnote |\n```\n',
+    wholeLine: true
+  },
+  {
+    label: 'Loop invariant',
+    detail: 'Three stills: on entry, held, on exit',
+    keywords: 'loop invariant still frame proof correctness entry exit sorted prefix range boundary gries',
+    snippet:
+      '```algo\narray: 5 3 8 1 9 2\nstills: 0 -1\n---\nrange sorted 0 0\nnote On entry: nothing is sorted\nmark 0..5 sorted\nrange sorted 0 5\nnote On exit: all of it is sorted|\n```\n',
     wholeLine: true
   },
   {
@@ -149,6 +199,13 @@ const BLOCKS: Block[] = [
     // the form Obsidian, GitHub and every LaTeX-aware editor also understand,
     // so the note stays readable outside Stone.
     snippet: '$$\n|\n$$',
+    wholeLine: true
+  },
+  {
+    label: 'Contents',
+    detail: "This note's headings, listed and clickable",
+    keywords: 'toc table of contents outline headings index navigation',
+    snippet: '```toc\n```\n|',
     wholeLine: true
   },
   {
@@ -173,6 +230,13 @@ const BLOCKS: Block[] = [
     action: (view) => void insertPickedFiles(view)
   },
   {
+    label: 'Animated algorithm',
+    detail: 'Claude draws it in the background while you keep writing',
+    keywords: 'algo algorithm animation animate claude ai sort search generate run',
+    snippet: '',
+    action: () => void askForAnimation('')
+  },
+  {
     label: 'Recording',
     detail: 'Record a lecture and stamp your notes as you type',
     keywords: 'record recording audio lecture mic microphone transcribe transcript voice',
@@ -189,6 +253,30 @@ const BLOCKS: Block[] = [
   { label: 'Embed a note', detail: 'Transclude another page', keywords: 'embed transclude include', snippet: '![[|]]' },
   { label: 'Tag', detail: 'File this note', keywords: 'tag label', snippet: '#|' },
   { label: 'Footnote', detail: 'A numbered aside', keywords: 'footnote note reference', snippet: '[^|]' },
+  {
+    label: 'Inline footnote',
+    detail: 'The aside itself, written in place',
+    keywords: 'footnote inline aside note reference',
+    snippet: '^[|]'
+  },
+  {
+    label: 'Comment',
+    detail: 'In the file, not in the export',
+    keywords: 'comment hidden private aside todo note to self',
+    snippet: '%%|%%'
+  },
+  {
+    label: 'Superscript',
+    detail: 'Raised text — x², a citation',
+    keywords: 'superscript power exponent raised sup',
+    snippet: '<sup>|</sup>'
+  },
+  {
+    label: 'Subscript',
+    detail: 'Lowered text — H₂O, an index',
+    keywords: 'subscript index lowered sub chemistry',
+    snippet: '<sub>|</sub>'
+  },
   { label: 'Inline maths', detail: 'An inline equation', keywords: 'math inline latex', snippet: '$|$' },
   {
     label: "Today's date",
@@ -258,6 +346,10 @@ export async function insertPickedFiles(view: EditorView): Promise<void> {
  * date like `and/or` never opens the menu mid-sentence.
  */
 export function slashMenu(context: CompletionContext): CompletionResult | null {
+  // Prose only. A block menu over a division sign, a comment marker or a path
+  // is the reason `/` was a safe trigger everywhere until code blocks started
+  // suggesting things of their own — see `intellisense`.
+  if (!inProse(context.state, context.pos)) return null
   const match = context.matchBefore(/(?:^|\s)\/[\w -]*/)
   if (!match) return null
 

@@ -220,6 +220,15 @@ body.is-resizing * {
   padding: 0;
 }
 
+/*
+ * A preview tab: opened by a single click and reused by the next one. The
+ * italic is the editor's own signal, and it is the whole difference — a tab
+ * you can rely on staying put looks upright.
+ */
+.tab[data-preview] .tab__label {
+  font-style: italic;
+}
+
 .tab__dot {
   width: 5px;
   height: 5px;
@@ -663,6 +672,18 @@ body.is-resizing * {
 .version__main span {
   font-size: var(--t-2xs);
   color: var(--text-ghost);
+}
+
+/* Marks a version held in the permanent backup archive rather than the rolling
+   snapshot window — the ones that will still be there in a year. */
+.version__kept {
+  margin-left: var(--sp-1);
+  padding: 0 4px;
+  border-radius: var(--r-xs);
+  background: var(--bg-surface);
+  color: var(--text-ghost);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .version__preview {
@@ -1698,4 +1719,438 @@ body.is-resizing .colresizer {
   color: var(--text-ghost);
   font-size: var(--t-2xs);
   font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------- inspector: the rule */
+
+/*
+ * The two panels about the note as a program sit under a rule. The rail is
+ * otherwise a flat run of ten icons, and a flat run of ten is a list nobody
+ * reads — one hairline turns it into two groups of a length people scan.
+ */
+.inspector__tab[data-rule] {
+  margin-top: 5px;
+  border-top: 1px solid var(--border-hair);
+  padding-top: 5px;
+  height: 33px;
+}
+
+/* --------------------------------------------------------------- the manual */
+
+.docs {
+  display: flex;
+  flex-direction: column;
+}
+
+.docs__searchbar {
+  position: sticky;
+  /* The inspector's own top padding, so the bar covers it once it is stuck. */
+  top: calc(var(--sp-2) * -1);
+  z-index: 1;
+  margin: calc(var(--sp-2) * -1) 0 var(--sp-2);
+  padding: var(--sp-2) 0 var(--sp-1);
+  background: var(--bg-sidebar);
+}
+
+.docs__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 var(--sp-2);
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  background: var(--bg-input);
+  color: var(--text-ghost);
+}
+
+.docs__field {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: var(--t-xs);
+}
+
+.docs__field::placeholder {
+  color: var(--text-ghost);
+}
+
+.docs__field:focus {
+  outline: none;
+}
+
+.docs__back {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 var(--sp-2);
+  padding: var(--sp-1) 0;
+  border: 0;
+  background: none;
+  color: var(--text-faint);
+  font-size: var(--t-2xs);
+  cursor: pointer;
+}
+
+.docs__back:hover {
+  color: var(--text);
+}
+
+.docs__title {
+  margin: var(--sp-1) var(--sp-2) 0;
+  font-size: var(--t-lg);
+  font-weight: 600;
+  letter-spacing: var(--track-snug);
+  color: var(--text-strong);
+}
+
+.docs__blurb {
+  margin: 2px var(--sp-2) 0;
+  font-size: var(--t-xs);
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+.docs__section {
+  padding: 0 var(--sp-2);
+  /* Clears the sticky search bar, so a section scrolled to by a search hit
+     lands under it rather than half behind it. */
+  scroll-margin-top: 44px;
+}
+
+.docs__h {
+  margin: var(--sp-4) 0 var(--sp-2);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.docs__p,
+.docs__list {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--t-xs);
+  line-height: 1.65;
+  color: var(--text-muted);
+}
+
+.docs__list {
+  padding-left: var(--sp-4);
+}
+
+.docs__list li {
+  margin-bottom: var(--sp-1);
+}
+
+.docs__p code,
+.docs__list code,
+.docs__note code,
+.docs__caption code,
+.docs__table code {
+  padding: 1px 4px;
+  border-radius: var(--r-xs);
+  background: var(--wash-gray);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--text);
+}
+
+.docs__p b,
+.docs__list b,
+.docs__note b {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/*
+ * An aside, not a warning. It carries the caveat that would otherwise be a
+ * three-line parenthesis, and the accent bar is the whole of its decoration.
+ */
+.docs__note {
+  margin: 0 0 var(--sp-2);
+  padding: 6px var(--sp-2);
+  border-left: 2px solid var(--border);
+  border-radius: 0 var(--r-xs) var(--r-xs) 0;
+  background: var(--bg-surface);
+  font-size: var(--t-2xs);
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.docs__table {
+  width: 100%;
+  margin: 0 0 var(--sp-3);
+  border-collapse: collapse;
+  font-size: var(--t-2xs);
+  line-height: 1.5;
+  table-layout: fixed;
+}
+
+.docs__table th {
+  padding: 0 0 3px;
+  border-bottom: 1px solid var(--border-hair);
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-faint);
+}
+
+.docs__table td {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border-faint);
+  color: var(--text-muted);
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.docs__table td:first-child {
+  padding-right: var(--sp-2);
+  color: var(--text);
+}
+
+.docs__mono {
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+}
+
+.docs__example {
+  margin: 0 0 var(--sp-3);
+}
+
+/*
+ * Examples scroll rather than wrap. A fence's indentation is load-bearing —
+ * `heap:` and the boxes under it mean different things — and soft-wrapping a
+ * 300px panel would show the reader a shape the block does not have.
+ */
+.docs__code {
+  margin: 0;
+  padding: var(--sp-2);
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--t-2xs);
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre;
+  tab-size: 2;
+}
+
+.docs__caption {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-2xs);
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+/* Chrome on hover, like everything else in Stone. */
+.docs__exampleActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
+  opacity: 0;
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+
+.docs__example:hover .docs__exampleActions,
+.docs__exampleActions:focus-within {
+  opacity: 1;
+}
+
+/* ------------------------------------------------------- the code inspector */
+
+.codepanel__head {
+  margin: 0 var(--sp-2) var(--sp-2);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border-hair);
+}
+
+.codepanel__mode {
+  display: block;
+  font-size: var(--t-2xs);
+  line-height: 1.5;
+  color: var(--text-ghost);
+}
+
+.codepanel__mode[data-on='true'] {
+  color: var(--text-faint);
+}
+
+.codepanel__session {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-top: 3px;
+  font-size: var(--t-2xs);
+  color: var(--green);
+}
+
+.codepanel__session span {
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+ * One block, as a frame.
+ *
+ * The block the caret is in is the current frame and is marked the way a
+ * debugger marks one — a bar down the side rather than a fill, so the list
+ * still reads as a list when you are scrolled away from it.
+ */
+.frame {
+  margin: 0 var(--sp-2) var(--sp-3);
+  padding-left: var(--sp-2);
+  border-left: 2px solid var(--border-faint);
+}
+
+.frame[data-current='true'] {
+  border-left-color: var(--accent);
+}
+
+.frame__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-strong);
+}
+
+.frame__head:hover .frame__lang {
+  text-decoration: underline;
+}
+
+.frame__lang {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--t-xs);
+  font-weight: 600;
+}
+
+.frame__lines {
+  font-family: var(--font-mono);
+  font-size: var(--t-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-ghost);
+}
+
+.frame__status {
+  font-size: var(--t-2xs);
+  line-height: 1.5;
+  color: var(--text-ghost);
+}
+
+.frame__status[data-tone='ok'] {
+  color: var(--green);
+}
+
+.frame__status[data-tone='bad'] {
+  color: var(--red);
+}
+
+.frame__status[data-tone='wait'] {
+  color: var(--yellow);
+}
+
+.frame__status[data-tone='live'] {
+  color: var(--accent);
+}
+
+/* The last thing it printed — the one line a run is usually watched for. */
+.frame__value {
+  margin-top: 1px;
+  font-family: var(--font-mono);
+  font-size: var(--t-2xs);
+  color: var(--text-muted);
+}
+
+.frame__group {
+  margin: var(--sp-2) 0 2px;
+  font-size: var(--t-2xs);
+  font-weight: 600;
+  color: var(--text-ghost);
+}
+
+.frame__none {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-2xs);
+  color: var(--text-ghost);
+}
+
+/* One declaration: what kind of thing, what it is called, and as what. */
+.sym {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 2px var(--sp-1);
+  margin-left: calc(var(--sp-1) * -1);
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.sym:hover {
+  background: var(--bg-hover);
+}
+
+/*
+ * The kind, as a fixed-width tag. Fixed rather than shrink-to-fit so every name
+ * in the list starts at the same x — a ragged left edge is what makes a symbol
+ * list unscannable, and scanning it is the only thing it is for.
+ */
+.sym__kind {
+  flex: 0 0 auto;
+  width: 34px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-ghost);
+}
+
+.sym__kind[data-kind='function'] {
+  color: var(--code-function);
+}
+
+.sym__kind[data-kind='class'],
+.sym__kind[data-kind='type'] {
+  color: var(--code-type);
+}
+
+.sym__kind[data-kind='variable'],
+.sym__kind[data-kind='field'] {
+  color: var(--code-property);
+}
+
+.sym__kind[data-kind='constant'] {
+  color: var(--code-number);
+}
+
+.sym__kind[data-kind='import'] {
+  color: var(--code-keyword);
+}
+
+.sym__name {
+  flex: 0 1 auto;
+  font-family: var(--font-mono);
+  font-size: var(--t-2xs);
+  color: var(--text-strong);
+}
+
+.sym__detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-2xs);
+  color: var(--text-ghost);
 }

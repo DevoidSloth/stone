@@ -56,6 +56,7 @@ import {
 } from './library'
 import { setCaptureShortcut, setTrayEnabled } from './capture'
 import * as claude from './claude'
+import { objectDiagram } from './java-objects'
 import * as audio from './audio'
 import * as whisper from './transcribe'
 import { cancelRun, runCode } from './run-code'
@@ -471,6 +472,19 @@ export function registerIpc(): void {
   handle('snapshots:restore', async (relPath: string, id: string) => {
     const body = await vault.snapshot(relPath, id)
     if (body === null) throw new Error('That version is no longer available.')
+    const result = await vault.saveNote(relPath, body)
+    if (!result.ok) throw new Error(result.error)
+    return { hash: result.hash }
+  })
+
+  // --------------------------------------------------------------- backups
+
+  handle('backups:list', (relPath: string) => vault.backups(relPath))
+  handle('backups:read', (relPath: string, id: string) => vault.backup(relPath, id))
+
+  handle('backups:restore', async (relPath: string, id: string) => {
+    const body = await vault.backup(relPath, id)
+    if (body === null) throw new Error('That backup is no longer available.')
     const result = await vault.saveNote(relPath, body)
     if (!result.ok) throw new Error(result.error)
     return { hash: result.hash }
@@ -1387,6 +1401,30 @@ export function registerIpc(): void {
   )
 
   handle('code:sessions', () => listSessions())
+
+  /**
+   * The object diagram a Java block has, drawn from the objects themselves.
+   *
+   * This runs the block, so it is behind the same consent the Run button is —
+   * asked once, in the renderer, and remembered. The time limit is the one
+   * runs already have: a block that will not finish has nothing to draw.
+   */
+  handle(
+    'java:objects',
+    async (request: { code: string; prelude?: string[]; notePath: string | null }) => {
+      const settings = await loadSettings()
+      const cwd =
+        vault.vaultPath && request.notePath
+          ? path.dirname(toAbsPath(vault.vaultPath, request.notePath))
+          : vault.vaultPath
+      return await objectDiagram({
+        code: request.code,
+        prelude: request.prelude ?? [],
+        cwd,
+        timeoutMs: Math.max(1, settings.codeRunTimeout) * 1000
+      })
+    }
+  )
 
   // The blocks in a note show which session they belong to and how many blocks
   // have been through it, so the renderer is told whenever that changes.

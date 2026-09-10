@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useRef} from 'react'
 import type { LibraryDoc, NoteMeta } from '@shared/types'
 import { folderDefinedBy } from '@shared/folder-note'
-import { docTarget, useStone } from '../store'
+import { docTarget, useStone, type OpenOpts } from '../store'
 import { MONTHS, relativeDay, toISODate } from '../lib/dates'
 import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
 import { exportNoteToPdf } from '../export-note'
@@ -162,7 +162,7 @@ function NoteRow({
   depth: number
   active: boolean
   favorited: boolean
-  onOpen: (relPath: string, newTab: boolean) => void
+  onOpen: (relPath: string, opts: OpenOpts) => void
   onMenu: (event: React.MouseEvent, note: NoteMeta) => void
 }) {
   const open = note.taskCount - note.doneCount
@@ -177,9 +177,12 @@ function NoteRow({
       draggable
       style={{ paddingLeft: 6 + depth * 14 }}
       data-tip={`${note.title} · edited ${relativeDay(toISODate(new Date(note.mtime)))}`}
-      onClick={(e) => onOpen(note.relPath, e.metaKey || e.ctrlKey)}
+      onClick={(e) => onOpen(note.relPath, { newTab: e.metaKey || e.ctrlKey })}
+      // One click previews, two keep it: the second click is what says this is
+      // where you are working rather than something you were looking through.
+      onDoubleClick={() => onOpen(note.relPath, { keep: true })}
       onAuxClick={(e) => {
-        if (e.button === 1) onOpen(note.relPath, true)
+        if (e.button === 1) onOpen(note.relPath, { newTab: true })
       }}
       onContextMenu={(e) => onMenu(e, note)}
       onDragStart={(e) => {
@@ -217,8 +220,8 @@ function FolderRows({
   toggle: (path: string) => void
   activeRelPath: string | null
   favorites: string[]
-  onOpen: (relPath: string, newTab: boolean) => void
-  onOpenFolder: (path: string, newTab: boolean) => void
+  onOpen: (relPath: string, opts: OpenOpts) => void
+  onOpenFolder: (path: string, opts: OpenOpts) => void
   onNoteMenu: (event: React.MouseEvent, note: NoteMeta) => void
   onFolderMenu: (event: React.MouseEvent, path: string) => void
   onDropNote: (relPath: string, folder: string) => void
@@ -281,9 +284,10 @@ function FolderRows({
                     ? `Open ${child.name}`
                     : `Open ${child.name} — its folder note is written on first open`
                 }
-                onClick={(e) => onOpenFolder(child.path, e.metaKey || e.ctrlKey)}
+                onClick={(e) => onOpenFolder(child.path, { newTab: e.metaKey || e.ctrlKey })}
+                onDoubleClick={() => onOpenFolder(child.path, { keep: true })}
                 onAuxClick={(e) => {
-                  if (e.button === 1) onOpenFolder(child.path, true)
+                  if (e.button === 1) onOpenFolder(child.path, { newTab: true })
                 }}
               >
                 <span className="treerow__icon">
@@ -449,7 +453,7 @@ function DocRow({
   doc: LibraryDoc
   depth: number
   active: boolean
-  onOpen: (path: string, newTab: boolean) => void
+  onOpen: (path: string, opts: OpenOpts) => void
 }) {
   return (
     <button
@@ -461,9 +465,10 @@ function DocRow({
       aria-current={active}
       style={{ paddingLeft: 6 + depth * 14 }}
       data-tip={`${doc.name} · ${doc.path}`}
-      onClick={(e) => onOpen(doc.path, e.metaKey || e.ctrlKey)}
+      onClick={(e) => onOpen(doc.path, { newTab: e.metaKey || e.ctrlKey })}
+      onDoubleClick={() => onOpen(doc.path, { keep: true })}
       onAuxClick={(e) => {
-        if (e.button === 1) onOpen(doc.path, true)
+        if (e.button === 1) onOpen(doc.path, { newTab: true })
       }}
     >
       <span className="treerow__twist" />
@@ -499,7 +504,7 @@ function DocFolderRows({
   collapsed: Set<string>
   toggle: (path: string) => void
   activeRelPath: string | null
-  onOpen: (path: string, newTab: boolean) => void
+  onOpen: (path: string, opts: OpenOpts) => void
 }) {
   return (
     <>
@@ -573,8 +578,8 @@ function DocRows({ filter }: { filter: string }) {
     })
   }
 
-  const onOpen = (path: string, newTab: boolean): void => {
-    openDocument(path, { newTab })
+  const onOpen = (path: string, opts: OpenOpts): void => {
+    openDocument(path, opts)
   }
 
   const q = filter.trim().toLowerCase()
@@ -740,12 +745,12 @@ export function Sidebar() {
     [favorites, notes]
   )
 
-  const open = (relPath: string, newTab: boolean): void => {
-    void openNote(relPath, { newTab })
+  const open = (relPath: string, opts: OpenOpts): void => {
+    void openNote(relPath, opts)
   }
 
-  const openFolder = (path: string, newTab: boolean): void => {
-    void openFolderNote(path, { newTab })
+  const openFolder = (path: string, opts: OpenOpts): void => {
+    void openFolderNote(path, opts)
   }
 
   const noteMenu = (event: React.MouseEvent, note: NoteMeta): void => {

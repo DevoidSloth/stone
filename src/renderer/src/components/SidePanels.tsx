@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import type { GraphData, NoteMeta, PropertyType } from '@shared/types'
+import type { Backup, GraphData, NoteMeta, PropertyType, Snapshot } from '@shared/types'
 import {
   isListValue,
   listFrontmatterKeys,
@@ -12,7 +12,11 @@ import { RESERVED_KEYS } from '@shared/properties'
 import { folderDefinedBy, homeFolder } from '@shared/folder-note'
 import { useStone, type SidePanel } from '../store'
 import { TranscriptPanel } from './TranscriptPanel'
+import { CodePanel } from './CodePanel'
+import { DocsPanel } from './DocsPanel'
 import {
+  IconBook,
+  IconBraces,
   IconComment,
   IconGraph,
   IconHistory,
@@ -31,12 +35,22 @@ import { describeError } from '../lib/errors'
 /**
  * The right-hand inspector.
  *
- * Six panels over one note, switched by a rail of icons rather than stacked:
+ * Ten panels over one note, switched by a rail of icons rather than stacked:
  * an outline and a backlink list and a property editor all visible at once
- * would each get a third of the height and none of them would be usable.
+ * would each get a tenth of the height and none of them would be usable.
+ *
+ * The last two are about the note as a *program* rather than as a page — what
+ * its code blocks declare, and the manual for the syntax that makes them work —
+ * so they sit at the foot of the rail, under a rule.
  */
 
-const PANELS: { id: SidePanel; label: string; icon: (p: { size?: number }) => ReactElement }[] = [
+const PANELS: {
+  id: SidePanel
+  label: string
+  icon: (p: { size?: number }) => ReactElement
+  /** Draw a rule above this tab: the ones below it are about the note as code. */
+  rule?: boolean
+}[] = [
   { id: 'outline', label: 'Outline', icon: IconOutline },
   { id: 'backlinks', label: 'Links', icon: IconLink },
   { id: 'properties', label: 'Properties', icon: IconProperties },
@@ -44,7 +58,9 @@ const PANELS: { id: SidePanel; label: string; icon: (p: { size?: number }) => Re
   { id: 'comments', label: 'Comments', icon: IconComment },
   { id: 'localgraph', label: 'Local graph', icon: IconGraph },
   { id: 'history', label: 'Versions', icon: IconHistory },
-  { id: 'transcript', label: 'Transcript', icon: IconWaveform }
+  { id: 'transcript', label: 'Transcript', icon: IconWaveform },
+  { id: 'code', label: 'Code', icon: IconBraces, rule: true },
+  { id: 'docs', label: 'Docs', icon: IconBook }
 ]
 
 // ---------------------------------------------------------------- relations
@@ -645,14 +661,43 @@ function GraphRing({
   )
 }
 
-// ---------------------------------------------------------------- snapshots
+// ------------------------------------------------------------------ history
+
+/**
+ * One row per version, not one per store. A save writes a rolling snapshot and
+ * a permanent backup of the same text under the same id, so merging on the id
+ * is what keeps every version from appearing twice — and it lets a version
+ * whose snapshot has since rotated out still show up, on the strength of the
+ * backup alone.
+ */
+interface Version {
+  id: string
+  savedAt: number
+  size: number
+  permanent: boolean
+}
+
+function mergeVersions(snapshots: Snapshot[], backups: Backup[]): Version[] {
+  const byId = new Map<string, Version>()
+  for (const snapshot of snapshots) {
+    byId.set(snapshot.id, { ...snapshot, permanent: false })
+  }
+  for (const backup of backups) {
+    byId.set(backup.id, { ...backup, permanent: true })
+  }
+  return [...byId.values()].sort((a, b) => b.savedAt - a.savedAt)
+}
 
 function HistoryPanel() {
   const snapshots = useStone((s) => s.snapshots)
+  const backups = useStone((s) => s.backups)
   const loadSnapshots = useStone((s) => s.loadSnapshots)
   const restoreSnapshot = useStone((s) => s.restoreSnapshot)
+  const restoreBackup = useStone((s) => s.restoreBackup)
   const relPath = useStone((s) => s.activeRelPath)
   const [preview, setPreview] = useState<{ id: string; body: string } | null>(null)
+
+  const versions = useMemo(() => mergeVersions(snapshots, backups), [snapshots, backups])
 
   useEffect(() => {
     void loadSnapshots()
@@ -660,7 +705,7 @@ function HistoryPanel() {
   }, [relPath, loadSnapshots])
 
   if (!relPath) return <p className="panel__empty">Open a note to see its history.</p>
-  if (snapshots.length === 0) {
+  if (versions.length === 0) {
     return (
       <p className="panel__empty">
         Versions are kept each time a note is saved with different content. This one has no
@@ -671,35 +716,43 @@ function HistoryPanel() {
 
   return (
     <>
-      <div className="panel__section eyebrow">{snapshots.length} earlier versions</div>
-      {snapshots.map((snapshot) => (
-        <div key={snapshot.id} className="version">
+      <div className="panel__section eyebrow">{versions.length} earlier versions</div>
+      {versions.map((version) => (
+        <div key={version.id} className="version">
           <button
             type="button"
             className="version__main"
             onClick={() => {
-              if (preview?.id === snapshot.id) {
+              if (preview?.id === version.id) {
                 setPreview(null)
                 return
               }
-              void window.stone.snapshots.read(relPath, snapshot.id).then((body) => {
-                if (body !== null) setPreview({ id: snapshot.id, body })
+              const read = version.permanent
+                ? window.stone.backups.read(relPath, version.id)
+                : window.stone.snapshots.read(relPath, version.id)
+              void read.then((body) => {
+                if (body !== null) setPreview({ id: version.id, body })
               })
             }}
           >
-            <b>{new Date(snapshot.savedAt).toLocaleString()}</b>
-            <span>{(snapshot.size / 1024).toFixed(1)} kB</span>
+            <b>{new Date(version.savedAt).toLocaleString()}</b>
+            <span>
+              {(version.size / 1024).toFixed(1)} kB
+              {version.permanent && <span className="version__kept">kept</span>}
+            </span>
           </button>
           <button
             type="button"
             className="btn btn--sm"
             data-tip="Replace the note with this version"
-            onClick={() => void restoreSnapshot(snapshot.id)}
+            onClick={() =>
+              void (version.permanent ? restoreBackup(version.id) : restoreSnapshot(version.id))
+            }
           >
             <IconRestore size={12} />
             Restore
           </button>
-          {preview?.id === snapshot.id && <pre className="version__preview">{preview.body}</pre>}
+          {preview?.id === version.id && <pre className="version__preview">{preview.body}</pre>}
         </div>
       ))}
     </>
@@ -723,9 +776,10 @@ export function SidePanels() {
   return (
     <div className={`inspector ${open ? '' : 'inspector--collapsed'}`}>
       <div className="inspector__rail">
-        {PANELS.map(({ id, label, icon: Glyph }) => (
+        {PANELS.map(({ id, label, icon: Glyph, rule }) => (
           <button
             key={id}
+            data-rule={rule ? true : undefined}
             type="button"
             className="inspector__tab"
             aria-pressed={open && panel === id}
@@ -761,6 +815,8 @@ export function SidePanels() {
             {panel === 'localgraph' && <LocalGraphPanel />}
             {panel === 'history' && <HistoryPanel />}
             {panel === 'transcript' && <TranscriptPanel />}
+            {panel === 'code' && <CodePanel />}
+            {panel === 'docs' && <DocsPanel />}
           </div>
         </div>
       )}

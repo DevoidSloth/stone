@@ -15,6 +15,10 @@ const HEADING_RE = /^(#{1,6})\s+(.*)$/
 const BLOCK_ID_RE = /\s\^([A-Za-z0-9-]+)\s*$/
 const DAILY_NAME_RE = /(\d{4}-\d{2}-\d{2})/
 const FENCE_RE = /^\s*(```|~~~)/
+/** `%%` alone on a line, opening or closing a comment block. */
+const COMMENT_FENCE_RE = /^\s*%%\s*$/
+/** `%%an aside%%` inside a line. */
+const INLINE_COMMENT_RE = /%%[\s\S]*?%%/g
 
 export interface ParsedNote {
   meta: NoteMeta
@@ -117,16 +121,30 @@ export function parseNote(
   const tags = new Set<string>(asStringArray(frontmatter.tags))
   const today = new Date()
   let inFence = false
+  let inComment = false
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
+    const source = lines[i]
 
-    if (FENCE_RE.test(line)) {
+    if (FENCE_RE.test(source)) {
       inFence = !inFence
       continue
     }
     if (inFence) continue
 
+    /*
+     * `%%` … `%%` is commented out, and commenting a line out has to mean it
+     * stops counting. A task inside one that still turned up in the Tasks view
+     * and on the calendar would make the comment syntax useless for the thing
+     * people reach for it first: parking something without deleting it.
+     */
+    if (COMMENT_FENCE_RE.test(source)) {
+      inComment = !inComment
+      continue
+    }
+    if (inComment) continue
+
+    const line = source.replace(INLINE_COMMENT_RE, '')
     const absLine = i + frontmatterLines
 
     // Links and tags are collected from task lines too — a task that links to a

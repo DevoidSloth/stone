@@ -43,6 +43,19 @@ const DOC = [
   '> [!note] Callout',
   '> body of it',
   'p8 hotel',
+  '- Groceries',
+  '  - Produce',
+  '    - Apples, and enough words after them that the item has to wrap onto a',
+  '      second line',
+  '    - Pears',
+  '  - Tinned',
+  '- Errands',
+  '  1. Post office',
+  '  2. Library',
+  '  3. Chemist',
+  '- [ ] Pack the car',
+  '  - [x] Charger',
+  '  - [/] Maps',
   'p9 india'
 ].join('\n')
 
