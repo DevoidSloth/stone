@@ -2,6 +2,8 @@ import type { Completion, CompletionContext, CompletionResult } from '@codemirro
 import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { useStone } from '../store'
+import { CARET } from '../lib/latex'
+import { allPresets, type Datatype } from './datatypes'
 import { askForAnimation } from './animate'
 import { inProse } from './intellisense'
 
@@ -13,8 +15,16 @@ import { inProse } from './intellisense'
  * than a bespoke popup so that arrow keys, Enter, Escape, filtering and
  * scroll-into-view all behave the way every other menu in the editor does.
  *
- * Each command replaces the typed `/query` with its snippet. `|` marks where
- * the caret should end up, and is stripped before insertion.
+ * Each command replaces the typed `/query` with its snippet, and `CARET` marks
+ * where the cursor should end up.
+ *
+ * Half the menu is written here — the markdown a note is made of, which has no
+ * variations worth listing — and half comes from `datatypes`, which holds
+ * several presets per fence. Those extra presets stay hidden until the query
+ * names them, so a bare `/` is still a menu of *kinds* rather than eight ways
+ * to draw a hash table, and `/hash` or `/probe` is a menu of variations. That
+ * is the whole trick: the second and third preset for a fence are worth having
+ * precisely when someone is looking for one, and worth nothing before that.
  */
 
 interface Block {
@@ -25,6 +35,12 @@ interface Block {
   /** Replace the whole line rather than just the slash token. */
   wholeLine?: boolean
   /**
+   * A variation on a block rather than a block: shown once the query names it.
+   */
+  secondary?: boolean
+  /** The datatype it came from, for the preview beside the row. */
+  type?: Datatype
+  /**
    * Runs instead of inserting the snippet, for a block that cannot be written
    * as text — picking a file takes a dialog and a round trip to main, so the
    * slash token is cleared first and the markdown arrives when it arrives.
@@ -32,47 +48,68 @@ interface Block {
   action?: (view: EditorView) => void
 }
 
+/** The presets in `datatypes`, as menu entries. */
+function presetBlocks(): Block[] {
+  return allPresets().map(({ type, preset }) => ({
+    label: preset.label,
+    detail: preset.detail,
+    // The fence word is a keyword whether or not the preset mentions it, so
+    // `/algo` finds every algorithm preset and `/stone` every query one.
+    keywords: `${preset.keywords} ${type.id} ${type.fence ?? ''} ${type.label.toLowerCase()}`,
+    snippet: preset.code,
+    wholeLine: true,
+    secondary: !preset.headline,
+    type
+  }))
+}
+
 const BLOCKS: Block[] = [
-  { label: 'Heading 1', detail: 'Large section title', keywords: 'h1 title', snippet: '# |', wholeLine: true },
-  { label: 'Heading 2', detail: 'Section title', keywords: 'h2 subtitle', snippet: '## |', wholeLine: true },
-  { label: 'Heading 3', detail: 'Sub-section', keywords: 'h3', snippet: '### |', wholeLine: true },
-  { label: 'Bulleted list', detail: 'A simple list', keywords: 'ul bullet point', snippet: '- |', wholeLine: true },
-  { label: 'Numbered list', detail: 'An ordered list', keywords: 'ol ordered number', snippet: '1. |', wholeLine: true },
-  { label: 'To-do', detail: 'A task with a checkbox', keywords: 'task checkbox todo', snippet: '- [ ] |', wholeLine: true },
+  { label: 'Heading 1', detail: 'Large section title', keywords: 'h1 title', snippet: `# ${CARET}`, wholeLine: true },
+  { label: 'Heading 2', detail: 'Section title', keywords: 'h2 subtitle', snippet: `## ${CARET}`, wholeLine: true },
+  { label: 'Heading 3', detail: 'Sub-section', keywords: 'h3', snippet: `### ${CARET}`, wholeLine: true },
+  { label: 'Bulleted list', detail: 'A simple list', keywords: 'ul bullet point', snippet: `- ${CARET}`, wholeLine: true },
+  {
+    label: 'Numbered list',
+    detail: 'An ordered list',
+    keywords: 'ol ordered number',
+    snippet: `1. ${CARET}`,
+    wholeLine: true
+  },
+  { label: 'To-do', detail: 'A task with a checkbox', keywords: 'task checkbox todo', snippet: `- [ ] ${CARET}`, wholeLine: true },
   {
     label: 'To-do with a date',
     detail: 'A task due tomorrow',
     keywords: 'task due date schedule',
-    snippet: '- [ ] | @tomorrow',
+    snippet: `- [ ] ${CARET} @tomorrow`,
     wholeLine: true
   },
   {
     label: 'Repeating to-do',
     detail: 'A task that comes back',
     keywords: 'task repeat recurring weekly',
-    snippet: '- [ ] | @tomorrow &weekly',
+    snippet: `- [ ] ${CARET} @tomorrow &weekly`,
     wholeLine: true
   },
-  { label: 'Quote', detail: 'Set text apart', keywords: 'blockquote citation', snippet: '> |', wholeLine: true },
+  { label: 'Quote', detail: 'Set text apart', keywords: 'blockquote citation', snippet: `> ${CARET}`, wholeLine: true },
   {
     label: 'Callout',
     detail: 'A tinted panel',
     keywords: 'note info admonition aside',
-    snippet: '> [!note] |',
+    snippet: `> [!note] ${CARET}`,
     wholeLine: true
   },
   {
     label: 'Callout — tip',
     detail: 'A green panel',
     keywords: 'tip hint success',
-    snippet: '> [!tip] |',
+    snippet: `> [!tip] ${CARET}`,
     wholeLine: true
   },
   {
     label: 'Callout — warning',
     detail: 'A yellow panel',
     keywords: 'warning caution careful',
-    snippet: '> [!warning] |',
+    snippet: `> [!warning] ${CARET}`,
     wholeLine: true
   },
   {
@@ -81,140 +118,27 @@ const BLOCKS: Block[] = [
     keywords: 'callout fold collapse collapsed toggle hide aside details',
     // The `-` is Obsidian's fold marker: it says the callout collapses, and
     // that it opens collapsed. `+` is the same panel starting open.
-    snippet: '> [!note]- |\n> ',
+    snippet: `> [!note]- ${CARET}\n> `,
     wholeLine: true
   },
-  { label: 'Divider', detail: 'A horizontal rule', keywords: 'hr rule line separator', snippet: '---\n|', wholeLine: true },
+  {
+    label: 'Divider',
+    detail: 'A horizontal rule',
+    keywords: 'hr rule line separator',
+    snippet: `---\n${CARET}`,
+    wholeLine: true
+  },
   {
     label: 'Code block',
     detail: 'Fenced, with syntax colours',
     keywords: 'code fence snippet',
-    snippet: '```\n|\n```',
+    snippet: '```\n' + CARET + '\n```',
     wholeLine: true
   },
-  {
-    label: 'Table',
-    detail: 'A three-column table',
-    keywords: 'table grid rows columns',
-    snippet: '|     |     |     |\n| --- | --- | --- |\n|     |     |     |',
-    wholeLine: true
-  },
-  {
-    label: 'Diagram',
-    detail: 'A Mermaid flowchart',
-    keywords: 'mermaid chart flow graph diagram',
-    snippet: '```mermaid\nflowchart TD\n  A[Start] --> B[|]\n```',
-    wholeLine: true
-  },
-  {
-    label: 'Drawing',
-    detail: 'An inline SVG picture',
-    keywords: 'svg drawing picture illustration vector sketch',
-    snippet:
-      '```svg\n<svg viewBox="0 0 800 450">\n  <circle cx="400" cy="225" r="120" fill="none" stroke="currentColor" stroke-width="2" />\n  |\n</svg>\n```',
-    wholeLine: true
-  },
-  {
-    label: 'Memory diagram',
-    detail: 'Stack frames, heap objects, and the pointers between them',
-    keywords: 'memory pointer heap stack struct node linked list reference diagram',
-    snippet:
-      '```memory\nstack:\n  main:\n    head -> n1\nheap:\n  n1 Node { val: 1, next -> n2 }\n  n2 Node { val: 2, next: null }|\n```\n',
-    wholeLine: true
-  },
-  {
-    label: 'Box and pointer',
-    detail: 'Variables, objects, and what points at what',
-    keywords: 'box pointer object reference variable java python heap field array list',
-    snippet:
-      '```boxes\nb -> board\n\nboard CBoard:\n  cells -> grid\n\ngrid Int[][] [ ->r0, ->r1 ]|\n```\n',
-    wholeLine: true
-  },
-  {
-    label: 'Cons list',
-    detail: 'SICP-style pairs, one line',
-    keywords: 'cons pair lisp scheme sicp cdr car list',
-    snippet: '```memory\npairs: 1 2 3|\n```\n',
-    wholeLine: true
-  },
-  {
-    label: 'Tree',
-    detail: 'A binary tree, heap, or BST, from an array',
-    keywords: 'tree binary bst heap node traversal inorder leetcode',
-    snippet: '```tree\nlevel: 5 3 8 2 4 . 9|\n```\n',
-    wholeLine: true
-  },
-  {
-    label: 'Type hierarchy',
-    detail: 'Classes and interfaces, and what extends what',
-    keywords:
-      'types type hierarchy class interface inheritance extends implements subtype uml design document abstract',
-    snippet:
-      '```types\nabstract class Animal\ninterface Winged\nclass Dog extends Animal\nclass Bird extends Animal implements Winged|\n```\n',
-    wholeLine: true
-  },
-  {
-    label: 'Recursion tree',
-    detail: 'A recurrence, unrolled, with what each level costs',
-    keywords:
-      'recurrence recursion tree master theorem cost level mergesort divide conquer complexity solve big-o',
-    snippet: '```tree\nrecurrence: 2T(n/2) + n|\n```\n',
-    wholeLine: true
-  },
-  {
-    label: 'Hash table',
-    detail: 'Buckets, chains and collisions, worked out for you',
-    keywords: 'hash table bucket chain collision probe linear quadratic load factor rehash map dictionary',
-    snippet: '```hash\nbuckets: 7\nkeys: 12 44 13 88 23 94 11|\n```\n',
-    wholeLine: true
-  },
-  {
-    label: 'Chart',
-    detail: 'Growth curves, or timings you measured',
-    keywords: 'chart plot graph growth curve big-o complexity benchmark timing measure axis log data',
-    snippet: '```chart\nx: 1..64\nn\nn log n\nn^2|\n```\n',
-    wholeLine: true
-  },
-  {
-    label: 'Algorithm run',
-    detail: 'An array and the steps, played back',
-    keywords: 'algorithm animation sort search step trace array stack queue playback',
-    snippet:
-      '```algo\narray: 5 3 8 1\n---\ncompare 0 1\nswap 0 1\nnote |\n```\n',
-    wholeLine: true
-  },
-  {
-    label: 'Loop invariant',
-    detail: 'Three stills: on entry, held, on exit',
-    keywords: 'loop invariant still frame proof correctness entry exit sorted prefix range boundary gries',
-    snippet:
-      '```algo\narray: 5 3 8 1 9 2\nstills: 0 -1\n---\nrange sorted 0 0\nnote On entry: nothing is sorted\nmark 0..5 sorted\nrange sorted 0 5\nnote On exit: all of it is sorted|\n```\n',
-    wholeLine: true
-  },
-  {
-    label: 'Maths block',
-    detail: 'Display equation',
-    keywords: 'math latex katex equation formula',
-    // `$$` rather than a ```math fence: both render the same here, but this is
-    // the form Obsidian, GitHub and every LaTeX-aware editor also understand,
-    // so the note stays readable outside Stone.
-    snippet: '$$\n|\n$$',
-    wholeLine: true
-  },
-  {
-    label: 'Contents',
-    detail: "This note's headings, listed and clickable",
-    keywords: 'toc table of contents outline headings index navigation',
-    snippet: '```toc\n```\n|',
-    wholeLine: true
-  },
-  {
-    label: 'Query',
-    detail: 'A live list of notes or tasks',
-    keywords: 'query database view dataview list filter',
-    snippet: '```stone\nfrom: |\nwhere: status is active\nsort: edited desc\n```\n',
-    wholeLine: true
-  },
+
+  // The fences, and the several ways into each of them.
+  ...presetBlocks(),
+
   {
     label: 'Image',
     detail: 'Embed a picture from this computer',
@@ -247,37 +171,42 @@ const BLOCKS: Block[] = [
     label: 'Hyperlink',
     detail: 'A link to a web address',
     keywords: 'link hyperlink url web http address external',
-    snippet: '[|]()'
+    snippet: `[${CARET}]()`
   },
-  { label: 'Link to a note', detail: 'A wikilink', keywords: 'link wikilink reference', snippet: '[[|]]' },
-  { label: 'Embed a note', detail: 'Transclude another page', keywords: 'embed transclude include', snippet: '![[|]]' },
-  { label: 'Tag', detail: 'File this note', keywords: 'tag label', snippet: '#|' },
-  { label: 'Footnote', detail: 'A numbered aside', keywords: 'footnote note reference', snippet: '[^|]' },
+  { label: 'Link to a note', detail: 'A wikilink', keywords: 'link wikilink reference', snippet: `[[${CARET}]]` },
+  {
+    label: 'Embed a note',
+    detail: 'Transclude another page',
+    keywords: 'embed transclude include',
+    snippet: `![[${CARET}]]`
+  },
+  { label: 'Tag', detail: 'File this note', keywords: 'tag label', snippet: `#${CARET}` },
+  { label: 'Footnote', detail: 'A numbered aside', keywords: 'footnote note reference', snippet: `[^${CARET}]` },
   {
     label: 'Inline footnote',
     detail: 'The aside itself, written in place',
     keywords: 'footnote inline aside note reference',
-    snippet: '^[|]'
+    snippet: `^[${CARET}]`
   },
   {
     label: 'Comment',
     detail: 'In the file, not in the export',
     keywords: 'comment hidden private aside todo note to self',
-    snippet: '%%|%%'
+    snippet: `%%${CARET}%%`
   },
   {
     label: 'Superscript',
     detail: 'Raised text — x², a citation',
     keywords: 'superscript power exponent raised sup',
-    snippet: '<sup>|</sup>'
+    snippet: `<sup>${CARET}</sup>`
   },
   {
     label: 'Subscript',
     detail: 'Lowered text — H₂O, an index',
     keywords: 'subscript index lowered sub chemistry',
-    snippet: '<sub>|</sub>'
+    snippet: `<sub>${CARET}</sub>`
   },
-  { label: 'Inline maths', detail: 'An inline equation', keywords: 'math inline latex', snippet: '$|$' },
+  { label: 'Inline maths', detail: 'An inline equation', keywords: 'math inline latex', snippet: `$${CARET}$` },
   {
     label: "Today's date",
     detail: 'Insert as plain text',
@@ -286,6 +215,23 @@ const BLOCKS: Block[] = [
     wholeLine: false
   }
 ]
+
+/**
+ * The block, as it will arrive in the note.
+ *
+ * Shown beside a preset rather than in place of its description, because the
+ * two answer different questions — "which of these do I want" is the label, and
+ * "what am I about to get" is only ever the text itself. A fence's presets
+ * differ by three lines in the middle, and no wording tells them apart as fast
+ * as seeing them.
+ */
+function previewNode(block: Block): Node | null {
+  if (!block.type || !block.snippet) return null
+  const pre = document.createElement('pre')
+  pre.className = 'cm-preset-preview'
+  pre.textContent = block.snippet.split(CARET).join('')
+  return pre
+}
 
 function applySnippet(
   view: EditorView,
@@ -299,11 +245,11 @@ function applySnippet(
   let text = block.snippet
   if (block.label === "Today's date") {
     const d = new Date()
-    text = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}|`
+    text = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}${CARET}`
   }
 
-  const caret = text.indexOf('|')
-  const insert = caret === -1 ? text : text.slice(0, caret) + text.slice(caret + 1)
+  const caret = text.indexOf(CARET)
+  const insert = caret === -1 ? text : text.slice(0, caret) + text.slice(caret + CARET.length)
 
   view.dispatch({
     changes: { from: start, to, insert },
@@ -359,6 +305,9 @@ export function slashMenu(context: CompletionContext): CompletionResult | null {
   const query = raw.slice(offset + 1).toLowerCase()
 
   const options: Completion[] = BLOCKS.filter((block) => {
+    // A single letter is still the start of almost everything, so variations
+    // wait until the query is specific enough to be about one fence.
+    if (block.secondary && query.length < 2) return false
     if (!query) return true
     return (
       block.label.toLowerCase().includes(query) ||
@@ -370,6 +319,7 @@ export function slashMenu(context: CompletionContext): CompletionResult | null {
     detail: block.detail,
     type: 'keyword',
     boost: block.label.toLowerCase().startsWith(query) ? 1 : 0,
+    info: () => previewNode(block),
     apply: (view: EditorView, _completion: Completion, applyFrom: number, applyTo: number) => {
       applySnippet(view, applyFrom, applyTo, block)
     }

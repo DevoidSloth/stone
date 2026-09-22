@@ -40,6 +40,7 @@ import { isFoldable, livePreview, toggleFold } from './live-preview'
 import { blockHandles } from './blocks'
 import { notePathFacet } from './run-code'
 import { slashMenu } from './slash'
+import { blockComplete } from './block-complete'
 import { codeComplete, inProse, latexComplete } from './intellisense'
 import { insertMath, linkPastedUrl, makeLink, setBlockKind, wrapSelection } from './format'
 import {
@@ -649,7 +650,8 @@ export function Editor({
           tagSource,
           emojiSource,
           latexComplete,
-          codeComplete
+          codeComplete,
+          blockComplete
         ],
         icons: false,
         closeOnBlur: true

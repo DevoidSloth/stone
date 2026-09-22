@@ -2,12 +2,15 @@
  * Program figures: the fences, and the one call that draws them.
  *
  * `memory` for what the machine is holding, `boxes` for what refers to what,
- * `tree` for the shapes that arrive as arrays, `types` for how a design is put
- * together, `hash` for the one structure whose picture has to be computed,
- * `chart` for growth — predicted or measured — and `algo` for the ones that
- * only make sense moving. They share a house style, an error box, and this
- * entry point, which is all the editor, the print window and the exporter need
- * to know about them.
+ * `list` for the chain on its own, `tree` for the shapes that arrive as arrays,
+ * `graph` for the ones that refused to be a tree, `types` for how a design is
+ * put together, `hash` for the one structure whose picture has to be computed,
+ * `chart` for growth — predicted or measured — `threads` for a schedule that
+ * two correct threads should not have been allowed, `grammar` for a syntax
+ * drawn as the track it is, and `algo` for the ones that only make sense
+ * moving. They share a house style, an error box, and this entry point, which
+ * is all the editor, the print window and the exporter need to know about
+ * them.
  *
  * A figure that will not parse is never silently dropped. It comes back as a
  * dashed box saying which line it could not read, with the source still in it,
@@ -19,10 +22,14 @@ import { vizKind, type VizKind } from '@shared/viz-langs'
 import { html } from './svg'
 import { VizError } from './source'
 import { drawMemory } from './memory'
+import { drawList } from './list'
 import { drawTree, type Figure } from './tree'
 import { drawTypes } from './types'
 import { drawHash } from './hash'
 import { drawChart } from './chart'
+import { drawGraph } from './graph'
+import { drawThreads } from './threads'
+import { drawGrammar } from './grammar'
 import { algoWaiting, drawAlgo, drawAlgoStrip, drawAlgoWaiting } from './algo'
 
 export { vizKind, type VizKind }
@@ -40,6 +47,8 @@ function still(kind: Exclude<VizKind, 'algo'>, source: string): Figure {
       return drawMemory(source)
     case 'boxes':
       return drawMemory(source, 'objects')
+    case 'list':
+      return drawList(source)
     case 'types':
       return drawTypes(source)
     case 'hash':
@@ -48,6 +57,12 @@ function still(kind: Exclude<VizKind, 'algo'>, source: string): Figure {
       return drawChart(source)
     case 'tree':
       return drawTree(source)
+    case 'graph':
+      return drawGraph(source)
+    case 'threads':
+      return drawThreads(source)
+    case 'grammar':
+      return drawGrammar(source)
   }
 }
 

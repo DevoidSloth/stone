@@ -3,6 +3,8 @@ import { EditorSelection } from '@codemirror/state'
 import katex from 'katex'
 import { sanitizeSvg } from '../lib/svg'
 import { renderViz, type Rendered, type VizKind } from '../viz'
+import { datatypeFor } from './datatypes'
+import { useStone } from '../store'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { TaskStatus } from '@shared/types'
@@ -1035,6 +1037,30 @@ export class VizWidget extends WidgetType {
     wrap.className = `cm-embed cm-embed--viz cm-embed--viz-${this.kind}`
     this.figure = renderViz(this.kind, this.source, this.pending)
     wrap.appendChild(this.figure.element)
+
+    // A figure that will not parse comes back as a dashed box naming the line
+    // it could not read. What is wanted immediately after reading that sentence
+    // is the grammar, every time, so the box carries the way to it — the
+    // manual, opened at this fence's own section rather than at the top of a
+    // long topic about figures in general.
+    const type = this.figure.element.classList.contains('viz--broken')
+      ? datatypeFor(this.kind)
+      : null
+    if (type) {
+      const help = document.createElement('button')
+      help.type = 'button'
+      help.className = 'viz__help'
+      help.textContent = `How a ${type.fence} block is written`
+      help.addEventListener('mousedown', (event) => {
+        // On mousedown, and swallowed: a click that first moved the caret into
+        // the fence would replace this box with the source it is explaining.
+        event.preventDefault()
+        event.stopPropagation()
+        useStone.getState().openDocs(type.docs.topic, type.docs.section ?? null)
+      })
+      this.figure.element.appendChild(help)
+    }
+
     return blockShell(wrap, 'wide')
   }
 

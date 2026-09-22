@@ -30,7 +30,8 @@ export const TREE_KEYS = [
   'recurrence',
   'depth',
   'cost',
-  'total'
+  'total',
+  'rotate'
 ] as const
 
 export interface TreeNode extends Annotated {
@@ -569,10 +570,149 @@ function costColumn(rows: number[], costs: string[], total: string | undefined):
   return { group, width: COST_GAP + widest, bottom }
 }
 
+// ------------------------------------------------------------------ rotation
+
+function cloneTree(node: TreeNode): TreeNode {
+  return { ...node, children: node.children.map((child) => (child ? cloneTree(child) : child)) }
+}
+
+/**
+ * One rotation, about the node named.
+ *
+ * The operation every balanced tree is built out of, and the one that is
+ * hardest to believe from a description: three pointers move, the in-order
+ * sequence does not change, and the depth of one side falls by one. Written
+ * down it is four lines of pointer surgery; drawn as a before and an after it
+ * is obvious, which is why this is a directive rather than something to be
+ * assembled out of two blocks that could drift apart.
+ */
+function rotate(node: TreeNode, direction: 'left' | 'right'): TreeNode {
+  // A right rotation lifts the left child; a left rotation mirrors it.
+  const up = direction === 'right' ? 0 : 1
+  const down = 1 - up
+  const pivot = node.children[up]
+  if (!pivot) {
+    throw new VizError(
+      `\`${node.label}\` has no ${direction === 'right' ? 'left' : 'right'} child, so it cannot rotate ${direction}`
+    )
+  }
+  node.children[up] = pivot.children[down] ?? null
+  pivot.children[down] = node
+  // Both ends of the moved edge are ringed, because the question a reader has
+  // is which two nodes swapped places.
+  node.highlight = true
+  pivot.highlight = true
+  return pivot
+}
+
+function rotateAt(node: TreeNode, name: string, direction: 'left' | 'right'): TreeNode {
+  if (node.label === name) return rotate(node, direction)
+  node.children = node.children.map((child) => (child ? rotateAt(child, name, direction) : child))
+  return node
+}
+
+/** `rotate: right 5` — the tree, and the same tree after that rotation. */
+function readRotation(written: string): { direction: 'left' | 'right'; name: string } {
+  const parts = items(written)
+  const direction = parts.find((one) => /^(left|right)$/i.test(one))?.toLowerCase()
+  const name = parts.find((one) => !/^(left|right|about|at|on)$/i.test(one))
+  if (!direction || !name) {
+    throw new VizError('`rotate:` wants a direction and a node — `rotate: right 5`')
+  }
+  return { direction: direction as 'left' | 'right', name }
+}
+
+/**
+ * The before and the after, side by side under one arrow.
+ *
+ * Laid out as two independent trees rather than as one figure with a gap: the
+ * whole point is that the second is a different shape, and a shared layout
+ * would hold columns in common that the rotation was supposed to move.
+ */
+function drawRotation(tree: TreeNode, written: string, title: string | undefined): Figure {
+  const { direction, name } = readRotation(written)
+  if (!has(tree, name)) throw new VizError(`there is no node called \`${name}\` in this tree`)
+
+  const before = cloneTree(tree)
+  // Ringed on the left as well as the right, so the eye starts in the same
+  // place in both halves and the move is between two marked pairs.
+  markPair(before, name, direction)
+  const after = rotateAt(cloneTree(tree), name, direction)
+
+  const GUTTER = 64
+  const left = layoutTree(before)
+  const right = layoutTree(after)
+
+  const leftNodes = svg('g', { class: 'viz-nodes' })
+  for (const one of left.nodes) leftNodes.appendChild(drawTreeNode(one))
+  const rightNodes = svg('g', { class: 'viz-nodes' })
+  for (const one of right.nodes) rightNodes.appendChild(drawTreeNode(one))
+
+  const { defs, arrow } = arrowDefs()
+  const shift = left.width + GUTTER
+  const rightSide = svg('g', { transform: `translate(${round(shift)} 0)` }, [right.edges, rightNodes])
+
+  const top = Math.min(left.top, right.top)
+  const bottom = Math.max(left.bottom, right.bottom)
+  const middle = (top + bottom) / 2
+  const link = svg('path', {
+    class: 'viz-edge',
+    d: `M ${round(left.width + 14)} ${round(middle)} L ${round(left.width + GUTTER - 14)} ${round(middle)}`,
+    'marker-end': arrow
+  })
+  const legend = label(
+    `${direction} about ${name}`,
+    round(left.width + GUTTER / 2),
+    round(middle - 14),
+    'viz-node__sub',
+    SUB_SIZE
+  )
+
+  const width = shift + right.width
+  const view = { x: -PAD, y: top - PAD - 12, w: width + PAD * 2, h: bottom - top + PAD * 2 + 12 }
+  const root = svg(
+    'svg',
+    {
+      class: 'viz__svg',
+      viewBox: `${round(view.x)} ${round(view.y)} ${round(view.w)} ${round(view.h)}`,
+      width: round(view.w),
+      height: round(view.h),
+      role: 'img',
+      'aria-label': `A ${direction} rotation about ${name}`
+    },
+    [defs, left.edges, leftNodes, rightSide, link, legend]
+  )
+
+  return { root, title, caption: undefined }
+}
+
+/** Whether a node with this label is anywhere in the tree. */
+function has(node: TreeNode, name: string): boolean {
+  if (node.label === name) return true
+  return node.children.some((child) => (child ? has(child, name) : false))
+}
+
+/** Ring the node about to move, and the child that will take its place. */
+function markPair(node: TreeNode, name: string, direction: 'left' | 'right'): void {
+  if (node.label === name) {
+    node.highlight = true
+    const child = node.children[direction === 'right' ? 0 : 1]
+    if (child) child.highlight = true
+    return
+  }
+  for (const child of node.children) if (child) markPair(child, name, direction)
+}
+
 export function drawTree(source: string): Figure {
   const { directives, lines } = readSource(source, TREE_KEYS)
 
   const tree = buildTree(directives, lines)
+
+  // A rotation is two trees, so it leaves before the single-figure path below
+  // has laid anything out.
+  const turn = directives.get('rotate')
+  if (turn !== undefined) return drawRotation(tree, turn, directives.get('title'))
+
   const unrolled = recurrenceOf(directives)
 
   const order = directives.get('traverse')?.toLowerCase()

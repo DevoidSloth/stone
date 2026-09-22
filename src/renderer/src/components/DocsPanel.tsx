@@ -148,9 +148,15 @@ function Section({ section, id }: { section: DocSection; id: string }) {
 export function DocsPanel() {
   const topicId = useStone((s) => s.docsTopic)
   const openDocs = useStone((s) => s.openDocs)
+  /**
+   * The section to land on: named by a search hit, or by **Explain this
+   * block**, which can open the panel from a keystroke in the editor. It lives
+   * in the store rather than here for that second case — the panel is not
+   * mounted when the question is asked.
+   */
+  const target = useStone((s) => s.docsSection)
+  const clearDocsSection = useStone((s) => s.clearDocsSection)
   const [query, setQuery] = useState('')
-  /** A section named by a search hit, scrolled to once the topic is up. */
-  const [target, setTarget] = useState<string | null>(null)
   const scroll = useRef<HTMLDivElement>(null)
 
   const topic = topicId ? docTopic(topicId) : null
@@ -160,8 +166,8 @@ export function DocsPanel() {
     if (!target || !topic) return
     const el = scroll.current?.querySelector(`[data-section="${CSS.escape(target)}"]`)
     el?.scrollIntoView({ block: 'start' })
-    setTarget(null)
-  }, [target, topic])
+    clearDocsSection()
+  }, [target, topic, clearDocsSection])
 
   // Coming back to the index should not leave the last topic's scroll offset
   // behind, which reads as a page that failed to load. The scroller is the
@@ -179,8 +185,7 @@ export function DocsPanel() {
 
   const open = (id: string, section: string | null): void => {
     setQuery('')
-    setTarget(section)
-    openDocs(id)
+    openDocs(id, section)
   }
 
   return (

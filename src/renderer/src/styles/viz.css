@@ -1,6 +1,6 @@
 /*
- * Program figures: the `memory`, `boxes`, `tree`, `types`, `hash`, `chart`
- * and `algo` fences.
+ * Program figures: the `memory`, `boxes`, `list`, `tree`, `graph`, `types`,
+ * `hash`, `chart`, `threads`, `grammar` and `algo` fences.
  *
  * Everything here is drawn in SVG by `viz/`, which computes its geometry from
  * the mono advance width — so the one rule this file must never break is that
@@ -284,6 +284,18 @@
   font-weight: 600;
 }
 
+/* A pointer into a `list`. The stem and the label are the same ones the
+   transport draws under an animation, in whatever colour the fence asked for:
+   `prev` and `curr` walking the same chain have to be told apart, and the
+   default is the app's own accent, which is what `--viz-accent` already is. */
+.viz-list__pointer .viz-pointer__stem {
+  stroke: var(--viz-accent);
+}
+
+.viz-list__pointer .viz-pointer__label {
+  fill: var(--viz-accent);
+}
+
 .viz-range__bar {
   fill: none;
   stroke: var(--text-ghost);
@@ -439,6 +451,141 @@
 
 .viz-chart__mark-label {
   fill: var(--text-faint);
+}
+
+/* ------------------------------------------------------------------- graphs */
+
+/* An accepting state's inner outline. Nothing but a second stroke: it must not
+   fill, or it would paint over the label it sits behind. */
+.viz-graph__accept {
+  fill: none;
+}
+
+/* A weight sits on the line it belongs to, so the line is cleared from under
+   it. The bed is the page colour rather than the surface colour — a weight in
+   open space is over the page, and one that happens to cross a node is over a
+   node, and there is no third case worth a second rule. */
+.viz-graph__weight-bed {
+  fill: var(--bg-page);
+  stroke: none;
+}
+
+.viz-graph__weight {
+  fill: var(--text-muted);
+}
+
+.viz-graph__edge.is-marked .viz-edge,
+.viz-graph__edge.is-active .viz-edge {
+  stroke: var(--viz-accent);
+  stroke-width: 2.25;
+}
+
+.viz-graph__edge.is-active {
+  --viz-accent: var(--accent);
+}
+
+.viz-graph__edge.is-marked .viz-graph__weight,
+.viz-graph__edge.is-active .viz-graph__weight {
+  fill: var(--viz-accent);
+  font-weight: 600;
+}
+
+/* The edge being crossed changes colour rather than moving, so the transition
+   is the only thing that says a step happened at all. */
+.viz-graph__edge .viz-edge {
+  transition: stroke var(--dur-base) linear, stroke-width var(--dur-base) linear;
+}
+
+/* ------------------------------------------------------------------ threads */
+
+.viz-thread__name {
+  fill: var(--text);
+  font-weight: 600;
+}
+
+/* The column each thread runs down. Faint: it is a rule for the eye to hang
+   the boxes on, not a thing being drawn. */
+.viz-thread__spine {
+  stroke: var(--border-faint);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+
+.viz-thread__tick {
+  fill: var(--text-ghost);
+}
+
+/* A held monitor: a bar down the side of the column that holds it, for exactly
+   as long as it holds it. Mutual exclusion is a claim about a span of time, and
+   this is the only mark here that is drawn as one. */
+.viz-thread__held {
+  fill: var(--accent);
+  opacity: 0.55;
+}
+
+.viz-thread__monitor {
+  fill: var(--text-faint);
+}
+
+/* Blocked: in the schedule, but nothing happened. */
+.viz-thread__blocked {
+  fill: none;
+  stroke: var(--border);
+  stroke-dasharray: 4 3;
+}
+
+.viz-thread__note {
+  fill: var(--text-faint);
+}
+
+.viz-thread__leader {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+/* ------------------------------------------------------------------ grammar */
+
+/* The track. One weight for every line in a railroad diagram — a heavier rail
+   under a loop would read as a different kind of path, and there is only one
+   kind of path. */
+.viz-rail {
+  stroke: var(--viz-line);
+  stroke-width: 1.25;
+  fill: none;
+}
+
+/* The tick that opens and closes a rule: where the track starts, and where a
+   sentence in this rule is finished. */
+.viz-rail--end {
+  stroke-width: 2;
+}
+
+/* A literal is a stadium and a rule is a rectangle: the shape says whether the
+   reader has to go and look something up. */
+.viz-grammar__terminal {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 1.25;
+}
+
+.viz-grammar__rule {
+  fill: var(--viz-face);
+  stroke: var(--viz-line);
+  stroke-width: 1.25;
+}
+
+.viz-grammar__literal {
+  fill: var(--text-strong);
+  font-weight: 600;
+}
+
+.viz-grammar__name {
+  fill: var(--text);
+}
+
+.viz-grammar__label {
+  fill: var(--text-strong);
+  font-weight: 600;
 }
 
 /* ------------------------------------------------------------------ states */
@@ -653,4 +800,23 @@
   color: var(--text-faint);
   white-space: pre-wrap;
   overflow-x: auto;
+}
+
+/* The way out of an error box: the manual, at this fence's own section. What
+   is wanted after reading "line 3 is not a range" is always the grammar. */
+.viz__help {
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: var(--font-ui);
+  font-size: var(--t-2xs);
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.viz__help:hover {
+  color: var(--text-strong);
 }

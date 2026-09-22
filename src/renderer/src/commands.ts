@@ -19,6 +19,7 @@ import { exportNoteToPdf } from './export-note'
 import { describeError } from './lib/errors'
 import { askForAnimation } from './editor/animate'
 import { activeEditor } from './editor/insert'
+import { blockDocsAt } from './editor/block-complete'
 import { insertPickedFiles } from './editor/slash'
 import { noteSessions, notePathFacet, restartSession, runFenceAtCursor, runFences } from './editor/run-code'
 import { markNow } from './editor/stamps'
@@ -490,6 +491,27 @@ export const COMMANDS: CommandDef[] = [
     run: () => {
       s().setView('notes')
       s().openDocs()
+    }
+  },
+  {
+    // The manual is only ever wanted about the thing under the caret, and
+    // finding that page is the part that costs: `hash` is four screens into a
+    // long topic about figures. This opens it at the section, so the answer is
+    // on the screen rather than somewhere on the page that is.
+    id: 'docs-block',
+    label: 'Explain the block at the caret',
+    group: 'Note',
+    icon: IconBook,
+    defaultKeys: [],
+    run: () => {
+      const view = activeEditor()
+      s().setView('notes')
+      if (!view) {
+        s().openDocs()
+        return
+      }
+      const found = blockDocsAt(view.state, view.state.selection.main.head)
+      s().openDocs(found.topic, found.section)
     }
   },
   {

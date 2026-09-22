@@ -578,6 +578,12 @@
  * and this only changes what is drawn on it. The copy button appears on hover,
  * because a page of snippets should read as a document rather than as a row of
  * controls.
+ *
+ * It is sized by its own 11px type rather than by the code's leading. Left to
+ * inherit, the row was set at the block's font size and 1.5 leading with the
+ * button's padding on top of that — a caption eleven pixels tall sitting in a
+ * band of empty plate — so `line-height: 1` here, and through `font: inherit`
+ * on the button, makes the row as tall as what is written on it.
  */
 .cm-codehead {
   display: flex;
@@ -585,17 +591,29 @@
   justify-content: space-between;
   width: 100%;
   font-family: var(--font-ui);
+  font-size: var(--t-2xs);
+  line-height: 1;
+}
+
+/*
+ * The header line's own padding, tighter than the plate's top edge elsewhere.
+ *
+ * Only when the header is actually drawn: with the cursor on the fence the raw
+ * ```` ```lang ```` is back and wants the same metrics as the code under it.
+ */
+.cm-line.tok-line-code-first:has(.cm-codehead) {
+  padding-top: var(--sp-2);
+  padding-bottom: 0;
 }
 
 .cm-codehead__lang {
-  font-size: var(--t-2xs);
   letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--text-ghost);
 }
 
 .cm-codehead__copy {
-  padding: 1px var(--sp-2);
+  padding: 2px var(--sp-2);
   border: 1px solid var(--border-hair);
   border-radius: var(--r-xs);
   background: none;
@@ -938,6 +956,45 @@
   line-height: 1.4;
   text-align: center;
   padding: var(--sp-1) 0;
+}
+
+/* A preset, shown as the text it will put in the note.
+
+   Two presets for the same fence differ by three lines in the middle, and no
+   wording tells them apart as fast as seeing them. Wrapped rather than scrolled
+   — a preview with a scrollbar in it is a preview nobody reads to the end. */
+.cm-preset-preview {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-2xs);
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  max-height: 260px;
+  overflow: hidden;
+}
+
+/* What a directive does, and the shape of a value. */
+.cm-block-info__text {
+  margin: 0;
+}
+
+.cm-block-info__text code {
+  font-family: var(--font-mono);
+  font-size: var(--t-2xs);
+  color: var(--text-strong);
+}
+
+.cm-block-info__sample {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--t-2xs);
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
 }
 
 /* --------------------------------------------------------------- backlinks */

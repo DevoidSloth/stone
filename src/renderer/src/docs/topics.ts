@@ -363,7 +363,15 @@ export const DOC_TOPICS: DocTopic[] = [
         blocks: [
           {
             kind: 'p',
-            text: 'Type `/` at the start of a line for every block Stone can insert — headings, lists, tasks, callouts, tables, code, all four figures, a query, a maths block, an image, a PDF, a recording, or an algorithm animated by Claude.'
+            text: 'Type `/` at the start of a line for every block Stone can insert — headings, lists, tasks, callouts, tables, code, all eleven figures, a query, a maths block, an image, a PDF, a recording, or an algorithm animated by Claude.'
+          },
+          {
+            kind: 'p',
+            text: 'Naming a fence goes further than its empty form. `/hash` is six hash tables — chaining, linear probing, string keys, a rehash — `/chart` is the growth curves, the big-O definition drawn, measured timings and log-log axes, and `/algo` is a bubble sort, a binary search, a stack, a queue, a traversal and a loop invariant. Each one is a worked block rather than a skeleton, so the first thing on the page is a figure that already draws.'
+          },
+          {
+            kind: 'note',
+            text: 'Those variations stay out of the bare `/` menu, which is a list of *kinds*. They appear as soon as the query names one — by its fence, or by a word in it: `/probe`, `/invariant`, `/cycle`, `/kanban`.'
           }
         ]
       },
@@ -673,6 +681,10 @@ export const DOC_TOPICS: DocTopic[] = [
             text: 'It is not a language server. There is no toolchain and no types behind it: the declarations are read off the source, the way the **Code** inspector reads them, and a suggestion after a `.` is a common method rather than a checked one.'
           },
           {
+            kind: 'p',
+            text: 'The fence line itself suggests too. Three backticks and the menu is every language Stone can run and every figure it can draw, each with a line about what it is — which is the only place `boxes` and `hash` are ever going to introduce themselves to somebody who does not know they exist.'
+          },
+          {
             kind: 'example',
             code: fence('!python', 'for i in range(3):\n    print(i)'),
             caption: 'A `!` in front of the language turns suggestions off for that block.'
@@ -739,20 +751,41 @@ export const DOC_TOPICS: DocTopic[] = [
   {
     id: 'figures',
     title: 'Program figures',
-    blurb: 'memory, boxes, tree, types, hash, chart and algo — the pictures on the whiteboard.',
+    blurb: 'memory, boxes, list, tree, graph, types, hash, chart, threads, grammar and algo — the pictures on the whiteboard.',
     keywords:
-      'memory boxes tree types algo hash chart figure diagram pointer heap stack bst binary heap traversal animation array linked list cons pairs class interface hierarchy inheritance uml hash table bucket chaining probe load factor rehash plot graph growth big-o complexity recurrence master theorem loop invariant stills',
+      'memory boxes list linked list chain node next doubly circular cycle tree graph edge vertex weighted directed digraph network dijkstra shortest path bfs dfs dag topological dfa nfa automaton state machine types algo hash chart figure diagram pointer heap stack bst binary heap traversal animation array cons pairs class interface hierarchy inheritance uml hash table bucket chaining probe load factor rehash plot growth big-o complexity recurrence master theorem loop invariant stills rotation rotate avl red black threads thread concurrency race interleaving schedule lock monitor deadlock grammar ebnf bnf railroad syntax parse',
     sections: [
       {
-        title: 'Seven fences',
+        title: 'Eleven fences',
         blocks: [
           {
             kind: 'p',
-            text: 'What refers to what, what is in memory, what shape a tree is, how a design is put together, where a key lands, how something grows, and what an algorithm does over time. They render in the editor as you type, print into an export, and are plain text in the file — a note that draws one still reads as source in any other editor.'
+            text: 'What refers to what, what is in memory, what a chain of nodes looks like, what shape a tree is, what a graph connects to what, how a design is put together, where a key lands, how something grows, which schedule two threads ended up running, what a syntax will accept, and what an algorithm does over time. They render in the editor as you type, print into an export, and are plain text in the file — a note that draws one still reads as source in any other editor.'
           },
           {
             kind: 'note',
             text: 'A figure that will not parse is never dropped. It comes back as a dashed box naming the line it could not read, with your source still in it.'
+          }
+        ]
+      },
+      {
+        title: 'Writing one, with help',
+        blocks: [
+          {
+            kind: 'p',
+            text: 'None of these grammars has to be remembered. At the start of a line inside a figure, the suggestion list is that fence\'s own directives — `bst:`, `probe:`, `stills:` — each with a line about what it does and the shape of a value beside it. After the colon it offers the values the directive actually takes, so `probe:` lists `chain`, `linear`, `quadratic` and `double` rather than leaving you to recall them.'
+          },
+          {
+            kind: 'p',
+            text: 'An `algo` block changes its list at the `---` rule: directives above it, steps below. `#` offers the colours. And Ctrl/Cmd Space asks for the whole list without typing anything first.'
+          },
+          {
+            kind: 'note',
+            text: '**Explain this block** in the command palette opens this manual at the section for whatever the caret is sitting in — this one, from inside a `tree` fence. A figure that will not parse carries the same link in its error box.'
+          },
+          {
+            kind: 'p',
+            text: 'As with code, a `!` in front of the fence name — ```` ```!tree ```` — turns the suggestions off for that block while it still draws.'
           }
         ]
       },
@@ -773,6 +806,7 @@ export const DOC_TOPICS: DocTopic[] = [
               ['level: 1 2 3 . . 4 5', 'Level order, with `.` for a missing child'],
               ['(indented outline)', 'Anything that is not an array — a parse tree, a trie'],
               ['traverse: inorder', 'Numbers the nodes in visit order and captions it'],
+              ['rotate: right 50', 'The tree, and the same tree after that rotation'],
               ['title: / caption:', 'A line above and a line below the figure']
             ]
           },
@@ -792,6 +826,15 @@ export const DOC_TOPICS: DocTopic[] = [
             kind: 'example',
             code: fence('tree', 'level: 1 2 3 . . 4 5'),
             caption: 'The LeetCode form. A `.` holds an empty slot open.'
+          },
+          {
+            kind: 'example',
+            code: fence('tree', 'bst: 50 30 70 20 40\nrotate: right 50'),
+            caption: 'A rotation, before and after, with the two nodes that swapped ringed in both.'
+          },
+          {
+            kind: 'note',
+            text: 'The rotation is the operation every balanced tree is built out of and the one hardest to believe from a description — three pointers move, the in-order sequence does not change, and one side gets shorter. Side by side it is obvious, which is why it is a directive rather than two blocks that could drift apart.'
           }
         ]
       },
@@ -834,6 +877,102 @@ export const DOC_TOPICS: DocTopic[] = [
         ]
       },
       {
+        title: 'graph — the ones that refused to be a tree',
+        blocks: [
+          {
+            kind: 'example',
+            code: fence('graph', 'a -> b: 4\na -> c: 2\nc -> b: 1\nb -> d: 5\nc -> d: 8')
+          },
+          {
+            kind: 'p',
+            text: 'A node exists as soon as an edge mentions it, and **nothing in the source positions anything**. Every other figure here derives its layout from an order you gave it; a graph has no such order, which is the whole difficulty and the reason there are three layouts to pick from.'
+          },
+          {
+            kind: 'table',
+            head: ['Write', 'Draws'],
+            mono: true,
+            rows: [
+              ['a -> b: 4', 'A directed edge, weighted'],
+              ['a -- b', 'An undirected one — `a - b` works too'],
+              ['a <- b', 'The same edge, written backwards'],
+              ['a | 0', 'A node on its own, with a second line under it'],
+              ['layout: spring', 'The default: repulsion and attraction, run to a standstill'],
+              ['layout: circle', 'Everything on one ring, in the order written'],
+              ['layout: layered', 'Breadth-first from `start:`, left to right'],
+              ['start: q0', 'An entry arrow, and where a layered walk begins'],
+              ['accept: q2', 'A second ring inside the first'],
+              ['path: a c d', 'Lights a route, and adds up what it cost']
+            ]
+          },
+          {
+            kind: 'p',
+            text: 'The spring layout is seeded from a circle and has no randomness in it, so the same source is the same picture tomorrow. That matters more than a marginally better arrangement would: a figure that reshuffled itself on every keystroke could not be written under.'
+          },
+          {
+            kind: 'example',
+            code: fence(
+              'graph',
+              'layout: layered\nstart: q0\naccept: q2\nq0 -> q0: 0\nq0 -> q1: 1\nq1 -> q2: 1\nq1 -> q0: 0\nq2 -> q2: 0 1'
+            ),
+            caption: 'A DFA. Self-loops arc over the node; the accepting state is double-ringed.'
+          },
+          {
+            kind: 'example',
+            code: fence('graph', 'path: a c d\na -> b: 7\na -> c: 2\nc -> d: 3\nb -> d: 1'),
+            caption: 'The caption is written for you: the route, and its total.'
+          },
+          {
+            kind: 'note',
+            text: 'Two nodes with an edge each way get bowed apart rather than drawn on top of each other — a residual network reads as two edges, because it is two edges.'
+          }
+        ]
+      },
+      {
+        title: 'list — a chain of nodes',
+        blocks: [
+          {
+            kind: 'example',
+            code: fence('list', 'head: 1 2 3')
+          },
+          {
+            kind: 'p',
+            text: 'The picture off the whiteboard: a node is one box in two parts, the value and the link, an arrow out of each link into the box after it, and a stroke through the last. No stack, no heap, no box titled `n1` — when the subject is the list itself, all of that is furniture.'
+          },
+          {
+            kind: 'table',
+            head: ['Write', 'Draws'],
+            mono: true,
+            rows: [
+              ['head: 1 2 3', 'The chain, with `head` pointing into the first node'],
+              ['1 -> 2 -> 3', 'The same chain, with nothing pointing at it'],
+              ['front: a b c', 'Any name at all — it labels the arrow into the front'],
+              ['at curr 1', 'Another pointer, above the node at that position'],
+              ['at tail -1', 'Counting back from the end'],
+              ['doubly:', 'A prev slot on every node, and the links back'],
+              ['circular:', 'The last link goes round to the front'],
+              ['circular: 2', 'It rejoins part-way along instead — the shape a cycle-finding walk is looking for'],
+              ['head:', 'The empty list']
+            ]
+          },
+          {
+            kind: 'p',
+            text: 'Values are separated by spaces, commas or arrows, and the arrow and comma forms leave room for the usual annotations: `*` rings a node, `~` fades it, `#red` colours it, `| text` writes a line under it. An `at` line takes them too, so `prev` and `curr` need not be the same colour.'
+          },
+          {
+            kind: 'example',
+            code: fence(
+              'list',
+              'title: Reversing in place\nhead: 1 -> 2 * -> 3 ~\nat prev 0 #gray\nat curr 1 #red'
+            ),
+            caption: 'Two pointers on one node stack; they never draw over each other.'
+          },
+          {
+            kind: 'note',
+            text: 'One chain a line, and one chain is all a line can be. Two lists that share a tail, a node with three fields, an object holding the head — that is what `boxes` and `memory` are for.'
+          }
+        ]
+      },
+      {
         title: 'memory — stack, heap and pointers',
         blocks: [
           {
@@ -869,7 +1008,7 @@ export const DOC_TOPICS: DocTopic[] = [
           {
             kind: 'example',
             code: fence('memory', 'globals:\n  x -> p1\npairs: 1 2 3'),
-            caption: 'Two one-liners: `list: 1 2 3` for Node chains, `pairs:` for cons cells.'
+            caption: 'Two one-liners: `list: 1 2 3` for Node chains, `pairs:` for cons cells. For the chain on its own, without the heap around it, use a `list` block.'
           }
         ]
       },
@@ -1033,7 +1172,7 @@ export const DOC_TOPICS: DocTopic[] = [
           },
           {
             kind: 'p',
-            text: 'A structure — `array:`, `stack:`, `queue:`, `list:`, or `bst:`/`heap:`/`level:` for a traversal over a tree — then one step per line. Every step is a frame, and the transport under the figure plays, steps and scrubs them.'
+            text: 'A structure — `array:`, `stack:`, `queue:`, `list:`, `bst:`/`heap:`/`level:` for a traversal over a tree, or `graph:` for one over a graph — then one step per line. Every step is a frame, and the transport under the figure plays, steps and scrubs them.'
           },
           {
             kind: 'table',
@@ -1048,7 +1187,7 @@ export const DOC_TOPICS: DocTopic[] = [
               ['at lo 0', 'A named pointer under a slot; `at lo off` removes it'],
               ['range 2 5', 'A bracket over a span; `range window 2 5` labels it'],
               ['push v / pop', 'And enqueue / dequeue, insert i v, remove i'],
-              ['visit 7', "In a tree, addressed by the node's label"],
+              ['visit 7', "In a tree or a graph, addressed by the node's label"],
               ['note …', 'The caption for this frame onward']
             ]
           },
@@ -1071,6 +1210,129 @@ export const DOC_TOPICS: DocTopic[] = [
           {
             kind: 'note',
             text: 'A bare `stills:` picks the frames the way printing does — the ones carrying a `note`, plus the ends.'
+          }
+        ]
+      },
+      {
+        title: 'threads — a schedule, and what it cost',
+        blocks: [
+          {
+            kind: 'example',
+            code: fence(
+              'threads',
+              'title: A lost update\nT1 read x | 0\nT2 read x | 0\nT1 x = x + 1\nT2 x = x + 1\nT1 write x | 1\nT2 write x | 1\nnote One increment is gone'
+            )
+          },
+          {
+            kind: 'p',
+            text: 'The one thing about concurrency that will not go into prose: that the bug is in neither thread. Both of those threads are correct. What is wrong is the **order**, and an order is a picture — one column a thread, time down the page, and the reader doing the interleaving that a paragraph would have to narrate.'
+          },
+          {
+            kind: 'table',
+            head: ['Write', 'Draws'],
+            mono: true,
+            rows: [
+              ['T1 read x', 'A step in T1’s column, at the next moment'],
+              ['T1 read x | 0', 'The same, with what it saw underneath'],
+              ['T1 lock m', 'Takes a monitor — a bar down the side of the column'],
+              ['T1 unlock m', 'Lets it go'],
+              ['T2 wait m', 'Blocked: in the schedule, but nothing happened'],
+              ['note …', 'A remark in the margin, against the row above'],
+              ['threads: T1 T2', 'Fixes the order of the columns']
+            ]
+          },
+          {
+            kind: 'p',
+            text: 'It is a still figure and not an animation, deliberately. A race is not something to watch happen; it is one schedule out of the many the machine was allowed to choose, and the argument is always a comparison with another one. Two of these blocks side by side is that argument.'
+          },
+          {
+            kind: 'example',
+            code: fence(
+              'threads',
+              'T1 lock a\nT2 lock b\nT1 wait b\nT2 wait a\nnote Neither can go on, and neither will let go'
+            ),
+            caption: 'Deadlock: two locks, taken in opposite orders.'
+          },
+          {
+            kind: 'note',
+            text: 'A lock never released is drawn as held to the bottom of the figure, which is usually the thing being pointed at.'
+          }
+        ]
+      },
+      {
+        title: 'grammar — a syntax, as railroad',
+        blocks: [
+          {
+            kind: 'example',
+            code: fence(
+              'grammar',
+              'expr ::= term { "+" term }\nterm ::= factor { "*" factor }\nfactor ::= NUMBER | "(" expr ")"'
+            )
+          },
+          {
+            kind: 'p',
+            text: 'A grammar is already a picture and is nevertheless always written as text. Drawn, the two questions a reader actually has — can this be empty, how many of these may there be — are answered by the shape: a **bypass line** means optional, a **return line** means repeated.'
+          },
+          {
+            kind: 'table',
+            head: ['Write', 'Draws'],
+            mono: true,
+            rows: [
+              ['expr ::= …', 'A rule. `=`, `->` and `:` define one too'],
+              ['| …', 'On its own line, continues the rule above'],
+              ['"+"', 'A literal — a stadium'],
+              ['term', 'A rule name — a rectangle'],
+              ['a | b', 'A fork, one branch a line'],
+              ['[ a ]', 'Optional: a bypass over the top — `a?` as well'],
+              ['{ a }', 'Zero or more: a line back underneath — `a*` as well'],
+              ['a+', 'One or more: the loop without the bypass'],
+              ['ε', 'The empty string — a straight line']
+            ]
+          },
+          {
+            kind: 'p',
+            text: 'Quotes are the only thing that makes a terminal a terminal, which is EBNF’s own rule. It means `"("` has to be quoted to mean a bracket rather than a group — and it means a grammar does not change shape when an unrelated rule is renamed.'
+          },
+          {
+            kind: 'example',
+            code: fence('grammar', 'stmt ::= "if" expr "then" stmt [ "else" stmt ]\nargs ::= expr { "," expr }'),
+            caption: 'The dangling else, and a comma-separated list — both one line.'
+          }
+        ]
+      },
+      {
+        title: 'algo — over a graph',
+        blocks: [
+          {
+            kind: 'example',
+            code: fence(
+              'algo',
+              'graph:\nlayout: circle\ns -> a: 4\ns -> b: 1\nb -> a: 2\na -> t: 5\n---\nset s 0\nvisit s\ncompare s b\nset b 1\ncompare s a\nset a 4\nvisit b\ncompare b a\nset a 3\nnote 3 beats 4 — the way round is shorter'
+            )
+          },
+          {
+            kind: 'p',
+            text: 'A graph is the one structure written as *lines* rather than as a value, so here — and only here — the `---` rule stops being decoration and becomes the split: edges above it, steps below. Everything a `graph` block understands works above the rule, layouts included.'
+          },
+          {
+            kind: 'table',
+            head: ['Step', 'Does'],
+            mono: true,
+            rows: [
+              ['visit a', 'Marks a node visited, addressed by its name'],
+              ['compare a b', 'Lights both — and the edge between them'],
+              ['set b 4', "Writes the second line under a node — the distance"],
+              ['mark b frontier', 'Any lasting mark, in its own colour'],
+              ['note …', 'The caption for this frame onward']
+            ]
+          },
+          {
+            kind: 'p',
+            text: 'There is no verb for "cross this edge" because there does not need to be one: an edge lights when both of its ends are active, and crossing an edge is looking at the two things it joins. `compare a b` is the relaxation step.'
+          },
+          {
+            kind: 'note',
+            text: 'A node is named, never renumbered — so `set` writes the *value under* it rather than replacing it. That is what makes a Dijkstra run readable: the names hold still and the numbers fall.'
           }
         ]
       },
@@ -1402,7 +1664,7 @@ export const DOC_TOPICS: DocTopic[] = [
           },
           {
             kind: 'p',
-            text: 'Every one is rebindable. Settings › Keyboard lists each command with the chords bound to it; click one to remove it, or record another. Bindings are stored by command id, so they survive an update.'
+            text: 'Every one is rebindable. Settings › Keyboard lists each command with the chords bound to it; click one to remove it, or record another. Bindings are stored by command id, so they survive an update. Commands with no chord — **Explain the block at the caret**, among others — are still there to bind, and are always reachable from the palette.'
           }
         ]
       }

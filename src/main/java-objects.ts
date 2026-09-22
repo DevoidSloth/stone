@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { javaSnippets, type JavaSnippets } from '@shared/code-langs'
+import { JAVA_MARKERS, javaSnippets, type JavaSnippets } from '@shared/code-langs'
 import { killTree, quote } from './run-code'
 
 /**
@@ -87,6 +87,7 @@ public class StoneObjects {
     JShell shell = null;
     try {
       String helper = Files.readString(dir.resolve("dump.java"));
+      String markers = Files.readString(dir.resolve("markers.java"));
       String source = Files.readString(dir.resolve("code.java"));
       String aliases = Files.readString(dir.resolve("aliases.java"));
       String statements = Files.readString(dir.resolve("statements.java"));
@@ -102,6 +103,10 @@ public class StoneObjects {
           .build();
 
       run(shell, helper, "Stone's own helper");
+      // \`@Nullable\` and the rest, declared once before anything can use them:
+      // a redeclaration part-way through would replace the type and reset the
+      // objects that are the whole reason for the session.
+      offer(shell, markers);
       above(shell, dir);
       run(shell, source, "the block");
       offer(shell, aliases);
@@ -617,6 +622,7 @@ export async function objectDiagram(request: ObjectDiagramRequest): Promise<stri
     await Promise.all([
       writeFile(path.join(dir, 'StoneObjects.java'), DRIVER, 'utf8'),
       writeFile(path.join(dir, 'dump.java'), DUMPER, 'utf8'),
+      writeFile(path.join(dir, 'markers.java'), JAVA_MARKERS, 'utf8'),
       writeFile(path.join(dir, 'code.java'), parts.source, 'utf8'),
       writeFile(path.join(dir, 'aliases.java'), parts.aliases.join('\n\n'), 'utf8'),
       writeFile(path.join(dir, 'statements.java'), parts.statements, 'utf8'),

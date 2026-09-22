@@ -32,7 +32,7 @@
  * the block runs on its own through the one-shot runner instead.
  */
 
-import { javaComplete, javaEntryCall, javaShape } from './code-langs'
+import { JAVA_MARKERS, javaComplete, javaEntryCall, javaShape } from './code-langs'
 
 /** What a block becomes before it is written to the session. */
 export interface KernelCell {
@@ -292,13 +292,19 @@ export const CODE_KERNELS: CodeKernel[] = [
      * bar, its diagnostics. `System.in` is emptied for the same reason the
      * Python driver empties it: a block that reads it would otherwise be read
      * the next block.
+     *
+     * The marker annotations come last, once the session has gone quiet, so
+     * that declaring them says nothing. Once per session rather than once per
+     * block: redeclaring a type in a live jshell replaces it and resets what
+     * depended on it, which in a notebook is the state the notebook is for.
      */
     prologue: () =>
       [
         '/set mode stone concise -quiet',
         '/set prompt stone "" ""',
         '/set feedback stone',
-        'System.setIn(java.io.InputStream.nullInputStream());'
+        'System.setIn(java.io.InputStream.nullInputStream());',
+        JAVA_MARKERS
       ].join('\n') + '\n',
     prepare: javaPrepare,
     wire: (code, nonce) =>

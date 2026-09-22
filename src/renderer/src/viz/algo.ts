@@ -19,8 +19,9 @@
  */
 
 import { accentStyle, accentValue, arrowDefs, ellipsize, html, label, round, svg, textWidth } from './svg'
-import { annotate, flag, items, numeric, readSource, VizError } from './source'
+import { annotate, flag, items, numeric, readSource, VizError, type SourceLine } from './source'
 import { buildTree, drawTreeNode, layoutTree, type Figure, type TreeNode } from './tree'
+import { buildGraph, drawGraphFigure, layoutGraph, type Graph } from './graph'
 
 export const ALGO_KEYS = [
   'title',
@@ -37,6 +38,15 @@ export const ALGO_KEYS = [
   'bst',
   'heap',
   'level',
+  // The one structure written as lines rather than as a value — see `prepare`,
+  // where the `---` rule stops being decoration for a graph and starts being
+  // the split between the picture and the run over it.
+  'graph',
+  'layout',
+  'start',
+  'accept',
+  'directed',
+  'undirected',
   'speed',
   'autoplay',
   'loop',
@@ -71,7 +81,7 @@ const POINTER_H = 18
 const RANGE_H = 16
 const PAD = 14
 
-type Shape = 'array' | 'stack' | 'queue' | 'list' | 'tree'
+type Shape = 'array' | 'stack' | 'queue' | 'list' | 'tree' | 'graph'
 
 interface Step {
   verb: string
@@ -162,7 +172,7 @@ function clone(frame: Frame): Frame {
  */
 function runSteps(start: Frame, steps: Step[], shape: Shape): Frame[] {
   const frames: Frame[] = [start]
-  const noun = shape === 'tree' ? 'node' : 'slot'
+  const noun = shape === 'tree' || shape === 'graph' ? 'node' : 'slot'
   const slot = (step: Step, raw: string | undefined, length: number): number =>
     index(step, raw, length, noun)
   let nextItem = start.slots.length
@@ -608,6 +618,55 @@ function treeStage(tree: TreeNode, frames: Frame[], marksUsed: Set<string>): Sta
   return { root, apply }
 }
 
+/**
+ * A graph, with the walk over it drawn on top.
+ *
+ * The same contract as `treeStage` — lay the picture out once, then say what
+ * each frame does to it — with one addition: an edge lights when *both* of its
+ * ends are active. That is derived rather than written, and it is the whole
+ * reason `compare a b` is the step for relaxing an edge: the fence needs no
+ * verb for "cross this edge", because crossing one is looking at both of the
+ * things it joins.
+ *
+ * A node's value is its second line rather than its name. A graph's nodes are
+ * named by the source and never renamed; what changes as a shortest-path
+ * algorithm runs is the number under each one, which is exactly what `set b 4`
+ * should write.
+ */
+function graphStage(graph: Graph, frames: Frame[], marksUsed: Set<string>): Stage {
+  const figure = drawGraphFigure(graph)
+
+  const apply = (frame: Frame): void => {
+    figure.nodes.forEach((group, at) => {
+      const node = graph.nodes[at]
+      const mark = frame.marks.get(at)
+      const accent = mark ? (MARK_ACCENT[mark] ?? 'yellow') : node.accent
+      group.setAttribute(
+        'class',
+        `viz-node${mark || node.highlight ? ' is-marked' : ''}${frame.active.includes(at) ? ' is-active' : ''}${node.dim ? ' is-dim' : ''}`
+      )
+      const colour = accentValue(accent)
+      if (colour) group.style.setProperty('--viz-accent', colour)
+      else group.style.removeProperty('--viz-accent')
+      if (mark) marksUsed.add(mark)
+    })
+
+    figure.subs.forEach((text, at) => {
+      text.textContent = frame.values.get(at) ?? ''
+    })
+
+    figure.edges.forEach((group, at) => {
+      const edge = graph.edges[at]
+      group.classList.toggle(
+        'is-active',
+        frame.active.includes(edge.from) && frame.active.includes(edge.to)
+      )
+    })
+  }
+
+  return { root: figure.root, apply }
+}
+
 // ------------------------------------------------------------------ playback
 
 export interface Animation extends Figure {
@@ -628,25 +687,73 @@ interface Prepared {
  * stage built. Shared by the player and by the still it prints as.
  */
 function prepare(source: string): Prepared {
-  const { directives, lines } = readSource(source, ALGO_KEYS)
+  const whole = readSource(source, ALGO_KEYS)
 
-  const shape: Shape = directives.has('stack')
-    ? 'stack'
-    : directives.has('queue')
-      ? 'queue'
-      : directives.has('list')
-        ? 'list'
-        : directives.has('bst') || directives.has('heap') || directives.has('level')
-          ? 'tree'
-          : 'array'
+  // A graph is written as lines, and so are the steps, so for this one shape
+  // the `---` rule has to mean something. Everywhere else it stays what it has
+  // always been — a place to rest the eye, dropped before anything reads the
+  // block — and the two halves are read together.
+  let directives = whole.directives
+  let structure: SourceLine[] = []
+  let body = whole.lines
+  if (whole.directives.has('graph')) {
+    const at = source.split('\n').findIndex((line) => line.trim() === '---')
+    if (at === -1) {
+      throw new VizError(
+        'a `graph:` run needs a `---` between the graph and the steps, or there is no telling which lines are which'
+      )
+    }
+    const above = readSource(source.split('\n').slice(0, at).join('\n'), ALGO_KEYS)
+    const below = readSource(source.split('\n').slice(at + 1).join('\n'), ALGO_KEYS)
+    directives = new Map([...above.directives, ...below.directives])
+    structure = above.lines
+    body = below.lines
+  }
 
-  const steps = parseSteps(lines)
+  const shape: Shape = directives.has('graph')
+    ? 'graph'
+    : directives.has('stack')
+      ? 'stack'
+      : directives.has('queue')
+        ? 'queue'
+        : directives.has('list')
+          ? 'list'
+          : directives.has('bst') || directives.has('heap') || directives.has('level')
+            ? 'tree'
+            : 'array'
+
+  const steps = parseSteps(body)
 
   // A tree names its nodes; a lane numbers its slots. Either way a step arrives
   // holding a name, and it has to become the index the frames are folded over.
   let start: Frame
   let tree: TreeNode | null = null
-  if (shape === 'tree') {
+  let graph: Graph | null = null
+  if (shape === 'graph') {
+    graph = buildGraph(structure, directives)
+    // Room for a second line under every node is reserved before the layout
+    // runs, whether or not anything has written one yet: a node that grew when
+    // its distance arrived would move every edge that ends at it.
+    layoutGraph(graph, directives.get('layout'), true)
+
+    // A step names a node the way the graph does. Rewriting the names to
+    // indices here is what lets every verb below stay index-based.
+    for (const step of steps) {
+      step.args = step.args.map((arg) => {
+        const at = graph?.byId.get(arg)
+        return at === undefined ? arg : String(at)
+      })
+    }
+
+    start = {
+      slots: graph.nodes.map((_, at) => at),
+      values: new Map(graph.nodes.flatMap((node, at) => (node.sub ? [[at, node.sub] as [number, string]] : []))),
+      marks: new Map(),
+      active: [],
+      pointers: [],
+      ranges: []
+    }
+  } else if (shape === 'tree') {
     tree = buildTree(directives, [])
     const order: TreeNode[] = []
     const collect = (node: TreeNode): void => {
@@ -694,7 +801,12 @@ function prepare(source: string): Prepared {
 
   const frames = runSteps(start, steps, shape)
   const marksUsed = new Set<string>()
-  const stage = shape === 'tree' && tree ? treeStage(tree, frames, marksUsed) : laneStage(shape, frames, marksUsed)
+  const stage =
+    shape === 'graph' && graph
+      ? graphStage(graph, frames, marksUsed)
+      : shape === 'tree' && tree
+        ? treeStage(tree, frames, marksUsed)
+        : laneStage(shape, frames, marksUsed)
 
   // A pass over every frame before the first paint, so the legend below the
   // figure is complete from the start rather than growing as it plays.

@@ -52,7 +52,7 @@ const MATH_FENCES = new Set(['math', 'latex', 'katex', 'tex'])
 /** Fence languages drawn as something else: a diagram, a query, a figure. */
 const DRAWN_FENCES = new Set(['mermaid', 'svg', 'stone', 'query', 'toc', 'contents'])
 
-interface CodeBlock {
+export interface CodeBlock {
   /** The info string as written, `!` and all. */
   info: string
   /** The language name alone, lowercased and unmarked. */
@@ -73,8 +73,18 @@ export type WriteContext =
   | { kind: 'prose' }
   /** Display maths: a `$$` region, or a ```math fence. */
   | { kind: 'math' }
-  /** A fence drawn as a picture or a query, where none of this applies. */
-  | { kind: 'drawn' }
+  /**
+   * A fence drawn as something else — a figure, a diagram, a query. The block
+   * comes with it, because those fences have grammars of their own and
+   * `block-complete` needs to know which one it is looking at.
+   */
+  | { kind: 'drawn'; block: CodeBlock }
+  /**
+   * The fence line itself, where the language is named rather than written in.
+   * `opening` separates ```` ```py ```` from the ``` that closes it — only one
+   * of the two is a place to suggest a language.
+   */
+  | { kind: 'fence'; block: CodeBlock; opening: boolean }
   | { kind: 'code'; block: CodeBlock; earlier: CodeBlock[] }
 
 /**
@@ -159,16 +169,25 @@ export function contextAt(state: EditorState, pos: number): WriteContext {
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i]
     const end = block.endLine === 0 ? doc.lines : block.endLine
+    if (line < block.startLine || line > end) continue
+
     // The two fence lines belong to the fence, not to what is inside it: the
-    // caret sitting on ```` ```py `` is naming the language, not writing Python.
-    if (line <= block.startLine || line > end) continue
-    if (block.endLine !== 0 && line === block.endLine) break
+    // caret sitting on ```` ```py ```` is naming the language, not writing
+    // Python — which is a place worth suggesting in, just not the same one.
+    if (line === block.startLine) {
+      context = { kind: 'fence', block, opening: true }
+      break
+    }
+    if (block.endLine !== 0 && line === block.endLine) {
+      context = { kind: 'fence', block, opening: false }
+      break
+    }
 
     context =
       block.name === '$$' || MATH_FENCES.has(block.name)
         ? { kind: 'math' }
         : DRAWN_FENCES.has(block.name) || vizKind(block.name)
-          ? { kind: 'drawn' }
+          ? { kind: 'drawn', block }
           : { kind: 'code', block, earlier: blocks.slice(0, i) }
     break
   }
@@ -261,7 +280,7 @@ function latexPreview(command: LatexCommand): Node | null {
  */
 export function latexComplete(context: CompletionContext): CompletionResult | null {
   const where = contextAt(context.state, context.pos)
-  if (where.kind === 'code' || where.kind === 'drawn') return null
+  if (where.kind !== 'math' && where.kind !== 'prose') return null
   if (where.kind === 'prose') {
     const line = context.state.doc.lineAt(context.pos)
     if (!inInlineMath(line.text, context.pos - line.from)) return null

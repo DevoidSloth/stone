@@ -271,6 +271,16 @@ interface StoneState {
   /** Which manual topic the Docs panel is reading, or null for its index. */
   docsTopic: string | null
   /**
+   * A section of that topic to scroll to, once it is up.
+   *
+   * State rather than a scroll call because the panel that has to do the
+   * scrolling may not be mounted yet: **Explain this block** opens the
+   * inspector, switches it to the manual and names a section in one action, and
+   * the section only exists in the DOM a render later. The panel clears this
+   * when it has used it, so coming back to the same topic does not jump.
+   */
+  docsSection: string | null
+  /**
    * Where the caret is, so the Code panel can say which block you are in.
    *
    * Published by the editor on every selection change rather than read out of
@@ -453,8 +463,10 @@ interface StoneState {
   toggleAgenda: () => void
   setSidePanel: (panel: SidePanel) => void
   togglePanel: () => void
-  /** Open the manual, at a topic when one is named. */
-  openDocs: (topic?: string | null) => void
+  /** Open the manual, at a topic — and at a section inside it — when named. */
+  openDocs: (topic?: string | null, section?: string | null) => void
+  /** Called by the panel once it has scrolled to the section it was sent to. */
+  clearDocsSection: () => void
   setCaret: (relPath: string, line: number) => void
 
   // ---------------------------------------------------------------- audio
@@ -672,6 +684,7 @@ export const useStone = create<StoneState>((set, get) => ({
   sidePanel: 'backlinks',
   panelOpen: false,
   docsTopic: null,
+  docsSection: null,
   caret: null,
 
   trash: [],
@@ -2039,10 +2052,20 @@ export const useStone = create<StoneState>((set, get) => ({
   togglePanel() {
     set((s) => ({ panelOpen: !s.panelOpen }))
   },
-  openDocs(topic = null) {
+  openDocs(topic = null, section = null) {
     // A named topic always wins, so a command that opens one is not a no-op
     // when the panel is already showing something else.
-    set({ sidePanel: 'docs', panelOpen: true, ...(topic === null ? {} : { docsTopic: topic }) })
+    set({
+      sidePanel: 'docs',
+      panelOpen: true,
+      ...(topic === null ? {} : { docsTopic: topic }),
+      // Cleared even when nothing was named, or the topic would open scrolled
+      // to wherever the last question sent it.
+      docsSection: section
+    })
+  },
+  clearDocsSection() {
+    if (get().docsSection !== null) set({ docsSection: null })
   },
   setCaret(relPath, line) {
     const caret = get().caret

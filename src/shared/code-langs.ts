@@ -439,6 +439,96 @@ export function javaComplete(code: string): boolean {
 }
 
 /**
+ * `@Nullable` and its neighbours, supplied.
+ *
+ * Not one of them is part of Java. Every one — JetBrains', JSR-305's, the
+ * Checker Framework's, Android's — arrives in a jar, and a block in a note has
+ * no jar: javac answers `cannot find symbol`, and jshell answers that the
+ * block's own class `cannot be referenced until class Nullable is declared`.
+ * Both read as a mistake in the code rather than as a missing dependency, and
+ * they make a page of notes taken off a course that annotates its nullness
+ * unrunnable over an annotation that was never going to do anything.
+ *
+ * So Stone declares them, as the marker annotations they are: writable
+ * wherever they get written, kept in source only, and checked by nothing —
+ * which is exactly what the library versions do at compile time too. Being
+ * read by a checker that is not here is the whole of their job, and mean-
+ * while the block runs.
+ */
+const JAVA_MARKER_NAMES = ['Nullable', 'NonNull', 'NotNull', 'Nonnull', 'CheckForNull']
+
+/**
+ * Everywhere one can be written. `TYPE_USE` is the modern spelling and covers
+ * a field's type, a parameter's, a return, a cast and a type argument; the
+ * declaration targets beside it are what a `void` method or a constructor
+ * needs, which no type-use annotation can be applied to.
+ */
+const JAVA_MARKER_TARGETS = [
+  'TYPE_USE',
+  'TYPE_PARAMETER',
+  'TYPE',
+  'FIELD',
+  'METHOD',
+  'CONSTRUCTOR',
+  'PARAMETER',
+  'LOCAL_VARIABLE'
+]
+
+/**
+ * One marker's declaration, on one line and in fully qualified names.
+ *
+ * Both of those are so that it can be dropped in anywhere: jshell reads a
+ * session a line at a time, and javac wants every import ahead of every
+ * declaration — an `import java.lang.annotation.Target;` of Stone's own would
+ * have to go somewhere in the user's block, and there is nowhere it fits.
+ */
+function javaMarker(name: string): string {
+  const where = JAVA_MARKER_TARGETS.map((target) => `java.lang.annotation.ElementType.${target}`)
+  return (
+    '@java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.SOURCE) ' +
+    `@java.lang.annotation.Target({${where.join(', ')}}) @interface ${name} {}`
+  )
+}
+
+/**
+ * All of them, for the two places that declare them once at start-up.
+ *
+ * A session and the object-diagram driver both hold a jshell open across
+ * blocks, and there a second declaration of a name is not a no-op even when it
+ * is identical: jshell replaces the type and resets every snippet that depended
+ * on it, which for the diagram means the objects being drawn. Declaring the lot
+ * before the first block is what keeps that from ever happening. They cost a
+ * type apiece, nothing refers to them, and a user who declares their own
+ * `Nullable` later replaces Stone's, which is the right way round.
+ */
+export const JAVA_MARKERS = JAVA_MARKER_NAMES.map(javaMarker).join('\n')
+
+/**
+ * The marker declarations a one-shot block needs, or an empty string.
+ *
+ * A file compiled as a unit cannot have them unconditionally — a second
+ * `Nullable` beside an imported one is a duplicate where there was a working
+ * dependency. So: only a name the block writes with an `@`, does not declare
+ * itself, and does not import. A wildcard import from anywhere outside `java.`
+ * stops all of them, since no package under `java.` declares one of these and
+ * anything else is the user pointing at a real annotation — theirs to keep,
+ * even if the jar behind it turns out to be missing and says so.
+ */
+export function javaMarkerShim(code: string): string {
+  const text = blankJavaLiterals(code)
+  const wildcards = [...text.matchAll(/\bimport\s+(?:static\s+)?([\w$.]+)\.\*\s*;/g)]
+  if (wildcards.some((match) => !match[1].startsWith('java.'))) return ''
+
+  const needed = JAVA_MARKER_NAMES.filter(
+    (name) =>
+      new RegExp(`@\\s*${name}\\b`).test(text) &&
+      !new RegExp(`\\b(?:class|interface|enum|record)\\s+${name}\\b`).test(text) &&
+      !new RegExp(`\\bimport\\s+(?:static\\s+)?[\\w$.]*\\b${name}\\s*;`).test(text)
+  )
+  return needed.map(javaMarker).join('\n')
+}
+
+/**
  * What to call the file, for the paths that are handed to javac.
  *
  * javac — unlike the launcher, which waives it — insists that a public type
@@ -477,22 +567,31 @@ function javaFileName(shape: JavaShape): string {
 export function javaPlan(code: string, platform: string): RunPlan {
   const shape = scanJava(code)
   const entry = javaEntry(shape)
+  const markers = javaMarkerShim(code)
+
+  // Which end they go on is decided by what reports a problem in the file.
+  // javac and the launcher count its lines, so the declarations go after the
+  // block and every line number the user is shown still points where they are
+  // looking. jshell counts snippets rather than lines, and grumbles about a
+  // forward reference on its way to resolving it, so there they go first.
+  const file = markers ? `${code}\n\n${markers}\n` : code
+  const script = markers ? `${markers}\n${code}\n/exit\n` : `${code}\n/exit\n`
 
   if (shape.mainAt >= 0) {
     if (shape.packageName && entry) {
       return {
         name: javaFileName(shape),
-        text: code,
+        text: file,
         command: `javac -d {dir} {file} && java -cp {dir} ${shape.packageName}.${entry}`
       }
     }
-    return { name: entry ?? javaFileName(shape), text: code, command: 'java {file}' }
+    return { name: entry ?? javaFileName(shape), text: file, command: 'java {file}' }
   }
 
   if (shape.looseCode) {
     return {
       name: javaFileName(shape),
-      text: `${code}\n/exit\n`,
+      text: script,
       // Its own VM would be a second startup for nothing; the run is already
       // its own process group, so a loop that will not end is still killable.
       command: 'jshell -q --execution local {file}'
@@ -502,7 +601,7 @@ export function javaPlan(code: string, platform: string): RunPlan {
   const note = 'Compiled cleanly. Nothing ran: the block declares no main method.'
   return {
     name: javaFileName(shape),
-    text: code,
+    text: file,
     command:
       platform === 'win32'
         ? `javac -d {dir} {file} && echo ${note}`
