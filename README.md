@@ -635,12 +635,12 @@ the path your terminal uses.
 
 ## Program figures
 
-Seven fences for the pictures a programmer draws on a whiteboard: what refers to
+Eight fences for the pictures a programmer draws on a whiteboard: what refers to
 what, what is in memory, what shape a tree is, how a design is put together,
-where a key lands, how something grows, and what an algorithm does over time.
-They render in the editor as you type, print into an export, and are plain text
-in the file like everything else, so a note that draws one still reads as source
-in any other editor.
+where a key lands, how something grows, which bits a word is cut into, and what
+an algorithm does over time. They render in the editor as you type, print into
+an export, and are plain text in the file like everything else, so a note that
+draws one still reads as source in any other editor.
 
 Mermaid stays the right tool for a flowchart or a state machine. These are for
 the things it cannot do: a pointer, a lopsided binary tree, a type hierarchy
@@ -844,6 +844,40 @@ buckets: 4
 
 You cannot do both. A computed table and a typed one would disagree, and the
 computed one is the point.
+
+### `bitfield` — a word, cut into its bits
+
+```bitfield
+s:1 sign
+bexp:8 biased exponent
+m:23 significand
+```
+
+One row a field: a short name for the box, how many bits it owns, and the long
+name underneath it. Boxes are drawn to scale — the same convention every ISA
+manual and RFC diagram already uses — with a floor under each one so a
+one-bit field still fits its own letter.
+
+| Directive | Does |
+| --- | --- |
+| `s:1 sign` | A field: id, bit count, name |
+| `_:7` | Bits nothing uses — drawn hatched, not boxed |
+| `width: 32` | Caps a row; the rest wraps onto the next |
+| `title:` / `caption:` | A line above and a line below the figure |
+
+```bitfield
+width: 32
+opcode:6 op
+rs:5 source
+rt:5 target
+rd:5 dest
+shamt:5 shift
+funct:6 function
+```
+
+A `width:` directive caps how many bits fit on a row and wraps the rest onto
+the next one, which is what a 32-bit-per-line protocol header needs and a
+single register does not.
 
 ### `chart` — growth, predicted or measured
 

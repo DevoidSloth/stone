@@ -10,9 +10,9 @@ import pkg from 'electron-updater'
  * whatever build they first downloaded.
  *
  * That matters more here than in most apps. The README makes the case for
- * signing precisely because *the next update* must not revoke the calendar
- * permission macOS pinned to the signature, and that argument only pays off if
- * updates actually reach people.
+ * signing precisely because *the next update* must not revoke a permission
+ * macOS pinned to the signature, and that argument only pays off if updates
+ * actually reach people.
  *
  * Deliberately quiet: it checks, downloads in the background, and then says so
  * once. It never interrupts, and it never restarts the app on its own — a notes

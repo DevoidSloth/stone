@@ -109,7 +109,7 @@ async function inlineAsset(vaultPath: string, relPath: string): Promise<string> 
   }
 }
 
-export async function noteToHtmlDocument(note: Note): Promise<string> {
+export async function noteToHtmlDocument(note: Note, vaultPath: string | null): Promise<string> {
   const edited = new Date(note.mtime).toLocaleDateString(undefined, {
     year: 'numeric',
     month: 'long',
@@ -132,9 +132,9 @@ export async function noteToHtmlDocument(note: Note): Promise<string> {
   })
 
   const resolved = new Map<string, string>()
-  if (settings.vaultPath) {
+  if (vaultPath) {
     for (const relPath of wanted) {
-      resolved.set(relPath, await inlineAsset(settings.vaultPath, relPath))
+      resolved.set(relPath, await inlineAsset(vaultPath, relPath))
     }
   }
 
@@ -182,12 +182,12 @@ export async function exportMarkdown(note: Note): Promise<string | null> {
   return target
 }
 
-export async function exportHtml(note: Note): Promise<string | null> {
+export async function exportHtml(note: Note, vaultPath: string | null): Promise<string | null> {
   const target = await askWhereToSave(`${note.title}.html`, [
     { name: 'HTML', extensions: ['html'] }
   ])
   if (!target) return null
-  await fs.writeFile(target, await noteToHtmlDocument(note), 'utf8')
+  await fs.writeFile(target, await noteToHtmlDocument(note, vaultPath), 'utf8')
   return target
 }
 

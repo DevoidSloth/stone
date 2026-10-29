@@ -286,8 +286,10 @@ export const LATEX_COMMANDS: LatexCommand[] = [
   { name: 'models', symbol: '⊨', group: 'Logic', keywords: 'satisfies entails' },
 
   // ------------------------------------------------------- arrows
-  { name: 'to', symbol: '→', group: 'Arrow', keywords: 'right arrow maps tends rightarrow' },
-  { name: 'gets', symbol: '←', group: 'Arrow', keywords: 'left arrow assign leftarrow' },
+  { name: 'to', symbol: '→', group: 'Arrow', keywords: 'right arrow maps tends' },
+  { name: 'rightarrow', symbol: '→', group: 'Arrow', keywords: 'right arrow maps tends to' },
+  { name: 'gets', symbol: '←', group: 'Arrow', keywords: 'left arrow assign' },
+  { name: 'leftarrow', symbol: '←', group: 'Arrow', keywords: 'left arrow assign gets' },
   { name: 'leftrightarrow', symbol: '↔', group: 'Arrow', keywords: 'both ways' },
   { name: 'Rightarrow', symbol: '⇒', group: 'Arrow', keywords: 'implies double' },
   { name: 'Leftarrow', symbol: '⇐', group: 'Arrow', keywords: 'implied by double' },
@@ -298,6 +300,13 @@ export const LATEX_COMMANDS: LatexCommand[] = [
   { name: 'uparrow', symbol: '↑', group: 'Arrow', keywords: 'up' },
   { name: 'downarrow', symbol: '↓', group: 'Arrow', keywords: 'down' },
   { name: 'longrightarrow', symbol: '⟶', group: 'Arrow', keywords: 'long right' },
+  { name: 'longleftarrow', symbol: '⟵', group: 'Arrow', keywords: 'long left' },
+  { name: 'Longrightarrow', symbol: '⟹', group: 'Arrow', keywords: 'long implies double' },
+  { name: 'Longleftarrow', symbol: '⟸', group: 'Arrow', keywords: 'long implied by double' },
+  { name: 'Uparrow', symbol: '⇑', group: 'Arrow', keywords: 'up double' },
+  { name: 'Downarrow', symbol: '⇓', group: 'Arrow', keywords: 'down double' },
+  { name: 'nearrow', symbol: '↗', group: 'Arrow', keywords: 'up right diagonal' },
+  { name: 'searrow', symbol: '↘', group: 'Arrow', keywords: 'down right diagonal' },
   { name: 'xrightarrow', group: 'Arrow', args: 1, keywords: 'labelled arrow over', sample: 'a \\xrightarrow{f} b' },
   { name: 'rightleftharpoons', symbol: '⇌', group: 'Arrow', keywords: 'equilibrium reaction chemistry' },
 
@@ -515,7 +524,15 @@ export function findLatex(query: string): LatexCommand[] {
 
   // Shorter names first inside a rank: `\in` before `\infty` for `in`, which is
   // the one the person who stopped typing after two letters meant.
-  scored.sort((a, b) => a.rank - b.rank || a.command.name.length - b.command.name.length)
+  // Then the spelling as typed: `\rightarrow` and `\Rightarrow` are different
+  // arrows, and matching without case must not put the wrong one first.
+  const exact = (name: string): number => (name.startsWith(query) ? 0 : 1)
+  scored.sort(
+    (a, b) =>
+      a.rank - b.rank ||
+      exact(a.command.name) - exact(b.command.name) ||
+      a.command.name.length - b.command.name.length
+  )
   return scored.map((s) => s.command)
 }
 
@@ -537,4 +554,30 @@ export function findEnvironment(query: string): LatexEnvironment[] {
   }
   scored.sort((a, b) => a.rank - b.rank)
   return scored.map((s) => s.env)
+}
+
+/**
+ * A note-wide macro preamble, Overleaf style.
+ *
+ * `\newcommand{\R}{\mathbb{R}}` written anywhere in a note — inside a math
+ * block or out — defines `\R` for every equation in that note, not just the
+ * one it was written in. Scanned fresh from the raw text rather than relying
+ * on KaTeX's own macro persistence, because that only accumulates in the
+ * order widgets happen to render, which is not the order they appear in a
+ * document once the editor stops rendering everything off-screen.
+ */
+const NEWCOMMAND_RE =
+  /\\(?:re)?newcommand\*?\s*\{?\\([a-zA-Z]+)\}?(?:\[\d+\])?(?:\[[^\]]*\])?\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g
+const DEF_RE = /\\def\s*\\([a-zA-Z]+)\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g
+
+export function collectLatexMacros(text: string): Record<string, string> {
+  const macros: Record<string, string> = {}
+  for (const re of [NEWCOMMAND_RE, DEF_RE]) {
+    re.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = re.exec(text))) {
+      macros[`\\${m[1]}`] = m[2]
+    }
+  }
+  return macros
 }

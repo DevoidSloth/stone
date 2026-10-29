@@ -1,4 +1,4 @@
-import { net, protocol } from 'electron'
+import { net, protocol, type Session } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DOC_HOST, STONE_PROTOCOL, toDocumentUrl, toProtocolUrl } from '@shared/attachments'
@@ -41,8 +41,17 @@ function contains(root: string, absolute: string): boolean {
   return absolute === resolvedRoot || absolute.startsWith(resolvedRoot + path.sep)
 }
 
-export function registerProtocolHandler(vault: Vault, libraryRoots: () => string[]): void {
-  protocol.handle(STONE_PROTOCOL, async (request) => {
+/**
+ * Bound to one window's own session, not the app-wide default.
+ *
+ * Two windows can have two different vaults open, and a global handler has
+ * no way to tell which window a request came from — `net`'s custom-scheme
+ * requests do not carry the requesting webContents. A session of its own
+ * per window sidesteps the question entirely: this handler only ever answers
+ * requests from the one window it was registered for.
+ */
+export function registerProtocolHandler(ses: Session, vault: Vault, libraryRoots: () => string[]): void {
+  ses.protocol.handle(STONE_PROTOCOL, async (request) => {
     let host: string
     let relative: string
     try {

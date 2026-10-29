@@ -1,18 +1,18 @@
-import { app, BrowserWindow, globalShortcut, Menu, Tray, nativeImage } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, Menu, Tray, nativeImage } from 'electron'
 import path from 'node:path'
 import type { CaptureAction } from '@shared/types'
+import { activeVault } from './windows'
 
 /**
- * Capture from outside the app.
+ * Reach Stone from outside the app.
  *
- * Quick-add already existed, but it only answered when Stone had focus, which
- * is the one moment you are least likely to need it — a thought worth capturing
- * almost always arrives while you are doing something else. Three routes bring
+ * The window isn't always open, which is the one moment a thought is easiest
+ * to lose — it arrives while you are doing something else. Three routes bring
  * it in from the outside: a global chord, a tray menu, and a `stone://` URL.
  *
  * All three land in the same place. Main does not create notes here; it raises
- * the window and forwards an action, so the renderer's existing quick-add and
- * navigation paths stay the single implementation of what those things mean.
+ * the window and forwards an action, so the renderer's existing navigation
+ * paths stay the single implementation of what those things mean.
  */
 
 interface CaptureDeps {
@@ -57,16 +57,13 @@ export function actionFromUrl(raw: string): CaptureAction | null {
   const q = url.searchParams
 
   switch (verb) {
-    case 'capture':
-    case 'task':
-      return { type: 'quick-add', text: q.get('text') ?? undefined }
     case 'open': {
       const relPath = q.get('path')
       return relPath ? { type: 'open', relPath } : null
     }
     case 'daily':
     case 'today':
-      return { type: 'daily' }
+      return { type: 'show' }
     case 'new': {
       const title = q.get('title')
       return title ? { type: 'new-note', title, content: q.get('content') ?? undefined } : null
@@ -86,6 +83,61 @@ export function urlFromArgv(argv: string[]): string | null {
   return argv.find((arg) => arg.startsWith('stone://')) ?? null
 }
 
+const MARKDOWN_FILE = /\.(md|markdown)$/i
+
+/** Pull markdown file arguments out of a process argv, for Windows and Linux. */
+export function markdownFromArgv(argv: string[]): string[] {
+  // Packaged, argv[0] is the executable; in dev it is followed by the app path,
+  // which is a directory and never matches.
+  return argv.slice(1).filter((arg) => !arg.startsWith('-') && MARKDOWN_FILE.test(arg))
+}
+
+/**
+ * Open a markdown file the OS handed us, which is what happens when Stone is
+ * the default app for `.md`. A file inside the current vault opens as a note.
+ * One outside it is not a note Stone knows about, so say so rather than
+ * ignoring the double-click.
+ */
+export async function openMarkdownFile(absPath: string): Promise<void> {
+  const win = deps ? await deps.ensureWindow() : null
+  const root = activeVault()?.vaultPath
+  const rel = root ? path.relative(root, absPath) : null
+  if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+    void dispatch({ type: 'open', relPath: rel.split(path.sep).join('/') })
+    return
+  }
+  void dispatch({ type: 'show' })
+  const options: Electron.MessageBoxOptions = {
+    type: 'info',
+    message: `${path.basename(absPath)} is outside your vault.`,
+    detail: 'Stone opens notes from the vault folder. Move or copy the file into it, or switch to the vault that contains it.'
+  }
+  if (win) await dialog.showMessageBox(win, options)
+  else await dialog.showMessageBox(options)
+}
+
+/**
+ * macOS delivers a double-clicked file as an `open-file` event, and on a cold
+ * launch it fires before the app is ready — so this has to be attached at
+ * import time, with the paths held until there is a window to show them in.
+ */
+export function registerOpenFile(): void {
+  const pending: string[] = []
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault()
+    if (deps && app.isReady()) void openMarkdownFile(filePath)
+    else pending.push(filePath)
+  })
+  app.whenReady().then(() => {
+    // registerCapture runs later in startup; wait for it rather than race it.
+    const timer = setInterval(() => {
+      if (!deps) return
+      clearInterval(timer)
+      for (const p of pending.splice(0)) void openMarkdownFile(p)
+    }, 100)
+  })
+}
+
 /**
  * Bind the global capture chord.
  *
@@ -100,7 +152,7 @@ export function setCaptureShortcut(chord: string | null): boolean {
   }
   if (!chord) return true
   try {
-    const ok = globalShortcut.register(chord, () => void dispatch({ type: 'quick-add' }))
+    const ok = globalShortcut.register(chord, () => void dispatch({ type: 'show' }))
     if (ok) registeredChord = chord
     return ok
   } catch {
@@ -123,14 +175,12 @@ function buildTray(): void {
   tray.setToolTip('Stone')
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: 'Quick add…', click: () => void dispatch({ type: 'quick-add' }) },
-      { label: "Open today's note", click: () => void dispatch({ type: 'daily' }) },
+      { label: 'Show Stone', click: () => void dispatch({ type: 'show' }) },
       { type: 'separator' },
-      { label: 'Show Stone', click: () => void dispatch({ type: 'daily' }) },
       { label: 'Quit', role: 'quit' }
     ])
   )
-  tray.on('click', () => void dispatch({ type: 'quick-add' }))
+  tray.on('click', () => void dispatch({ type: 'show' }))
 }
 
 export function registerCapture(
@@ -152,6 +202,9 @@ export function registerCapture(
 
   const initial = urlFromArgv(process.argv)
   if (initial) setTimeout(() => handleUrl(initial), 800)
+  for (const file of markdownFromArgv(process.argv)) {
+    setTimeout(() => void openMarkdownFile(path.resolve(file)), 800)
+  }
 }
 
 export function setTrayEnabled(enabled: boolean): void {

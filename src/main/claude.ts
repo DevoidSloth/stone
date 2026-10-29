@@ -321,16 +321,6 @@ Your final message is what they see, and it is pasted into a note when they choo
 
 ${HOUSE_RULES}`
 
-const LECTURE_PROMPT = `You answer questions about a recorded lecture. You are given its transcript, with a clock time in front of every line, and often the notes the person typed while they were listening.
-
-Answer only from what you were given. The transcript is machine-made and will have misheard names, jargon and numbers — read through an obvious mishearing when the sense is clear, and say so when it is not. If the recording does not cover what was asked, say that plainly instead of filling the gap from general knowledge.
-
-Cite. Every claim about what was said carries the time it was said at, written bare as \`12:04\` or \`1:02:04\` — those become buttons that jump the audio there, so an answer with no times is an answer the reader cannot check. Put the time next to the claim, not in a list at the end.
-
-Be direct and concrete: name the actual terms, definitions, numbers and examples used. Prefer a short list over a paragraph when the answer has parts. No preamble, no "based on the transcript", no summary of what you were asked. Markdown, and nothing wrapped in an outer code fence.
-
-When the notes are included and they contradict or trail off from the recording, it is worth saying where — that is usually the reason the question is being asked.`
-
 function systemPrompt(mode: ClaudeMode): string {
   if (mode === 'diagram') return DIAGRAM_PROMPT
   if (mode === 'drawing') return DRAWING_PROMPT
@@ -338,7 +328,6 @@ function systemPrompt(mode: ClaudeMode): string {
   if (mode === 'animation') return ANIMATION_PROMPT
   if (mode === 'code') return CODE_PROMPT
   if (mode === 'agent') return AGENT_PROMPT
-  if (mode === 'lecture') return LECTURE_PROMPT
   return TEXT_PROMPT
 }
 
@@ -560,9 +549,7 @@ export async function run(request: RunRequest): Promise<RunResult> {
     )
   }
 
-  // Lecture context arrives already labelled — a transcript and the notes taken
-  // against it — so a second "from the note" header would only misdescribe it.
-  const header = request.mode === 'lecture' ? '' : '--- context from the note ---\n'
+  const header = '--- context from the note ---\n'
   const input = request.context?.trim()
     ? `${request.prompt.trim()}\n\n${header}${request.context.trim()}`
     : request.prompt.trim()

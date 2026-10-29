@@ -1,9 +1,8 @@
-import { BrowserWindow, dialog, ipcMain, nativeTheme, shell, app } from 'electron'
+import { BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type {
-  CalEvent,
-  CalendarAccount,
   CanvasData,
   ClaudeMode,
   LibraryDoc,
@@ -11,6 +10,7 @@ import type {
   Priority,
   SearchOptions,
   Settings,
+  Task,
   TaskStatus
 } from '@shared/types'
 import {
@@ -23,14 +23,10 @@ import {
   toISODate
 } from '@shared/task-syntax'
 import { Vault } from './vault/store'
-import { CalendarService } from './calendar/service'
-import { buildIcs } from './calendar/ics'
-import * as graph from './calendar/graph'
 import { detectCloudTargets, syncAdvice } from './cloud'
-import { applyThemeChrome } from './window-chrome'
+import { applyThemeChrome, nativeSource, resolveTheme } from './window-chrome'
 import { loadSettings, peekSettings, saveSettings } from './settings'
-import { seedVault } from './seed'
-import { readNote, toAbsPath } from './vault/fs'
+import { toAbsPath } from './vault/fs'
 import {
   configureExport,
   exportHtml,
@@ -57,8 +53,6 @@ import {
 import { setCaptureShortcut, setTrayEnabled } from './capture'
 import * as claude from './claude'
 import { objectDiagram } from './java-objects'
-import * as audio from './audio'
-import * as whisper from './transcribe'
 import { cancelRun, runCode } from './run-code'
 import {
   cancelSessionRun,
@@ -86,30 +80,63 @@ import {
   stopClipper,
   type ClipperHooks
 } from './clipper'
+import { activeVault, activeWindow, allVaults, registerWindow, vaultForWindow } from './windows'
 
-export const vault = new Vault()
-const calendar = new CalendarService(vault)
+/**
+ * Which vault a handler body's bare `vault` means.
+ *
+ * Every window has its own `Vault` — its own note index, its own watcher — so
+ * a handler cannot simply close over one shared instance the way it could
+ * when there was only ever one. Rather than thread a vault argument through
+ * every one of the ~150 handlers below, `vault` stays the same bare name they
+ * already use; what it resolves to is carried through `AsyncLocalStorage`,
+ * established once per incoming request from the window that sent it. A
+ * handler's whole `async` call chain — including everything after an
+ * `await` — sees the same vault it started with, even while a second window's
+ * request is being handled concurrently.
+ *
+ * Requests that do not originate from a specific window's own IPC call — the
+ * web clipper's HTTP listener, the reminder timer, a plugin command relayed
+ * through the offscreen host — have no such context. Those fall back to
+ * whichever window was focused most recently, which is the same resolution a
+ * single-window app effectively had all along.
+ */
+const context = new AsyncLocalStorage<{ vault: Vault; win: BrowserWindow }>()
 
-/** Reads the calendar over the next day, for the reminder scheduler. */
-async function upcomingEvents(): Promise<CalEvent[]> {
-  const settings = await loadSettings()
-  const now = new Date()
-  const tomorrow = new Date(now.getTime() + 36 * 60 * 60 * 1000)
-  const { events } = await calendar.eventsInRange(
-    settings,
-    toISODate(now),
-    toISODate(tomorrow)
-  )
-  return events
+function requireVault(): Vault {
+  const vault = context.getStore()?.vault ?? activeVault()
+  if (!vault) throw new Error('No vault window is open.')
+  return vault
 }
+
+/** The window a handler is running on behalf of, for dialogs and the like. */
+function currentWindow(): BrowserWindow | null {
+  return context.getStore()?.win ?? activeWindow() ?? BrowserWindow.getFocusedWindow()
+}
+
+const vault: Vault = new Proxy({} as Vault, {
+  get(_target, prop, _receiver) {
+    const real = requireVault()
+    const value = Reflect.get(real as object, prop)
+    return typeof value === 'function' ? value.bind(real) : value
+  },
+  set(_target, prop, value) {
+    Reflect.set(requireVault() as object, prop, value)
+    return true
+  }
+})
 
 /** Every handler returns `{ ok, data }` or `{ ok: false, error }` so the renderer never sees a raw throw. */
 type Reply<T> = { ok: true; data: T } | { ok: false; error: string }
 
 function handle<T>(channel: string, fn: (...args: never[]) => Promise<T> | T): void {
-  ipcMain.handle(channel, async (_event, ...args) => {
+  ipcMain.handle(channel, async (event, ...args) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const winVault = win ? vaultForWindow(win.id) : undefined
+    const run = (): Promise<T> | T => fn(...(args as never[]))
     try {
-      return { ok: true, data: await fn(...(args as never[])) } satisfies Reply<T>
+      const data = await (winVault && win ? context.run({ vault: winVault, win }, run) : run())
+      return { ok: true, data } satisfies Reply<T>
     } catch (err) {
       return { ok: false, error: (err as Error).message } satisfies Reply<T>
     }
@@ -120,6 +147,42 @@ function broadcast(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
   }
+}
+
+/**
+ * Tasks for the reminder scheduler, which polls on its own timer rather than
+ * in response to a window's request — so at the moment it fires there may be
+ * no window open yet at all (the app is still starting) or not any more (the
+ * last one just closed). Neither is an error; there is simply nothing to
+ * remind about.
+ */
+function safeAllTasks(): Task[] {
+  try {
+    return vault.allTasks()
+  } catch {
+    return []
+  }
+}
+
+/** Create this window's vault, wire its events to it alone, and track it. */
+export function createWindowVault(win: BrowserWindow): Vault {
+  const winVault = new Vault()
+  winVault.snapshotsEnabled = peekSettings().snapshotsEnabled
+  winVault.on('vault-event', (event) => {
+    if (!win.isDestroyed()) win.webContents.send('vault:event', event)
+  })
+  registerWindow(win, winVault)
+  return winVault
+}
+
+/**
+ * Set by `main/index.ts` once it has a `createWindow`, so `app:newWindow` can
+ * open one without an import cycle back to the module that calls `registerIpc`.
+ */
+let openNewWindow: ((vaultPath: string | null) => Promise<void>) | null = null
+
+export function setNewWindowHandler(fn: (vaultPath: string | null) => Promise<void>): void {
+  openNewWindow = fn
 }
 
 /**
@@ -152,27 +215,14 @@ const clipperHooks: ClipperHooks = {
     const settings = await loadSettings()
     const parsed = parseQuickAdd(text)
     const line = buildTaskLine(parsed)
-    const day = parsed.due ? parsed.due.slice(0, 10) : toISODate(new Date())
-    const result = await vault.addTaskToDaily(day, settings.dailyFolder, line)
+    const result = await vault.appendTask(settings.inboxFolder, line)
     if ('error' in result) throw new Error(result.error)
     broadcast('vault:event', { type: 'reindexed', count: 1 })
     return result.relPath
   }
 }
 
-/** Load a template note's body, or null when none is configured or readable. */
-async function readTemplate(relPath: string | null): Promise<string | null> {
-  if (!relPath || !vault.vaultPath) return null
-  try {
-    return await readNote(toAbsPath(vault.vaultPath, relPath))
-  } catch {
-    return null
-  }
-}
-
 export function registerIpc(): void {
-  vault.on('vault-event', (event) => broadcast('vault:event', event))
-
   configurePluginHost({
     readNote: async (relPath) => (await vault.getNote(relPath))?.content ?? null,
     writeNote: async (relPath, content) => {
@@ -210,8 +260,6 @@ export function registerIpc(): void {
 
 
   void loadSettings().then(async (settings) => {
-    vault.snapshotsEnabled = settings.snapshotsEnabled
-
     // The library is scanned in the background: extraction reads whole files,
     // and a first run over a large document folder takes long enough that
     // doing it before the window paints would look like a hang.
@@ -239,7 +287,7 @@ export function registerIpc(): void {
     }
 
     startReminders(
-      { tasks: () => vault.allTasks(), events: upcomingEvents },
+      { tasks: safeAllTasks },
       () => ({
         enabled: settings.remindersEnabled,
         leadMinutes: settings.reminderLeadMinutes
@@ -253,22 +301,22 @@ export function registerIpc(): void {
   handle('settings:get', () => loadSettings())
   handle('settings:set', async (patch: Partial<Settings>) => {
     const next = await saveSettings(patch)
-    if (patch.snapshotsEnabled !== undefined) vault.snapshotsEnabled = patch.snapshotsEnabled
+    if (patch.snapshotsEnabled !== undefined) {
+      for (const v of allVaults()) v.snapshotsEnabled = patch.snapshotsEnabled
+    }
     if (patch.remindersEnabled !== undefined || patch.reminderLeadMinutes !== undefined) {
       stopReminders()
       startReminders(
-        { tasks: () => vault.allTasks(), events: upcomingEvents },
+        { tasks: safeAllTasks },
         () => ({ enabled: next.remindersEnabled, leadMinutes: next.reminderLeadMinutes }),
         (payload) => broadcast('vault:event', { type: 'reminder', ...payload })
       )
     }
     if (patch.theme) {
-      nativeTheme.themeSource = patch.theme === 'system' ? 'system' : patch.theme
+      nativeTheme.themeSource = nativeSource(patch.theme)
       // The system draws the caption buttons, so the renderer cannot restyle
       // them — main has to repaint the overlay whenever the theme flips.
-      const resolved =
-        patch.theme === 'system' ? (nativeTheme.shouldUseDarkColors ? 'dark' : 'light') : patch.theme
-      applyThemeChrome(resolved)
+      applyThemeChrome(resolveTheme(patch.theme))
     }
     return next
   })
@@ -281,7 +329,7 @@ export function registerIpc(): void {
   })
 
   handle('vault:choose', async () => {
-    const win = BrowserWindow.getFocusedWindow()
+    const win = currentWindow()
     const result = win
       ? await dialog.showOpenDialog(win, {
           title: 'Choose a folder for your vault',
@@ -293,23 +341,23 @@ export function registerIpc(): void {
   })
 
   handle('vault:open', async (vaultPath: string) => {
-    // Seed before opening, so the starter notes are in the index the first
-    // scan builds rather than arriving as watcher events afterwards. Only on
-    // the very first vault, and only when it is genuinely empty — an existing
-    // Obsidian vault opened for the first time must never be written into.
-    const before = peekSettings()
-    if (!before.firstRunComplete) await seedVault(vaultPath, before.inboxFolder)
-
     await vault.open(vaultPath)
-    const settings = await saveSettings({ vaultPath, firstRunComplete: true })
     // Plugins live inside the vault, so opening one is what makes them exist.
     // A failure here is the plugin's problem, not the vault's — it is reported
     // per plugin in the manager rather than aborting the open.
+    const settings = await loadSettings()
     if (settings.enabledPlugins.length > 0) {
       void reloadPlugins(vaultPath, settings.enabledPlugins).catch(() => undefined)
     }
     return { vaultPath, stats: vault.stats() }
   })
+
+  /**
+   * What this specific window has open, not "the" vault — there can be
+   * several now. Asked once at boot, and again after `vault:open` reloads
+   * the window, so the renderer never has to guess from global settings.
+   */
+  handle('vault:currentPath', () => ({ vaultPath: vault.vaultPath }))
 
   handle('vault:reindex', async () => {
     await vault.reindex()
@@ -358,22 +406,6 @@ export function registerIpc(): void {
 
   handle('notes:backlinks', (relPath: string) => vault.backlinks(relPath))
   handle('notes:mentions', (relPath: string) => vault.unlinkedMentions(relPath))
-
-  handle('notes:daily', async (date: string) => {
-    const settings = await loadSettings()
-    const template = await readTemplate(settings.dailyTemplate)
-    const result = await vault.dailyNote(date, settings.dailyFolder, template ?? undefined)
-    if ('error' in result) throw new Error(result.error)
-    return result
-  })
-
-  handle('notes:periodic', async (kind: 'week' | 'month', date: string) => {
-    const settings = await loadSettings()
-    const folder = kind === 'week' ? settings.weeklyFolder : settings.monthlyFolder
-    const result = await vault.periodicNote(kind, date, folder)
-    if ('error' in result) throw new Error(result.error)
-    return result
-  })
 
   handle('notes:move', async (relPath: string, folder: string) => {
     const result = await vault.moveNote(relPath, folder)
@@ -524,7 +556,7 @@ export function registerIpc(): void {
 
   handle('attachments:pick', async () => {
     const settings = await loadSettings()
-    const win = BrowserWindow.getFocusedWindow()
+    const win = currentWindow()
     const options: Electron.OpenDialogOptions = {
       title: 'Insert a file',
       properties: ['openFile', 'multiSelections']
@@ -587,7 +619,7 @@ export function registerIpc(): void {
   handle('export:html', async (relPath: string) => {
     const note = await vault.getNote(relPath)
     if (!note) throw new Error('That note is no longer in the vault.')
-    return exportHtml(note)
+    return exportHtml(note, vault.vaultPath)
   })
 
   handle('export:pdf', async (relPath: string) => {
@@ -785,7 +817,7 @@ export function registerIpc(): void {
    * twice, or added and then never read.
    */
   handle('library:addFolder', async (mode: 'index' | 'copy') => {
-    const win = BrowserWindow.getFocusedWindow()
+    const win = currentWindow()
     const options: Electron.OpenDialogOptions = {
       title: 'Choose a folder of documents',
       buttonLabel: 'Watch this folder',
@@ -953,7 +985,7 @@ export function registerIpc(): void {
 
   handle('vault:pickCssSnippet', async () => {
     if (!vault.vaultPath) throw new Error('No vault is open.')
-    const win = BrowserWindow.getFocusedWindow()
+    const win = currentWindow()
     const options: Electron.OpenDialogOptions = {
       title: 'Choose a CSS snippet inside the vault',
       defaultPath: vault.vaultPath,
@@ -1016,7 +1048,7 @@ export function registerIpc(): void {
   handle('tasks:checkReminders', async () => {
     const settings = await loadSettings()
     await checkReminders(
-      { tasks: () => vault.allTasks(), events: upcomingEvents },
+      { tasks: safeAllTasks },
       { enabled: settings.remindersEnabled, leadMinutes: settings.reminderLeadMinutes },
       (payload) => broadcast('vault:event', { type: 'reminder', ...payload })
     )
@@ -1034,25 +1066,6 @@ export function registerIpc(): void {
     return true
   })
 
-  handle(
-    'tasks:quickAdd',
-    async (input: {
-      text: string
-      due: string | null
-      priority: Priority
-      tags: string[]
-      estimate: number | null
-      recurrence?: string | null
-    }) => {
-      const settings = await loadSettings()
-      const line = buildTaskLine(input)
-      const day = input.due ? input.due.slice(0, 10) : toISODate(new Date())
-      const result = await vault.addTaskToDaily(day, settings.dailyFolder, line)
-      if ('error' in result) throw new Error(result.error)
-      return result
-    }
-  )
-
   // --------------------------------------------------------------- search
 
   handle('search:query', (query: string, options?: SearchOptions) => vault.search(query, options))
@@ -1060,131 +1073,6 @@ export function registerIpc(): void {
   handle('search:replaceAll', (query: string, replacement: string, options?: SearchOptions) =>
     vault.replaceAll(query, replacement, options)
   )
-
-  // ------------------------------------------------------------- calendar
-
-  handle('cal:accounts', async () => {
-    const settings = await loadSettings()
-    const result = await calendar.listAccounts(settings)
-    // Persist newly-discovered calendars so their enabled state survives restarts.
-    const known = new Map(settings.calendars.map((c) => [c.id, c]))
-    for (const account of result.accounts) if (!known.has(account.id)) known.set(account.id, account)
-    await saveSettings({ calendars: [...known.values()] })
-    return result
-  })
-
-  handle('cal:setEnabled', async (id: string, enabled: boolean) => {
-    const settings = await loadSettings()
-    const calendars = settings.calendars.map((c) => (c.id === id ? { ...c, enabled } : c))
-    await saveSettings({ calendars })
-    return calendars
-  })
-
-  handle('cal:events', async (fromISO: string, toISO: string) => {
-    const settings = await loadSettings()
-    return calendar.eventsInRange(settings, fromISO, toISO)
-  })
-
-  handle('cal:refresh', () => {
-    calendar.clearFeedCache()
-    return true
-  })
-
-  handle(
-    'cal:save',
-    async (
-      accountId: string,
-      input: {
-        id?: string
-        title: string
-        start: string
-        end: string
-        allDay: boolean
-        location?: string | null
-        notes?: string | null
-      }
-    ) => {
-      const settings = await loadSettings()
-
-      if (accountId === 'stone') {
-        const frontmatter = [
-          '---',
-          `date: ${input.start.slice(0, 10)}`,
-          ...(input.allDay ? [] : [`start: ${input.start.slice(11, 16)}`, `end: ${input.end.slice(11, 16)}`]),
-          ...(input.location ? [`location: ${input.location}`] : []),
-          '---',
-          '',
-          `# ${input.title}`,
-          '',
-          input.notes ?? '',
-          ''
-        ].join('\n')
-        const created = await vault.createNote(settings.dailyFolder, input.title, frontmatter)
-        if ('error' in created) throw new Error(created.error)
-        return { id: `stone:${created.relPath}`, relPath: created.relPath }
-      }
-
-      const account = settings.calendars.find((c) => c.id === accountId)
-      if (!account) throw new Error('That calendar is no longer connected.')
-      const id = await calendar.saveExternalEvent(account, input)
-      return { id, relPath: null }
-    }
-  )
-
-  handle('cal:delete', async (id: string) => {
-    if (id.startsWith('stone:')) {
-      await vault.deleteNote(id.slice('stone:'.length))
-      return true
-    }
-    await calendar.removeExternalEvent(id)
-    return true
-  })
-
-  handle('cal:addSubscription', async (name: string, url: string, color: string) => {
-    const settings = await loadSettings()
-    const id = `ics:${Buffer.from(url).toString('base64url').slice(0, 24)}`
-    if (settings.icsSubscriptions.some((s) => s.id === id)) {
-      throw new Error('That calendar is already subscribed.')
-    }
-    const icsSubscriptions = [...settings.icsSubscriptions, { id, name, url, color }]
-    await saveSettings({ icsSubscriptions })
-    calendar.clearFeedCache()
-    return icsSubscriptions
-  })
-
-  handle('cal:removeSubscription', async (id: string) => {
-    const settings = await loadSettings()
-    const icsSubscriptions = settings.icsSubscriptions.filter((s) => s.id !== id)
-    await saveSettings({
-      icsSubscriptions,
-      calendars: settings.calendars.filter((c) => c.id !== id)
-    })
-    calendar.clearFeedCache()
-    return icsSubscriptions
-  })
-
-  handle('cal:export', async (events: CalEvent[], suggestedName: string) => {
-    const win = BrowserWindow.getFocusedWindow()
-    const result = await dialog.showSaveDialog(win!, {
-      title: 'Export calendar',
-      defaultPath: path.join(app.getPath('downloads'), suggestedName),
-      filters: [{ name: 'ICalendar', extensions: ['ics'] }]
-    })
-    if (result.canceled || !result.filePath) return null
-    await fs.writeFile(result.filePath, buildIcs(events), 'utf8')
-    return result.filePath
-  })
-
-  // ----------------------------------------------------- microsoft account
-
-  handle('graph:status', async () => ({ connected: await graph.isConnected() }))
-  handle('graph:begin', (clientId: string) => graph.beginSignIn(clientId))
-  handle(
-    'graph:complete',
-    (clientId: string, deviceCode: string, interval: number, expiresIn: number) =>
-      graph.completeSignIn(clientId, deviceCode, interval, expiresIn)
-  )
-  handle('graph:signOut', () => graph.signOut())
 
   // ---------------------------------------------------------------- claude
 
@@ -1223,108 +1111,6 @@ export function registerIpc(): void {
   )
 
   handle('claude:cancel', (id: string) => claude.cancel(id))
-
-  // ----------------------------------------------------------------- audio
-
-  /**
-   * Recording is a stream, not a file upload.
-   *
-   * MediaRecorder hands the renderer a chunk every few seconds and each one is
-   * written straight through. Holding an hour of Opus in a renderer array and
-   * posting it across in one go would work right up until the moment it
-   * mattered — a crash, a reload, a laptop lid — and lose the whole lecture.
-   */
-  /** The macOS gate, asked for on the first press of record. */
-  handle('audio:requestMicrophone', () => audio.askForMicrophone())
-
-  handle('audio:startRecording', async (label: string) => {
-    if (!vault.vaultPath) throw new Error('No vault is open.')
-    const settings = await loadSettings()
-    return audio.startRecording(vault.vaultPath, settings.audioFolder, label)
-  })
-
-  handle('audio:appendRecording', (id: string, chunk: Uint8Array) =>
-    audio.appendRecording(id, chunk)
-  )
-
-  handle('audio:finishRecording', async (id: string) => {
-    if (!vault.vaultPath) throw new Error('No vault is open.')
-    const done = await audio.finishRecording(vault.vaultPath, id)
-    // The recordings folder is inside the vault, so the watcher will notice on
-    // its own; this only makes the file show up without waiting for the debounce.
-    broadcast('vault:event', { type: 'reindexed', count: 0 })
-    return done
-  })
-
-  handle('audio:cancelRecording', (id: string) => audio.cancelRecording(id))
-
-  /** The decoded 16 kHz mono WAV Whisper is fed, streamed the same way. */
-  handle('audio:openPcm', (id: string) => audio.openPcm(id))
-  handle('audio:writePcm', (id: string, chunk: Uint8Array) => audio.writePcm(id, chunk))
-  handle('audio:closePcm', (id: string) => audio.closePcm(id))
-  handle('audio:discardPcm', (id: string) => audio.discardPcm(id))
-
-  handle('audio:whisperStatus', async () => whisper.status((await loadSettings()).whisperCommand))
-
-  handle(
-    'audio:transcribe',
-    async (request: { id: string; audio: string; durationSeconds: number }) => {
-      if (!vault.vaultPath) throw new Error('No vault is open.')
-      const settings = await loadSettings()
-      const wav = await audio.closePcm(request.id)
-      if (!wav) throw new Error('The audio was not decoded. Try transcribing again.')
-
-      try {
-        const transcript = await whisper.run({
-          id: request.id,
-          wav,
-          audio: request.audio,
-          durationSeconds: request.durationSeconds,
-          binaryOverride: settings.whisperCommand,
-          model: settings.whisperModel,
-          language: settings.whisperLanguage,
-          onProgress: (segments, progress, stage) =>
-            broadcast('audio:progress', { id: request.id, segments, progress, stage })
-        })
-        await audio.writeTranscript(vault.vaultPath, transcript)
-        return transcript
-      } finally {
-        await audio.discardPcm(request.id)
-      }
-    }
-  )
-
-  handle('audio:cancelTranscribe', (id: string) => whisper.cancel(id))
-
-  handle('audio:transcript', (audioRelPath: string) => {
-    if (!vault.vaultPath) return null
-    return audio.readTranscript(vault.vaultPath, audioRelPath)
-  })
-
-  handle('audio:transcripts', () => {
-    if (!vault.vaultPath) return []
-    return audio.listTranscripts(vault.vaultPath)
-  })
-
-  handle('audio:deleteTranscript', async (audioRelPath: string) => {
-    if (!vault.vaultPath) throw new Error('No vault is open.')
-    await audio.deleteTranscript(vault.vaultPath, audioRelPath)
-    return true
-  })
-
-  /**
-   * How long a recording is, without decoding it.
-   *
-   * The renderer needs this to size the scrubber, and a WebM from MediaRecorder
-   * carries no duration in its header — `<audio>.duration` reads Infinity until
-   * the whole file has been seeked through. The transcript knows, so when there
-   * is one it answers; otherwise the player measures it the slow way, once.
-   */
-  handle('audio:duration', async (audioRelPath: string) => {
-    if (!vault.vaultPath) return null
-    const transcript = await audio.readTranscript(vault.vaultPath, audioRelPath)
-    return transcript?.durationSeconds ?? null
-  })
 
   // ------------------------------------------------------------ code blocks
 
@@ -1438,13 +1224,23 @@ export function registerIpc(): void {
     return true
   })
 
+  /**
+   * A new window, open on `vaultPath` — or blank, showing Welcome, when there
+   * isn't one yet. Independent of every other open window's vault.
+   */
+  handle('app:newWindow', async (vaultPath: string | null) => {
+    if (!openNewWindow) throw new Error('Not ready yet.')
+    await openNewWindow(vaultPath)
+    return true
+  })
+
   handle('window:minimize', () => {
-    BrowserWindow.getFocusedWindow()?.minimize()
+    currentWindow()?.minimize()
     return true
   })
 
   handle('window:toggleMaximize', () => {
-    const win = BrowserWindow.getFocusedWindow()
+    const win = currentWindow()
     if (!win) return false
     if (win.isMaximized()) win.unmaximize()
     else win.maximize()
@@ -1452,13 +1248,9 @@ export function registerIpc(): void {
   })
 
   handle('window:close', () => {
-    BrowserWindow.getFocusedWindow()?.close()
+    currentWindow()?.close()
     return true
   })
 
-  handle('window:isMaximized', () => BrowserWindow.getFocusedWindow()?.isMaximized() ?? false)
-}
-
-export function accountsFor(settings: Settings): CalendarAccount[] {
-  return settings.calendars
+  handle('window:isMaximized', () => currentWindow()?.isMaximized() ?? false)
 }

@@ -1,15 +1,18 @@
 /**
  * Check that a packaged macOS app carries the signature it needs.
  *
- * "Signed" is not the bar. macOS records a TCC (privacy) grant against an app's
- * *designated requirement*, so calendar access only survives a rebuild when
+ * "Signed" is not the bar. macOS records any TCC (privacy) grant against an
+ * app's *designated requirement*, so a grant only survives a rebuild when
  * that requirement anchors to a certificate:
  *
  *   identifier "com.stone.app" and certificate root = H"…"   ← survives updates
  *   cdhash H"…"                                              ← dies with this binary
  *
  * Nothing in a normal build fails when it comes out the second way, which is
- * why these checks exist as a build step rather than as a habit.
+ * why these checks exist as a build step rather than as a habit. Stone does
+ * not currently request any TCC-gated permission — REQUIRED_USAGE_KEYS is
+ * empty for that reason — but the check stays wired up for whenever one is
+ * added back.
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
@@ -18,18 +21,12 @@ import path from 'node:path'
 
 export const APP_ID = 'com.stone.app'
 
-// The Info.plist keys TCC reads when it decides whether to even show the
-// calendar prompt. They are only trustworthy because the signature seals them,
-// which is why they are checked after signing rather than in the config.
-const REQUIRED_USAGE_KEYS = [
-  'NSCalendarsUsageDescription',
-  'NSCalendarsFullAccessUsageDescription'
-]
+// The Info.plist keys TCC reads before it will even show a permission prompt.
+// They are only trustworthy because the signature seals them, which is why
+// they are checked after signing rather than in the config.
+const REQUIRED_USAGE_KEYS = []
 
-const REQUIRED_ENTITLEMENTS = [
-  'com.apple.security.cs.allow-jit',
-  'com.apple.security.automation.apple-events'
-]
+const REQUIRED_ENTITLEMENTS = ['com.apple.security.cs.allow-jit']
 
 /** codesign writes most of what we want to stderr, so both streams are joined. */
 function codesign(args) {
@@ -101,8 +98,8 @@ export function verifyApp(appPath, label = path.basename(appPath)) {
     note('no designated requirement')
   } else if (!/certificate (root|leaf)/.test(designated)) {
     note(
-      'the designated requirement does not anchor to a certificate, so calendar ' +
-        `access will not survive an update:\n    ${designated}`
+      'the designated requirement does not anchor to a certificate, so a TCC ' +
+        `grant will not survive an update:\n    ${designated}`
     )
   } else if (!designated.includes(`identifier "${APP_ID}"`)) {
     note(`the designated requirement does not name ${APP_ID}:\n    ${designated}`)
@@ -172,7 +169,7 @@ export function withMountedDmg(dmgPath, verify) {
 
 /**
  * Gatekeeper is a separate question from TCC: a self-signed certificate keeps
- * the calendar grant alive but will never clear Gatekeeper, which needs a real
+ * a permission grant alive but will never clear Gatekeeper, which needs a real
  * Developer ID and notarisation. Reported so the difference stays visible — not
  * treated as a failure.
  */

@@ -1,7 +1,7 @@
 import type { Completion, CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
-import { useStone } from '../store'
+import { CODE_LANGUAGES } from '@shared/code-langs'
 import { CARET } from '../lib/latex'
 import { allPresets, type Datatype } from './datatypes'
 import { askForAnimation } from './animate'
@@ -60,6 +60,25 @@ function presetBlocks(): Block[] {
     wholeLine: true,
     secondary: !preset.headline,
     type
+  }))
+}
+
+/**
+ * A code block already labelled with its language, one per language Stone runs.
+ *
+ * The plain "Code block" leaves the fence unlabelled, which means no colours
+ * and no Run button until the word is typed by hand. These are variations, so
+ * like the presets they wait for a query: `/java`, `/py` or `/c++` finds one,
+ * and a bare `/` is still a menu of kinds.
+ */
+function languageBlocks(): Block[] {
+  return CODE_LANGUAGES.map((language) => ({
+    label: language.label,
+    detail: `A ${language.label} code block, with a Run button`,
+    keywords: `code fence snippet ${language.aliases.join(' ')}`,
+    snippet: '```' + language.aliases[0] + '\n' + CARET + '\n```',
+    wholeLine: true,
+    secondary: true
   }))
 }
 
@@ -138,6 +157,7 @@ const BLOCKS: Block[] = [
 
   // The fences, and the several ways into each of them.
   ...presetBlocks(),
+  ...languageBlocks(),
 
   {
     label: 'Image',
@@ -159,13 +179,6 @@ const BLOCKS: Block[] = [
     keywords: 'algo algorithm animation animate claude ai sort search generate run',
     snippet: '',
     action: () => void askForAnimation('')
-  },
-  {
-    label: 'Recording',
-    detail: 'Record a lecture and stamp your notes as you type',
-    keywords: 'record recording audio lecture mic microphone transcribe transcript voice',
-    snippet: '',
-    action: () => void useStone.getState().startRecording()
   },
   {
     label: 'Hyperlink',
@@ -288,6 +301,32 @@ export async function insertPickedFiles(view: EditorView): Promise<void> {
 }
 
 /**
+ * How well a block answers what was typed, best first; -1 for not at all.
+ *
+ * The name comes before everything else: `/java` is the block called Java, then
+ * the ones whose names begin with it, and only after those the blocks that
+ * happen to mention Java in their search words — a box-and-pointer figure is
+ * *about* Java, and is the wrong first answer to someone who typed its name.
+ * Spelling as typed beats spelling folded to lower case at every step, so
+ * `/C` prefers C to a block that merely has a c in it.
+ */
+function rankBlock(block: Block, typed: string, query: string): number {
+  if (!query) return 0
+  const label = block.label
+  const lower = label.toLowerCase()
+
+  if (label === typed) return 0
+  if (lower === query) return 1
+  if (label.startsWith(typed)) return 2
+  if (lower.startsWith(query)) return 3
+  if (lower.split(/[^a-z0-9+#]+/).some((word) => word.startsWith(query))) return 4
+  if (lower.includes(query)) return 5
+  if (block.keywords.split(/\s+/).some((word) => word.startsWith(query))) return 6
+  if (block.keywords.includes(query) || block.detail.toLowerCase().includes(query)) return 7
+  return -1
+}
+
+/**
  * The completion source. Only fires on a `/` that starts a word, so a URL or a
  * date like `and/or` never opens the menu mid-sentence.
  */
@@ -296,29 +335,34 @@ export function slashMenu(context: CompletionContext): CompletionResult | null {
   // is the reason `/` was a safe trigger everywhere until code blocks started
   // suggesting things of their own — see `intellisense`.
   if (!inProse(context.state, context.pos)) return null
-  const match = context.matchBefore(/(?:^|\s)\/[\w -]*/)
+  const match = context.matchBefore(/(?:^|\s)\/[\w +#-]*/)
   if (!match) return null
 
   const raw = context.state.sliceDoc(match.from, match.to)
   const offset = raw.indexOf('/')
   const from = match.from + offset
-  const query = raw.slice(offset + 1).toLowerCase()
+  const typed = raw.slice(offset + 1)
+  const query = typed.toLowerCase()
 
-  const options: Completion[] = BLOCKS.filter((block) => {
-    // A single letter is still the start of almost everything, so variations
-    // wait until the query is specific enough to be about one fence.
-    if (block.secondary && query.length < 2) return false
-    if (!query) return true
-    return (
-      block.label.toLowerCase().includes(query) ||
-      block.keywords.includes(query) ||
-      block.detail.toLowerCase().includes(query)
+  // Ranked here rather than left to the menu: with `filter: false` it keeps
+  // the order it is given, so this is the order the person sees.
+  const ranked = BLOCKS.map((block, index) => ({ block, index, rank: rankBlock(block, typed, query) }))
+    .filter(
+      (entry) =>
+        entry.rank >= 0 &&
+        // A single letter is still the start of almost everything, so variations
+        // wait until the query is specific enough to be about one fence.
+        !(entry.block.secondary && query.length < 2)
     )
-  }).map((block) => ({
+    .sort(
+      (a, b) =>
+        a.rank - b.rank || a.block.label.length - b.block.label.length || a.index - b.index
+    )
+
+  const options: Completion[] = ranked.map(({ block }) => ({
     label: block.label,
     detail: block.detail,
     type: 'keyword',
-    boost: block.label.toLowerCase().startsWith(query) ? 1 : 0,
     info: () => previewNode(block),
     apply: (view: EditorView, _completion: Completion, applyFrom: number, applyTo: number) => {
       applySnippet(view, applyFrom, applyTo, block)

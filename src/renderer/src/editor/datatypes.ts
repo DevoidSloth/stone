@@ -583,6 +583,47 @@ export const DATATYPES: Datatype[] = [
     ]
   },
 
+  // -------------------------------------------------------------- bitfield
+  {
+    id: 'bitfield',
+    fence: 'bitfield',
+    label: 'Bit field',
+    blurb: 'A word, cut into the bits each part of it owns, drawn to scale.',
+    docs: { topic: 'figures', section: 'bitfield — a word, cut into its bits' },
+    annotated: true,
+    presets: [
+      {
+        label: 'Bit field',
+        detail: 'A row of fields, each sized to its bit count',
+        keywords: 'bitfield bit field ieee 754 float sign exponent mantissa significand packed struct register',
+        headline: true,
+        code: fence('bitfield', `s:1 sign\nbexp:8 biased exponent\nm:23 significand${CARET}`)
+      },
+      {
+        label: 'Bit field — with reserved bits',
+        detail: 'A gap nothing uses, hatched rather than boxed',
+        keywords: 'reserved unused padding gap hatched',
+        code: fence('bitfield', 'opcode:6 op\nrs:5 source\nrt:5 target\n_:16')
+      },
+      {
+        label: 'Bit field — wrapped rows',
+        detail: 'width: caps a row, wrapping the rest onto the next',
+        keywords: 'protocol header row wrap tcp ip multiple rows width',
+        code: fence('bitfield', 'width: 32\nversion:4\nihl:4\ntos:8\ntotal_length:16\nid:16\nflags:3\nfrag_offset:13')
+      }
+    ],
+    keys: [
+      {
+        key: 'width',
+        detail: 'Bits per row — wraps onto the next once a row is full',
+        sample: '32',
+        boost: 2
+      },
+      TITLE,
+      CAPTION
+    ]
+  },
+
   // ------------------------------------------------------------------- hash
   {
     id: 'hash',

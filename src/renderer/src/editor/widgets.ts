@@ -417,131 +417,6 @@ export class MediaWidget extends WidgetType {
 }
 
 /**
- * A recording, embedded in the note it was taken against.
- *
- * Not an `<audio controls>`, which is what the generic media embed gives every
- * other sound file. A lecture is played from the bar at the foot of the window
- * so that scrolling past the embed — or opening a different note to compare
- * something — does not stop it, and so that the timestamps scattered down the
- * note are all seeking the same clock. This card is the handle on that player,
- * not a second one.
- */
-export class RecordingWidget extends WidgetType {
-  constructor(
-    readonly target: string,
-    readonly label: string,
-    readonly onPlay: (target: string, seconds: number) => void,
-    readonly onTranscript: (target: string) => void
-  ) {
-    super()
-  }
-
-  eq(other: RecordingWidget): boolean {
-    return other.target === this.target && other.label === this.label
-  }
-
-  get estimatedHeight(): number {
-    return 52
-  }
-
-  toDOM(): HTMLElement {
-    const wrap = document.createElement('div')
-    wrap.className = 'cm-embed cm-embed--recording'
-
-    const play = document.createElement('button')
-    play.type = 'button'
-    play.className = 'cm-recording__play'
-    play.title = 'Play this recording'
-    play.setAttribute('aria-label', 'Play this recording')
-    // Drawn rather than a glyph, so it matches the icon family everywhere else.
-    play.innerHTML =
-      '<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.6v8.8a.6.6 0 0 0 .92.5l7-4.4a.6.6 0 0 0 0-1l-7-4.4A.6.6 0 0 0 5 3.6Z"/></svg>'
-    play.addEventListener('mousedown', (event) => {
-      event.preventDefault()
-      event.stopPropagation()
-      this.onPlay(this.target, 0)
-    })
-
-    const name = document.createElement('span')
-    name.className = 'cm-recording__name truncate'
-    name.textContent = decodeSafely(this.label)
-
-    const transcript = document.createElement('button')
-    transcript.type = 'button'
-    transcript.className = 'cm-recording__action'
-    transcript.textContent = 'Transcript'
-    transcript.title = 'Show the transcript, or make one'
-    transcript.addEventListener('mousedown', (event) => {
-      event.preventDefault()
-      event.stopPropagation()
-      this.onTranscript(this.target)
-    })
-
-    wrap.append(play, name, transcript)
-    return blockShell(wrap)
-  }
-
-  ignoreEvent(): boolean {
-    return false
-  }
-}
-
-/** A percent-encoded name, shown the way it looks in the Finder. */
-function decodeSafely(value: string): string {
-  try {
-    return decodeURIComponent(value)
-  } catch {
-    return value
-  }
-}
-
-/**
- * The clock in front of a stamped line.
- *
- * Always replaced, never revealed as raw markdown the way every other marker
- * is when the caret lands on its line. There is nothing in it a person would
- * want to edit by hand — the recorder wrote it and the player reads it — and
- * un-hiding forty characters of link on whichever line is being typed would
- * make writing during a lecture feel like the text was sliding around. The
- * marker is registered as an atomic range instead, so the caret steps over it
- * and one backspace takes the whole thing.
- */
-export class StampWidget extends WidgetType {
-  constructor(
-    readonly clock: string,
-    readonly seconds: number,
-    readonly target: string,
-    readonly onPlay: (target: string, seconds: number) => void
-  ) {
-    super()
-  }
-
-  eq(other: StampWidget): boolean {
-    return (
-      other.clock === this.clock && other.seconds === this.seconds && other.target === this.target
-    )
-  }
-
-  toDOM(): HTMLElement {
-    const button = document.createElement('button')
-    button.type = 'button'
-    button.className = 'cm-stamp'
-    button.textContent = this.clock
-    button.title = `Play the recording from ${this.clock}`
-    button.addEventListener('mousedown', (event) => {
-      event.preventDefault()
-      event.stopPropagation()
-      this.onPlay(this.target, this.seconds)
-    })
-    return button
-  }
-
-  ignoreEvent(): boolean {
-    return false
-  }
-}
-
-/**
  * An embedded PDF page.
  *
  * Chromium's own viewer would be less code — `<object type="application/pdf">`
@@ -691,8 +566,6 @@ export function embedWidget(
     ) => Promise<{ title: string; body: string; missing?: boolean } | null>
     onOpenWikilink: (target: string) => void
     onOpenAsset: (target: string) => void
-    onPlayAudio: (target: string, seconds: number) => void
-    onShowTranscript: (target: string) => void
   }
 ): WidgetType {
   if (spec.kind === 'note') {
@@ -716,12 +589,7 @@ export function embedWidget(
     )
   }
   if (spec.kind === 'audio') {
-    return new RecordingWidget(
-      spec.target,
-      spec.label,
-      handlers.onPlayAudio,
-      handlers.onShowTranscript
-    )
+    return new MediaWidget(src, spec.kind, spec.label)
   }
   if (spec.kind === 'video') {
     return new MediaWidget(src, spec.kind, spec.label)
@@ -856,13 +724,22 @@ export class NoteEmbedWidget extends WidgetType {
 export class MathWidget extends WidgetType {
   constructor(
     readonly source: string,
-    readonly block: boolean
+    readonly block: boolean,
+    /**
+     * The note's macro preamble (see `collectLatexMacros`) and a cheap key for
+     * it, so `eq` invalidates a widget whose source text didn't change but
+     * whose macros did — a `\newcommand` edited elsewhere in the same note.
+     */
+    readonly macros: Record<string, string> = {},
+    readonly macrosKey: string = ''
   ) {
     super()
   }
 
   eq(other: MathWidget): boolean {
-    return other.source === this.source && other.block === this.block
+    return (
+      other.source === this.source && other.block === this.block && other.macrosKey === this.macrosKey
+    )
   }
 
   get estimatedHeight(): number {
@@ -877,7 +754,8 @@ export class MathWidget extends WidgetType {
         displayMode: this.block,
         throwOnError: false,
         output: 'html',
-        strict: 'ignore'
+        strict: 'ignore',
+        macros: { ...this.macros }
       })
     } catch {
       el.classList.add('cm-math--error')
@@ -904,7 +782,7 @@ let mermaidSeq = 0
 function loadMermaid(): Promise<typeof import('mermaid').default> {
   if (!mermaidReady) {
     mermaidReady = import('mermaid').then((module) => {
-      const dark = document.documentElement.dataset.theme === 'dark'
+      const dark = document.documentElement.dataset.theme !== 'light'
       module.default.initialize({
         startOnLoad: false,
         securityLevel: 'strict',
@@ -1580,6 +1458,9 @@ export class CodeHeaderWidget extends WidgetType {
           },
           () => {
             copy.textContent = 'Failed'
+            setTimeout(() => {
+              if (copy.isConnected) copy.textContent = 'Copy'
+            }, 1200)
           }
         )
       })

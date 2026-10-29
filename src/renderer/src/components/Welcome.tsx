@@ -61,7 +61,7 @@ export function Welcome() {
       <div className="welcome__card">
         <div className="welcome__mark">
           <StoneMark size={30} />
-          <span className="eyebrow">Notes · Tasks · Calendar</span>
+          <span className="eyebrow">Notes · Tasks · Canvas</span>
         </div>
 
         <h1 className="welcome__title">Stone</h1>

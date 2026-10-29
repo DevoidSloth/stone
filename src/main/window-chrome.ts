@@ -9,15 +9,22 @@ import type { Settings } from '@shared/types'
  */
 export const OVERLAY = {
   dark: { color: '#191919', symbolColor: '#9b9b9b' },
+  tango: { color: '#2e3436', symbolColor: '#babdb6' },
   light: { color: '#ffffff', symbolColor: '#5f5e5b' }
 } as const
 
 export const CHROME_BG = {
   dark: '#191919',
+  tango: '#2e3436',
   light: '#ffffff'
 } as const
 
 export type ChromeTheme = keyof typeof OVERLAY
+
+/** What Electron's own chrome should follow: both dark themes are dark. */
+export function nativeSource(theme: Settings['theme']): 'system' | 'light' | 'dark' {
+  return theme === 'system' || theme === 'light' ? theme : 'dark'
+}
 
 /**
  * The theme actually in force, with `system` collapsed to what the OS is doing.

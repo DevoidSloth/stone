@@ -36,28 +36,35 @@ protocols:
   - name: Stone
     schemes: [stone]
 
+# Without a declared document type nothing offers Stone for a file: Finder's
+# "Open with" and "Change All…" grey it out, and it can never be the default.
+# `role: Editor` because Stone writes these files back, not just displays them.
+fileAssociations:
+  - ext: md
+    name: Markdown document
+    description: Markdown document
+    mimeType: text/markdown
+    role: Editor
+  - ext: markdown
+    name: Markdown document
+    description: Markdown document
+    mimeType: text/markdown
+    role: Editor
+
 mac:
   target:
     - target: dmg
       arch: [universal]
   category: public.app-category.productivity
   darkModeSupport: true
-  # EventKit access is refused without a usage string, which is how Stone reads
-  # and writes Apple Calendar.
-  extendInfo:
-    NSCalendarsUsageDescription: Stone shows your Apple Calendar events alongside your notes and tasks, and writes events you create in Stone back to Calendar.
-    NSCalendarsFullAccessUsageDescription: Stone shows your Apple Calendar events alongside your notes and tasks, and writes events you create in Stone back to Calendar.
-    NSRemindersUsageDescription: Stone can mirror tasks into Reminders.
-    NSAppleEventsUsageDescription: Stone uses Apple Events to read your calendars through EventKit.
-    NSMicrophoneUsageDescription: Stone records lectures and meetings into your notes, so you can play them back against the notes you took and have them transcribed on this Mac.
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   # Signing is handled by scripts/sign-mac.mjs instead of by electron-builder.
   # electron-builder validates the trust chain of a signing identity and skips
   # signing entirely when it cannot build one, which is what a self-signed
-  # certificate always looks like. An unsigned app is the cause of the calendar
-  # permission resetting on every update: with no certificate to anchor to,
-  # macOS pins the TCC grant to the binary's cdhash, which every build changes.
+  # certificate always looks like. An unsigned app is the cause of a TCC
+  # permission grant resetting on every update: with no certificate to anchor
+  # to, macOS pins the grant to the binary's cdhash, which every build changes.
   identity: null
 
 afterPack: scripts/sign-mac.mjs

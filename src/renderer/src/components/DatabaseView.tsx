@@ -29,7 +29,7 @@ import {
   IconNote
 } from '../ui/icons'
 import { PageIcon } from './PageDressing'
-import { TaskRow } from './TasksView'
+import { TaskRow } from './TaskRow'
 import { ContextMenu, useContextMenu } from './ContextMenu'
 
 /**

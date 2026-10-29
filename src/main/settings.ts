@@ -4,22 +4,15 @@ import path from 'node:path'
 import type { Settings } from '@shared/types'
 
 export const DEFAULT_SETTINGS: Settings = {
-  vaultPath: null,
   theme: 'system',
   accentHue: 210,
-  dailyFolder: 'Journal',
-  dailyFormat: 'yyyy-MM-dd',
-  weeklyFolder: 'Journal/Weekly',
-  monthlyFolder: 'Journal/Monthly',
   inboxFolder: 'Notes',
   attachmentsFolder: 'Attachments',
   templateFolder: 'Templates',
-  dailyTemplate: null,
   editorFont: 'sans',
   editorFontSize: 16,
   sidebarWidth: 240,
   inspectorWidth: 300,
-  agendaWidth: 300,
   editorWidth: 708,
   showStrataRail: false,
   showCanvas: false,
@@ -54,19 +47,9 @@ export const DEFAULT_SETTINGS: Settings = {
   codeRunTimeout: 30,
   codeRunConfirmed: false,
   codeNotebook: true,
-  whisperCommand: null,
-  whisperModel: '',
-  whisperLanguage: 'auto',
-  audioFolder: 'Attachments/Recordings',
-  audioAutoStamp: true,
-  audioTranscribeOnStop: true,
-  audioFollow: true,
   libraryFolders: [],
   favorites: [],
-  savedViews: [],
-  calendars: [],
-  icsSubscriptions: [],
-  firstRunComplete: false
+  savedViews: []
 }
 
 function settingsFile(): string {

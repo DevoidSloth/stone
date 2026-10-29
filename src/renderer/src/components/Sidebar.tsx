@@ -212,7 +212,8 @@ function FolderRows({
   onOpenFolder,
   onNoteMenu,
   onFolderMenu,
-  onDropNote
+  onDropNote,
+  onNewNote
 }: {
   folder: Folder
   depth: number
@@ -225,6 +226,7 @@ function FolderRows({
   onNoteMenu: (event: React.MouseEvent, note: NoteMeta) => void
   onFolderMenu: (event: React.MouseEvent, path: string) => void
   onDropNote: (relPath: string, folder: string) => void
+  onNewNote: (path: string) => void
 }) {
   const [dropTarget, setDropTarget] = useState<string | null>(null)
 
@@ -299,6 +301,18 @@ function FolderRows({
                 </span>
                 <span className="treerow__label truncate">{child.name}</span>
               </button>
+              <button
+                type="button"
+                className="treerow__add"
+                aria-label={`New note in ${child.name}`}
+                data-tip={`New note in ${child.name}`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onNewNote(child.path)
+                }}
+              >
+                <IconPlus size={12} />
+              </button>
               <span className="treerow__count">{count}</span>
             </div>
             {!isCollapsed && (
@@ -314,6 +328,7 @@ function FolderRows({
                 onNoteMenu={onNoteMenu}
                 onFolderMenu={onFolderMenu}
                 onDropNote={onDropNote}
+                onNewNote={onNewNote}
               />
             )}
           </div>
@@ -639,6 +654,7 @@ function DocRows({ filter }: { filter: string }) {
 }
 
 export function Sidebar() {
+  const vaultPath = useStone((s) => s.vaultPath)
   const notes = useStone((s) => s.notes)
   const tags = useStone((s) => s.tags)
   const stats = useStone((s) => s.stats)
@@ -671,12 +687,18 @@ export function Sidebar() {
     seedTreeTabStop(treeRef.current)
   })
 
+  // Scoped by vault path so a fresh window — or swapping vaults in the same
+  // window — never inherits another vault's collapse state.
+  const collapsedKey = `${COLLAPSED_KEY}:${vaultPath ?? 'none'}`
+
   const [collapsed, setCollapsed] = useState<Set<string>>(() => {
     try {
-      return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? '[]') as string[])
+      const saved = localStorage.getItem(collapsedKey)
+      if (saved != null) return new Set(JSON.parse(saved) as string[])
     } catch {
-      return new Set()
+      /* fall through */
     }
+    return new Set()
   })
   const [collapsedTags, setCollapsedTags] = useState<Set<string>>(() => {
     try {
@@ -687,11 +709,31 @@ export function Sidebar() {
   })
 
   useEffect(() => {
-    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsed]))
-  }, [collapsed])
+    localStorage.setItem(collapsedKey, JSON.stringify([...collapsed]))
+  }, [collapsed, collapsedKey])
   useEffect(() => {
     localStorage.setItem(COLLAPSED_TAGS_KEY, JSON.stringify([...collapsedTags]))
   }, [collapsedTags])
+
+  // A vault that has never been collapsed in this window starts fully closed,
+  // VS Code style, once its folder list is known. Runs once per vault: it
+  // backs off the moment the user (or a prior session) has an opinion saved.
+  //
+  // The seeded flag lives at its own key rather than reusing `collapsedKey`'s
+  // presence, because the persist effect above writes `collapsed` — still
+  // empty, before folders have loaded — on the very first render, which would
+  // otherwise look identical to "the user already chose collapsed once".
+  const seededCollapseRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (seededCollapseRef.current === collapsedKey) return
+    if (folderList.length === 0) return
+    seededCollapseRef.current = collapsedKey
+    const seededFlagKey = `${collapsedKey}__seeded`
+    if (localStorage.getItem(seededFlagKey) == null) {
+      localStorage.setItem(seededFlagKey, '1')
+      setCollapsed(new Set(folderList))
+    }
+  }, [folderList, collapsedKey])
 
   const toggle = (path: string): void => {
     setCollapsed((prev) => {
@@ -1085,6 +1127,7 @@ export function Sidebar() {
                     onNoteMenu={noteMenu}
                     onFolderMenu={folderMenu}
                     onDropNote={(relPath, folder) => void moveNote(relPath, folder)}
+                    onNewNote={(path) => void createNote('Untitled', path)}
                   />
                 )}
           </div>

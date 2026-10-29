@@ -94,7 +94,7 @@ export function CaptureSettings() {
       <div className="row">
         <div className="row__label">
           <b>Global shortcut</b>
-          <span>Opens quick-add from any app, whether or not Stone has focus.</span>
+          <span>Raises Stone from any app, whether or not it already has focus.</span>
         </div>
         <div className="chips" style={{ justifyContent: 'flex-end' }}>
           {recording ? (

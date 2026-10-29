@@ -99,6 +99,31 @@
   padding-right: 2px;
 }
 
+/*
+ * VS Code style: a folder row's quick-add stays invisible until the row (or
+ * the button itself, for keyboard focus) is actually in play, so the tree
+ * does not read as cluttered with a plus sign next to every folder.
+ */
+.treerow__add {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  display: none;
+  place-items: center;
+  color: var(--text-ghost);
+  border-radius: var(--r-xs);
+}
+
+.treerow--folder:hover .treerow__add,
+.treerow__add:focus-visible {
+  display: grid;
+}
+
+.treerow__add:hover {
+  background: var(--bg-active, var(--bg-hover));
+  color: var(--text-muted);
+}
+
 .sidebar__foot--stats {
   padding-top: 0;
   color: var(--text-ghost);

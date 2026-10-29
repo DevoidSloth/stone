@@ -1,12 +1,12 @@
 import { Notification } from 'electron'
-import type { CalEvent, Task } from '@shared/types'
+import type { Task } from '@shared/types'
 
 /**
  * Due-time reminders.
  *
- * Stone has always known when a task is due and when an event starts, and never
- * did anything with it. A scheduler in main polls the merged set once a minute
- * and fires an OS notification as each item comes inside the lead window.
+ * Stone has always known when a task is due, and never did anything with it.
+ * A scheduler in main polls the task list once a minute and fires an OS
+ * notification as each one comes inside the lead window.
  *
  * The poll is deliberate rather than a timer per item: a vault can hold
  * thousands of dated tasks, and a rescheduled `setTimeout` for each one would
@@ -20,7 +20,6 @@ const fired = new Set<string>()
 
 export interface ReminderSource {
   tasks: () => Task[]
-  events: () => Promise<CalEvent[]>
 }
 
 export interface ReminderOptions {
@@ -74,30 +73,6 @@ export async function checkReminders(
     const body = minutes === 0 ? 'Due now' : `Due in ${minutes} min · ${task.relPath.replace(/\.md$/, '')}`
     fire(task.text || 'Task', body)
     onFire?.({ title: task.text || 'Task', body, relPath: task.relPath })
-  }
-
-  let events: CalEvent[] = []
-  try {
-    events = await source.events()
-  } catch {
-    // A calendar that will not load is the calendar view's problem to report.
-    return
-  }
-
-  for (const event of events) {
-    if (event.allDay) continue
-    const at = toTime(event.start)
-    if (at === null || at < now || at > horizon) continue
-
-    const key = `event:${event.id}:${at}`
-    if (fired.has(key)) continue
-    fired.add(key)
-
-    const minutes = Math.max(0, Math.round((at - now) / 60_000))
-    const parts = [minutes === 0 ? 'Starting now' : `Starts in ${minutes} min`]
-    if (event.location) parts.push(event.location)
-    fire(event.title, parts.join(' · '))
-    onFire?.({ title: event.title, body: parts.join(' · '), relPath: event.relPath })
   }
 
   // The fired set would otherwise grow for the life of the process. Anything

@@ -1,22 +1,13 @@
 /**
- * Make the development Electron binary look and behave like Stone.
+ * Make the development Electron binary look like Stone.
  *
  * `npm run dev` does not run Stone.app — it runs the stock
- * node_modules/electron/dist/Electron.app. Two things follow from that, and
- * both are fixed here by editing that bundle in place:
- *
- *   - It carries no NSCalendars*UsageDescription keys, and macOS refuses to
- *     show a permission prompt for a process that has not declared why it wants
- *     the data. So in development the calendar silently returns nothing no
- *     matter what the code does, while the packaged build works fine. The usage
- *     strings live in electron-builder.yml, which only applies at package time,
- *     so they are mirrored in here.
- *
- *   - It is named Electron and carries Electron's icon, which is what the menu
- *     bar, the dock and Cmd-Tab then show all day. The name comes from the
- *     bundle rather than from app.setName(), so it can only be fixed here; the
- *     icon is replaced here too, and set again at runtime in src/main/index.ts
- *     because macOS caches the icon it read at launch.
+ * node_modules/electron/dist/Electron.app, which is named Electron and
+ * carries Electron's icon, so that is what the menu bar, the dock and
+ * Cmd-Tab then show all day. The name comes from the bundle rather than
+ * from app.setName(), so it can only be fixed here; the icon is replaced
+ * here too, and set again at runtime in src/main/index.ts because macOS
+ * caches the icon it read at launch.
  *
  * Modifying the bundle does not invalidate anything: the stock Electron build
  * is linker-signed, which seals the executable and neither the Info.plist nor
@@ -46,18 +37,10 @@ const devIcon = path.join(resources, 'electron.icns')
 // is picked up and an unchanged one does not pay for iconutil on every install.
 const stamp = path.join(resources, '.stone-icon-source')
 
-const CALENDAR_REASON =
-  'Stone shows your Apple Calendar events alongside your notes and tasks, and writes events you create in Stone back to Calendar.'
-
 const KEYS = {
   // The menu bar, the dock and Cmd-Tab all read the app's name from here.
   CFBundleName: 'Stone',
-  CFBundleDisplayName: 'Stone',
-  NSCalendarsUsageDescription: CALENDAR_REASON,
-  NSCalendarsFullAccessUsageDescription: CALENDAR_REASON,
-  NSRemindersUsageDescription: 'Stone can mirror tasks into Reminders.',
-  NSAppleEventsUsageDescription:
-    'Stone uses Apple Events to read your calendars through EventKit.'
+  CFBundleDisplayName: 'Stone'
 }
 
 if (process.platform !== 'darwin') process.exit(0)
@@ -78,7 +61,7 @@ for (const [key, value] of Object.entries(KEYS)) {
 }
 
 if (changed > 0) {
-  console.log('Renamed the development Electron build and gave it calendar usage strings.')
+  console.log('Renamed the development Electron build to Stone.')
 }
 
 syncIcon()

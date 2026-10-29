@@ -11,7 +11,6 @@ import {
 import { RESERVED_KEYS } from '@shared/properties'
 import { folderDefinedBy, homeFolder } from '@shared/folder-note'
 import { useStone, type SidePanel } from '../store'
-import { TranscriptPanel } from './TranscriptPanel'
 import { CodePanel } from './CodePanel'
 import { DocsPanel } from './DocsPanel'
 import {
@@ -27,7 +26,6 @@ import {
   IconRelation,
   IconRestore,
   IconTrash,
-  IconWaveform,
   IconX
 } from '../ui/icons'
 import { describeError } from '../lib/errors'
@@ -35,7 +33,7 @@ import { describeError } from '../lib/errors'
 /**
  * The right-hand inspector.
  *
- * Ten panels over one note, switched by a rail of icons rather than stacked:
+ * Nine panels over one note, switched by a rail of icons rather than stacked:
  * an outline and a backlink list and a property editor all visible at once
  * would each get a tenth of the height and none of them would be usable.
  *
@@ -58,7 +56,6 @@ const PANELS: {
   { id: 'comments', label: 'Comments', icon: IconComment },
   { id: 'localgraph', label: 'Local graph', icon: IconGraph },
   { id: 'history', label: 'Versions', icon: IconHistory },
-  { id: 'transcript', label: 'Transcript', icon: IconWaveform },
   { id: 'code', label: 'Code', icon: IconBraces, rule: true },
   { id: 'docs', label: 'Docs', icon: IconBook }
 ]
@@ -814,7 +811,6 @@ export function SidePanels() {
             {panel === 'comments' && <CommentsPanel />}
             {panel === 'localgraph' && <LocalGraphPanel />}
             {panel === 'history' && <HistoryPanel />}
-            {panel === 'transcript' && <TranscriptPanel />}
             {panel === 'code' && <CodePanel />}
             {panel === 'docs' && <DocsPanel />}
           </div>

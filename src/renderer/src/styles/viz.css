@@ -1,6 +1,6 @@
 /*
  * Program figures: the `memory`, `boxes`, `list`, `tree`, `graph`, `types`,
- * `hash`, `chart`, `threads`, `grammar` and `algo` fences.
+ * `hash`, `chart`, `threads`, `grammar`, `bitfield` and `algo` fences.
  *
  * Everything here is drawn in SVG by `viz/`, which computes its geometry from
  * the mono advance width — so the one rule this file must never break is that
@@ -357,6 +357,26 @@
 .viz-hash__probe-count {
   fill: var(--purple);
   font-weight: 600;
+}
+
+/* Bit fields — a word, cut into the bits each part of it owns. */
+
+.viz-bitfield__width {
+  fill: var(--text);
+  font-weight: 600;
+}
+
+.viz-bitfield__name {
+  fill: var(--text-faint);
+}
+
+/* A reserved span is hatched rather than boxed, so it never reads as a field
+   with a blank name — the same distinction `.viz-hash__slot--empty` draws for
+   a bucket nothing landed in. */
+.viz-bitfield__field.is-reserved .viz-cell__shape {
+  fill: none;
+  stroke: var(--border);
+  stroke-dasharray: 3 3;
 }
 
 /* Recursion trees — the cost of each level, down the right-hand side. */

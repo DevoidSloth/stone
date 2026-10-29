@@ -20,6 +20,7 @@ export type VizKind =
   | 'chart'
   | 'threads'
   | 'grammar'
+  | 'bitfield'
 
 /*
  * These names, and deliberately no aliases. `stack`, `heap`, `trace` and `uml`
@@ -39,7 +40,9 @@ export type VizKind =
  * where nothing here ever looks. Nothing pastes a fence tagged `graph`, and the
  * word is the one everybody reaches for. `threads` and `grammar` are unclaimed
  * by every highlighter and by every tool that prints — a fence tagged
- * `grammar` in a vault was somebody writing a grammar.
+ * `grammar` in a vault was somebody writing a grammar. `bitfield` is unclaimed
+ * for the same reason and does not collide with `bits` or `bit`, which read
+ * like plausible highlighter names even though none answers to them.
  */
 const LANGS: Record<string, VizKind> = {
   memory: 'memory',
@@ -52,7 +55,8 @@ const LANGS: Record<string, VizKind> = {
   hash: 'hash',
   chart: 'chart',
   threads: 'threads',
-  grammar: 'grammar'
+  grammar: 'grammar',
+  bitfield: 'bitfield'
 }
 
 /** The figure a fence language draws, or null if it draws none. */

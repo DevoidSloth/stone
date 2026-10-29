@@ -126,12 +126,7 @@ echo
 echo "Done. \"$NAME\" is ready; \`npm run dist:mac\` will pick it up."
 echo
 echo "Releases built by CI have to use this same certificate, or each one"
-echo "revokes the calendar access the last one was granted. Print the two"
+echo "revokes whatever TCC grant the last one was given. Print the two"
 echo "repository secrets to set with:"
 echo
 echo "    $0 --export"
-echo
-echo "One-time cleanup, so macOS forgets the grant pinned to the old unsigned"
-echo "builds and prompts again against the new signed identity:"
-echo
-echo "    tccutil reset Calendar com.stone.app"

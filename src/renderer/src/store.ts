@@ -1,8 +1,6 @@
 import { create } from 'zustand'
 import type {
   Backup,
-  CalEvent,
-  CalendarAccount,
   Comment,
   GraphData,
   Mention,
@@ -18,32 +16,20 @@ import type {
   Snapshot,
   Task,
   TaskStatus,
-  Transcript,
-  TranscriptSegment,
   TrashEntry,
   VaultStats
 } from '@shared/types'
-import { toISODate } from '@shared/task-syntax'
 import { setFrontmatterKey } from '@shared/frontmatter'
 import { folderNotePath } from '@shared/folder-note'
-import { readStamp, stampInsertPoint, stampTarget } from '@shared/audio'
-import * as recorder from './audio/recorder'
 import { describeError } from './lib/errors'
-import * as decode from './audio/decode'
-import { insertBlock } from './editor/insert'
 
 export type View =
-  | 'today'
   | 'notes'
-  | 'calendar'
-  | 'tasks'
-  | 'graph'
   | 'search'
   | 'trash'
   | 'views'
   | 'canvas'
   | 'library'
-export type CalendarMode = 'month' | 'week' | 'agenda'
 export type SidePanel =
   | 'backlinks'
   | 'outline'
@@ -52,7 +38,6 @@ export type SidePanel =
   | 'comments'
   | 'localgraph'
   | 'history'
-  | 'transcript'
   | 'code'
   | 'docs'
 
@@ -142,60 +127,6 @@ export interface Doc {
  * its history, and the pane machinery stay plain strings; only the few places
  * that actually render or name a target have to know the difference.
  */
-/**
- * A recording in progress.
- *
- * `startedAt` and the paused totals rather than a ticking counter: a timer that
- * counts frames drifts, and the one number that has to be exact is the offset
- * written into the note — a stamp two seconds late points at the wrong sentence.
- */
-export interface RecordingState {
-  id: string
-  /** Vault-relative path of the file being written. */
-  relPath: string
-  /** The note being stamped, or null when recording started outside one. */
-  note: string | null
-  /** What a stamp's link points at, already encoded. */
-  target: string
-  startedAt: number
-  /** When the current pause began, or null while running. */
-  pausedAt: number | null
-  /** Milliseconds spent paused before the current pause. */
-  pausedMs: number
-}
-
-/** Seconds of audio captured so far — what a stamp written now would say. */
-export function recordingElapsed(recording: RecordingState): number {
-  const paused =
-    recording.pausedMs + (recording.pausedAt === null ? 0 : Date.now() - recording.pausedAt)
-  return Math.max(0, (Date.now() - recording.startedAt - paused) / 1000)
-}
-
-/** The player at the foot of the window, and what it is following. */
-export interface PlaybackState {
-  /** Vault-relative path of the recording. */
-  audio: string
-  /** The note whose stamps are being followed, or null. */
-  note: string | null
-  playing: boolean
-  /** Start as soon as the element has loaded — a stamp click, not a bare open. */
-  autoplay: boolean
-  time: number
-  /** 0 until the element or the transcript says otherwise. */
-  duration: number
-  rate: number
-}
-
-/** A transcription in flight. */
-export interface TranscribeState {
-  id: string
-  audio: string
-  stage: string
-  /** 0–1, or null while the run cannot say. */
-  progress: number | null
-  segments: TranscriptSegment[]
-}
-
 export const DOC_PREFIX = 'doc:'
 
 export function isDocTarget(target: string): boolean {
@@ -208,14 +139,6 @@ export function docPathOf(target: string): string {
 
 export function docTarget(absPath: string): string {
   return `${DOC_PREFIX}${absPath}`
-}
-
-/** Range the calendar needs loaded, padded so month edges are never blank. */
-function monthWindow(anchor: string): { from: string; to: string } {
-  const d = new Date(`${anchor}T00:00:00`)
-  const from = new Date(d.getFullYear(), d.getMonth() - 1, 1)
-  const to = new Date(d.getFullYear(), d.getMonth() + 2, 0)
-  return { from: toISODate(from), to: toISODate(to) }
 }
 
 let seq = 0
@@ -235,6 +158,8 @@ export interface TextRequest {
 interface StoneState {
   ready: boolean
   settings: Settings | null
+  /** What *this window* has open. Every window has its own vault now. */
+  vaultPath: string | null
   stats: VaultStats | null
 
   view: View
@@ -247,7 +172,6 @@ interface StoneState {
   relations: RelationEdge[]
   templates: NoteMeta[]
   activity: Record<string, number>
-  graph: GraphData | null
   localGraph: GraphData | null
 
   panes: Pane[]
@@ -309,36 +233,12 @@ interface StoneState {
   removeLibraryFolder: (id: string) => Promise<void>
   openDocument: (absPath: string, opts?: OpenOpts) => void
 
-  /**
-   * The Today view's journal is bound to the day's note specifically, kept
-   * separate from the global selection so that clicking a note in the sidebar
-   * does not swap out what the journal is editing.
-   */
-  dailyRelPath: string | null
-  dailyContent: string
-  dailyHash: string | null
-  dailyDirty: boolean
-
-  events: CalEvent[]
-  accounts: CalendarAccount[]
-  calendarErrors: string[]
-  calendarMode: CalendarMode
-  /** The day the calendar is centred on, `YYYY-MM-DD`. */
-  anchor: string
-  selectedDay: string
-  loadedRange: { from: string; to: string } | null
-  calendarLoading: boolean
-
   paletteOpen: boolean
   settingsOpen: boolean
-  quickAddOpen: boolean
   /** The ask-Claude dialog. Seeded with text when opened from a selection. */
   claudeOpen: boolean
   claudeSeed: string
-  /** Text quick-add opens with, when capture arrived carrying some. */
-  quickAddSeed: string
   sidebarOpen: boolean
-  agendaOpen: boolean
   toasts: Toast[]
 
   boot: () => Promise<void>
@@ -358,7 +258,6 @@ interface StoneState {
   flushSaves: () => Promise<void>
 
   refreshVault: () => Promise<void>
-  loadGraph: () => Promise<void>
   loadLocalGraph: () => Promise<void>
   patchNoteMeta: (relPath: string, patch: Partial<NoteMeta>) => void
 
@@ -404,20 +303,7 @@ interface StoneState {
   toggleFavorite: (relPath: string) => Promise<void>
   setNoteProperty: (relPath: string, key: string, value: string | null) => Promise<void>
 
-  openDaily: (date?: string) => Promise<void>
-  openPeriodic: (kind: 'week' | 'month', date?: string) => Promise<void>
-  loadDaily: (date: string) => Promise<void>
-  setDailyDraft: (content: string) => void
-  saveDaily: () => Promise<void>
-
   toggleTask: (task: Task, status?: TaskStatus) => Promise<void>
-  quickAddTask: (input: Parameters<Window['stone']['tasks']['quickAdd']>[0]) => Promise<void>
-
-  loadCalendar: (force?: boolean) => Promise<void>
-  setAnchor: (date: string) => void
-  setSelectedDay: (date: string) => void
-  setCalendarMode: (mode: CalendarMode) => void
-  refreshAccounts: () => Promise<void>
 
   runSearch: (query: string, options?: SearchOptions) => Promise<void>
   setSearchOptions: (patch: Partial<SearchOptions>) => void
@@ -440,6 +326,12 @@ interface StoneState {
   setActiveView: (id: string | null) => void
 
   updateSettings: (patch: Partial<Settings>) => Promise<void>
+  /** Choose a folder and open it here, replacing whatever this window has open. */
+  openFolderHere: () => Promise<void>
+  /** A window of its own, independent of this one — blank, or straight to a folder. */
+  openNewWindow: (vaultPath?: string | null) => Promise<void>
+  /** Choose a folder and open it in a new window, leaving this one alone. */
+  openFolderInNewWindow: () => Promise<void>
   applyCssSnippets: () => Promise<void>
   applyTheme: () => Promise<void>
   /**
@@ -457,10 +349,8 @@ interface StoneState {
 
   setPalette: (open: boolean) => void
   setSettingsOpen: (open: boolean) => void
-  setQuickAdd: (open: boolean, seed?: string) => void
   setClaude: (open: boolean, seed?: string) => void
   toggleSidebar: () => void
-  toggleAgenda: () => void
   setSidePanel: (panel: SidePanel) => void
   togglePanel: () => void
   /** Open the manual, at a topic — and at a section inside it — when named. */
@@ -468,37 +358,6 @@ interface StoneState {
   /** Called by the panel once it has scrolled to the section it was sent to. */
   clearDocsSection: () => void
   setCaret: (relPath: string, line: number) => void
-
-  // ---------------------------------------------------------------- audio
-  /** The recording in progress, or null. There is only ever one microphone. */
-  recording: RecordingState | null
-  /** The player at the foot of the window, or null when nothing is loaded. */
-  playback: PlaybackState | null
-  /** The transcription in flight, or null. */
-  transcribing: TranscribeState | null
-  /**
-   * Transcripts already fetched, by recording path. `null` is a real answer —
-   * "asked, and there is none" — which is what stops the panel asking again on
-   * every render of an untranscribed lecture.
-   */
-  transcripts: Record<string, Transcript | null>
-
-  startRecording: () => Promise<void>
-  stopRecording: () => Promise<void>
-  discardRecording: () => Promise<void>
-  toggleRecordingPause: () => void
-
-  openPlayer: (
-    audio: string,
-    note?: string | null,
-    opts?: { at?: number; play?: boolean }
-  ) => Promise<void>
-  closePlayer: () => void
-  setPlayback: (patch: Partial<PlaybackState>) => void
-
-  transcribe: (audio: string) => Promise<void>
-  cancelTranscribe: () => void
-  loadTranscript: (audio: string) => Promise<Transcript | null>
 }
 
 let toastSeq = 0
@@ -544,8 +403,6 @@ export function applyThemeAttribute(theme: Settings['theme']): void {
       : theme
   document.documentElement.dataset.theme = resolved
 }
-let dailyTimer: ReturnType<typeof setTimeout> | null = null
-
 function makeTab(relPath: string, preview = false): Tab {
   return { id: nextId('tab'), relPath, history: [relPath], index: 0, preview }
 }
@@ -655,9 +512,10 @@ function settle(
 export const useStone = create<StoneState>((set, get) => ({
   ready: false,
   settings: null,
+  vaultPath: null,
   stats: null,
 
-  view: 'today',
+  view: 'notes',
   notes: [],
   tasks: [],
   tags: [],
@@ -666,7 +524,6 @@ export const useStone = create<StoneState>((set, get) => ({
   relations: [],
   templates: [],
   activity: {},
-  graph: null,
   localGraph: null,
 
   panes: [{ id: nextId('pane'), tabs: [], active: 0, size: 1 }],
@@ -698,33 +555,11 @@ export const useStone = create<StoneState>((set, get) => ({
   pluginCommands: [],
   documents: [],
 
-  recording: null,
-  playback: null,
-  transcribing: null,
-  transcripts: {},
-
-  dailyRelPath: null,
-  dailyContent: '',
-  dailyHash: null,
-  dailyDirty: false,
-
-  events: [],
-  accounts: [],
-  calendarErrors: [],
-  calendarMode: 'month',
-  anchor: toISODate(new Date()),
-  selectedDay: toISODate(new Date()),
-  loadedRange: null,
-  calendarLoading: false,
-
   paletteOpen: false,
   settingsOpen: false,
-  quickAddOpen: false,
-  quickAddSeed: '',
   claudeOpen: false,
   claudeSeed: '',
   sidebarOpen: true,
-  agendaOpen: true,
   toasts: [],
   running: [],
 
@@ -741,10 +576,13 @@ export const useStone = create<StoneState>((set, get) => ({
       document.documentElement.dataset.theme = resolved
     })
 
-    if (settings.vaultPath) {
+    // What *this* window has open — every window has its own vault now, so
+    // this is never read from global settings.
+    const { vaultPath } = await window.stone.vault.currentPath()
+    set({ vaultPath })
+
+    if (vaultPath) {
       await get().refreshVault()
-      void get().loadCalendar()
-      void get().refreshAccounts()
       // Theme before snippets, so a snippet can still override the theme.
       void get().applyTheme().then(() => get().applyCssSnippets())
       void window.stone.plugins
@@ -764,14 +602,10 @@ export const useStone = create<StoneState>((set, get) => ({
     // already raised the window by the time one of these lands.
     window.stone.capture.onAction((action) => {
       switch (action.type) {
-        case 'quick-add':
-          get().setQuickAdd(true, action.text)
-          break
         case 'open':
           void get().openNote(action.relPath)
           break
-        case 'daily':
-          void get().openDaily().then(() => get().setView('today'))
+        case 'show':
           break
         case 'new-note':
           void get().createNote(action.title)
@@ -796,8 +630,6 @@ export const useStone = create<StoneState>((set, get) => ({
 
   setView(view) {
     set({ view })
-    if (view === 'calendar') void get().loadCalendar()
-    if (view === 'graph') void get().loadGraph()
     if (view === 'trash') void get().loadTrash()
   },
 
@@ -810,14 +642,6 @@ export const useStone = create<StoneState>((set, get) => ({
     set((state) => ({
       notes: state.notes.map((n) => (n.relPath === relPath ? { ...n, ...patch } : n))
     }))
-  },
-
-  async loadGraph() {
-    try {
-      set({ graph: await window.stone.vault.graph() })
-    } catch (err) {
-      get().toast(describeError(err), 'error')
-    }
   },
 
   async loadLocalGraph() {
@@ -858,7 +682,6 @@ export const useStone = create<StoneState>((set, get) => ({
     const s = get()
     return (
       s.settingsOpen ||
-      s.quickAddOpen ||
       s.claudeOpen ||
       s.quickOpen !== null ||
       s.textRequest !== null
@@ -935,9 +758,6 @@ export const useStone = create<StoneState>((set, get) => ({
       ])
     set({ notes, tasks, stats, tags, activity, folders, properties, relations, templates })
 
-    // Only the graph screen pays for rebuilding the graph on every file change.
-    if (get().view === 'graph') void get().loadGraph()
-
     const active = get().activeRelPath
     // A document can be the active tab, and it has no note metadata to refresh.
     if (active && !isDocTarget(active)) {
@@ -947,11 +767,18 @@ export const useStone = create<StoneState>((set, get) => ({
       const doc = get().docs[active]
       if (doc && !doc.dirty) {
         const fresh = await window.stone.notes.get(active)
+        // The read took a moment and the buffer is live: typing that landed in
+        // it meanwhile is newer than anything on disk, and writing the disk's
+        // copy over it puts the editor back a few characters and the caret at
+        // the top of the note. Look again, and only replace a buffer that is
+        // still clean and still what it was.
+        const now = get().docs[active]
+        if (!now || now.dirty || now.content !== doc.content) return
         if (fresh && fresh.content !== doc.content) {
           set((state) => ({
             docs: {
               ...state.docs,
-              [active]: { ...doc, content: fresh.content, hash: fresh ? state.docs[active].hash : null }
+              [active]: { ...now, content: fresh.content }
             }
           }))
           const hash = await window.stone.notes.hash(active)
@@ -966,11 +793,6 @@ export const useStone = create<StoneState>((set, get) => ({
   // ------------------------------------------------------------- navigation
 
   async openNote(relPath, opts = {}) {
-    // Today's journal autosaves on a delay, so flush it before reading any file
-    // off disk — otherwise opening the day note as a page loses the last few
-    // keystrokes, and the pending write then lands under the open editor.
-    if (get().dailyDirty) await get().saveDaily()
-
     const note = await window.stone.notes.get(relPath)
     if (!note) {
       get().toast('That note is no longer in the vault.', 'error')
@@ -987,8 +809,8 @@ export const useStone = create<StoneState>((set, get) => ({
         activePane: paneIndex,
         activeRelPath: relPath,
         // Opening a page is a request to read it, so the pane it lands in has
-        // to be the one on screen — including from Today, whose sidebar and
-        // event rows would otherwise open notes nobody can see.
+        // to be the one on screen — the sidebar's row-click otherwise opens
+        // notes nobody can see.
         view: 'notes',
         docs: {
           ...state.docs,
@@ -1619,74 +1441,6 @@ export const useStone = create<StoneState>((set, get) => ({
     }
   },
 
-  // ------------------------------------------------------------- daily note
-
-  async openDaily(date) {
-    const day = date ?? toISODate(new Date())
-    try {
-      const { relPath } = await window.stone.notes.daily(day)
-      await get().refreshVault()
-      await get().openNote(relPath)
-      set({ selectedDay: day })
-    } catch (err) {
-      get().toast(describeError(err), 'error')
-    }
-  },
-
-  async openPeriodic(kind, date) {
-    const day = date ?? toISODate(new Date())
-    try {
-      const { relPath } = await window.stone.notes.periodic(kind, day)
-      await get().refreshVault()
-      await get().openNote(relPath)
-    } catch (err) {
-      get().toast(describeError(err), 'error')
-    }
-  },
-
-  async loadDaily(date) {
-    if (get().dailyRelPath && get().dailyDirty) await get().saveDaily()
-    try {
-      const { relPath } = await window.stone.notes.daily(date)
-      const note = await window.stone.notes.get(relPath)
-      if (!note) return
-      set({
-        dailyRelPath: relPath,
-        dailyContent: note.content,
-        dailyHash: await window.stone.notes.hash(relPath),
-        dailyDirty: false
-      })
-      // The note may be brand new, so the sidebar and index need to know.
-      if (!get().notes.some((n) => n.relPath === relPath)) await get().refreshVault()
-    } catch (err) {
-      get().toast(describeError(err), 'error')
-    }
-  },
-
-  setDailyDraft(content) {
-    set({ dailyContent: content, dailyDirty: true })
-    if (dailyTimer) clearTimeout(dailyTimer)
-    dailyTimer = setTimeout(() => void get().saveDaily(), 900)
-  },
-
-  async saveDaily() {
-    const { dailyRelPath, dailyContent, dailyHash } = get()
-    if (!dailyRelPath) return
-    if (dailyTimer) {
-      clearTimeout(dailyTimer)
-      dailyTimer = null
-    }
-    try {
-      const result = await window.stone.notes.save(
-        dailyRelPath,
-        dailyContent,
-        dailyHash ?? undefined
-      )
-      set({ dailyDirty: false, dailyHash: result.hash })
-    } catch (err) {
-      get().toast(describeError(err), 'error')
-    }
-  },
 
   // ------------------------------------------------------------------ tasks
 
@@ -1702,59 +1456,6 @@ export const useStone = create<StoneState>((set, get) => ({
     } catch (err) {
       get().toast(describeError(err), 'error')
       await get().refreshVault()
-    }
-  },
-
-  async quickAddTask(input) {
-    try {
-      await window.stone.tasks.quickAdd(input)
-      await get().refreshVault()
-      get().toast('Task added to today.', 'success')
-    } catch (err) {
-      get().toast(describeError(err), 'error')
-    }
-  },
-
-  // --------------------------------------------------------------- calendar
-
-  async loadCalendar(force) {
-    const { anchor, loadedRange } = get()
-    const window_ = monthWindow(anchor)
-    if (!force && loadedRange && loadedRange.from === window_.from && loadedRange.to === window_.to) {
-      return
-    }
-    set({ calendarLoading: true })
-    try {
-      if (force) await window.stone.calendar.refresh()
-      const { events, errors } = await window.stone.calendar.events(window_.from, window_.to)
-      set({ events, calendarErrors: errors, loadedRange: window_ })
-    } catch (err) {
-      set({ calendarErrors: [describeError(err)] })
-    } finally {
-      set({ calendarLoading: false })
-    }
-  },
-
-  setAnchor(date) {
-    set({ anchor: date })
-    void get().loadCalendar()
-  },
-
-  setSelectedDay(date) {
-    set({ selectedDay: date, anchor: date })
-    void get().loadCalendar()
-  },
-
-  setCalendarMode(calendarMode) {
-    set({ calendarMode })
-  },
-
-  async refreshAccounts() {
-    try {
-      const { accounts, errors } = await window.stone.calendar.accounts()
-      set({ accounts, calendarErrors: errors })
-    } catch (err) {
-      set({ calendarErrors: [describeError(err)] })
     }
   },
 
@@ -1958,6 +1659,22 @@ export const useStone = create<StoneState>((set, get) => ({
     if (patch.activeTheme !== undefined || patch.themeFolder) void get().applyTheme()
   },
 
+  async openFolderHere() {
+    const picked = await window.stone.vault.choose()
+    if (!picked) return
+    await window.stone.vault.open(picked)
+    window.location.reload()
+  },
+
+  async openNewWindow(vaultPath) {
+    await window.stone.app.newWindow(vaultPath ?? null)
+  },
+
+  async openFolderInNewWindow() {
+    const picked = await window.stone.vault.choose()
+    if (picked) await get().openNewWindow(picked)
+  },
+
   /**
    * The active theme, in its own style element ahead of the snippets one.
    *
@@ -2028,9 +1745,6 @@ export const useStone = create<StoneState>((set, get) => ({
   setSettingsOpen(settingsOpen) {
     set({ settingsOpen })
   },
-  setQuickAdd(quickAddOpen, seed) {
-    set({ quickAddOpen, quickAddSeed: quickAddOpen ? (seed ?? '') : '' })
-  },
   setClaude(claudeOpen, seed) {
     // Pressing the chord again while it is open must not reseed the field and
     // throw away a half-typed prompt.
@@ -2039,9 +1753,6 @@ export const useStone = create<StoneState>((set, get) => ({
   },
   toggleSidebar() {
     set((s) => ({ sidebarOpen: !s.sidebarOpen }))
-  },
-  toggleAgenda() {
-    set((s) => ({ agendaOpen: !s.agendaOpen }))
   },
   setSidePanel(sidePanel) {
     set({ sidePanel, panelOpen: true })
@@ -2071,244 +1782,6 @@ export const useStone = create<StoneState>((set, get) => ({
     const caret = get().caret
     if (caret && caret.relPath === relPath && caret.line === line) return
     set({ caret: { relPath, line } })
-  },
-
-  // ---------------------------------------------------------------- audio
-
-  async startRecording() {
-    if (get().recording) return
-    const state = get()
-    const note = state.activeRelPath
-    const settings = state.settings
-
-    try {
-      const label = note ? note.split('/').pop()!.replace(/\.md$/, '') : 'Recording'
-      const started = await recorder.start(label)
-      const target = stampTarget(started.relPath, settings?.attachmentsFolder ?? 'Attachments')
-
-      set({
-        recording: {
-          id: started.id,
-          relPath: started.relPath,
-          note,
-          target,
-          startedAt: Date.now(),
-          pausedAt: null,
-          pausedMs: 0
-        }
-      })
-
-      // The embed goes in straight away rather than at the end. It is how the
-      // note says "this is being recorded", it gives the stamps below it
-      // something to hang from, and it means an app killed mid-lecture still
-      // leaves a note that points at the audio it did capture.
-      const name = started.relPath.split('/').pop() ?? started.relPath
-      insertBlock(`![[${name}]]`)
-
-      void get().openPlayer(started.relPath, note)
-      get().toast('Recording. Everything you type from here is stamped.', 'success')
-    } catch (err) {
-      get().toast(describeError(err), 'error')
-    }
-  },
-
-  async stopRecording() {
-    const recording = get().recording
-    if (!recording) return
-    set({ recording: null })
-
-    let done: { relPath: string; bytes: number }
-    try {
-      done = await recorder.stop()
-    } catch (err) {
-      get().toast(`The recording ended badly: ${(err as Error).message}`, 'error')
-      return
-    }
-
-    // A stamp on a line that never got any words is bookkeeping the reader did
-    // not ask for. They only exist where someone pressed Enter and thought
-    // better of it, so they go on the way out rather than being prevented —
-    // preventing them would mean not stamping a line until it had content, and
-    // then the stamp would be the time the sentence *ended*.
-    //
-    // The stamp goes, not the line. A blank line between two paragraphs is what
-    // keeps them two paragraphs, and deleting it would silently run them
-    // together the moment the recording stopped.
-    if (recording.note) {
-      const doc = get().docs[recording.note]
-      if (doc) {
-        const cleaned = doc.content
-          .split('\n')
-          .map((line) => {
-            const at = stampInsertPoint(line)
-            const stamp = readStamp(line.slice(at))
-            if (!stamp) return line
-            const rest = line.slice(at + stamp.length)
-            return rest.trim() === '' ? line.slice(0, at) + rest : line
-          })
-          .join('\n')
-        if (cleaned !== doc.content) get().setDoc(recording.note, cleaned)
-      }
-    }
-
-    if (done.bytes === 0) {
-      get().toast('Nothing was captured — check the microphone in System Settings.', 'error')
-      return
-    }
-
-    void get().openPlayer(done.relPath, recording.note)
-
-    if (get().settings?.audioTranscribeOnStop) void get().transcribe(done.relPath)
-    else get().toast('Recording saved.', 'success')
-  },
-
-  async discardRecording() {
-    const recording = get().recording
-    if (!recording) return
-    set({ recording: null })
-    await recorder.discard()
-
-    if (get().playback?.audio === recording.relPath) get().closePlayer()
-
-    // Take the embed back out too, or the note is left pointing at a file that
-    // no longer exists.
-    const doc = recording.note ? get().docs[recording.note] : null
-    if (recording.note && doc) {
-      const name = recording.relPath.split('/').pop() ?? ''
-      const cleaned = doc.content
-        .split('\n')
-        .filter((line) => line.trim() !== `![[${name}]]`)
-        .join('\n')
-      if (cleaned !== doc.content) get().setDoc(recording.note, cleaned)
-    }
-    get().toast('Recording discarded.', 'info')
-  },
-
-  toggleRecordingPause() {
-    const recording = get().recording
-    if (!recording) return
-    if (recording.pausedAt === null) {
-      recorder.pause()
-      set({ recording: { ...recording, pausedAt: Date.now() } })
-    } else {
-      recorder.resume()
-      set({
-        recording: {
-          ...recording,
-          pausedMs: recording.pausedMs + (Date.now() - recording.pausedAt),
-          pausedAt: null
-        }
-      })
-    }
-  },
-
-  async openPlayer(audio, note, opts) {
-    const current = get().playback
-    set({
-      playback: {
-        audio,
-        note: note ?? get().activeRelPath,
-        playing: false,
-        // Whether to start on load. A stamp or a play button means "now"; the
-        // player opening because a recording just stopped does not.
-        autoplay: opts?.play ?? false,
-        // Where the element should land once it has loaded. A player that has
-        // not mounted yet cannot be seeked, so the wanted position travels as
-        // state and the element catches up to it.
-        time: opts?.at ?? 0,
-        // Kept across a reopen of the same file so the scrubber does not jump
-        // to zero width while the element works the duration out again.
-        duration: current?.audio === audio ? current.duration : 0,
-        rate: current?.rate ?? 1
-      }
-    })
-    const known = await window.stone.audio.duration(audio).catch(() => null)
-    if (known && get().playback?.audio === audio) {
-      set((s) => (s.playback ? { playback: { ...s.playback, duration: known } } : s))
-    }
-    void get().loadTranscript(audio)
-  },
-
-  closePlayer() {
-    set({ playback: null })
-  },
-
-  setPlayback(patch) {
-    set((s) => (s.playback ? { playback: { ...s.playback, ...patch } } : s))
-  },
-
-  async transcribe(audio) {
-    if (get().transcribing) {
-      get().toast('One transcription at a time — this one is still running.', 'error')
-      return
-    }
-
-    const status = await window.stone.audio.whisperStatus().catch(() => null)
-    if (!status?.available) {
-      get().toast(
-        'No Whisper command was found. Install one — `brew install whisper-cpp` — then check Settings → Audio.',
-        'error'
-      )
-      return
-    }
-
-    const id = crypto.randomUUID()
-    set({ transcribing: { id, audio, stage: 'Decoding', progress: 0, segments: [] } })
-
-    try {
-      // Decoding is the renderer's half: Chromium already has the Opus decoder
-      // and the resampler, and main would need ffmpeg to do the same job.
-      const duration = await decode.streamPcm(id, audio, (fraction) => {
-        if (get().transcribing?.id !== id) return
-        set((s) =>
-          s.transcribing ? { transcribing: { ...s.transcribing, progress: fraction } } : s
-        )
-      })
-
-      if (get().transcribing?.id !== id) return
-      set((s) =>
-        s.transcribing
-          ? { transcribing: { ...s.transcribing, stage: 'Transcribing', progress: null } }
-          : s
-      )
-      // Now the length is known for certain, which the WebM header never said.
-      set((s) =>
-        s.playback?.audio === audio ? { playback: { ...s.playback, duration } } : s
-      )
-
-      const transcript = await window.stone.audio.transcribe({
-        id,
-        audio,
-        durationSeconds: duration
-      })
-
-      set((s) => ({
-        transcribing: s.transcribing?.id === id ? null : s.transcribing,
-        transcripts: { ...s.transcripts, [audio]: transcript }
-      }))
-      get().toast(`Transcribed — ${transcript.segments.length} segments.`, 'success')
-      if (get().sidePanel !== 'transcript') get().setSidePanel('transcript')
-    } catch (err) {
-      const message = (err as Error).message
-      set((s) => (s.transcribing?.id === id ? { transcribing: null } : s))
-      if (message !== 'cancelled') get().toast(message, 'error')
-    }
-  },
-
-  cancelTranscribe() {
-    const running = get().transcribing
-    if (!running) return
-    void window.stone.audio.cancelTranscribe(running.id)
-    void window.stone.audio.discardPcm(running.id).catch(() => undefined)
-    set({ transcribing: null })
-  },
-
-  async loadTranscript(audio) {
-    const cached = get().transcripts[audio]
-    if (cached !== undefined) return cached
-    const transcript = await window.stone.audio.transcript(audio).catch(() => null)
-    set((s) => ({ transcripts: { ...s.transcripts, [audio]: transcript } }))
-    return transcript
   }
 }))
 

@@ -732,10 +732,16 @@
   align-items: center;
   gap: var(--sp-2);
   min-height: 22px;
+  /* An error can be a paragraph. It drops to a line of its own below the
+     buttons rather than squeezing them — see `.cm-run__status--bad`. */
+  flex-wrap: wrap;
 }
 
 .cm-run__go,
 .cm-run__act {
+  /* A button is never the thing that gives when the bar is short of room. */
+  flex: none;
+  white-space: nowrap;
   font: inherit;
   line-height: 1.6;
   padding: 1px 8px;
@@ -821,6 +827,16 @@
 
 .cm-run__status--bad {
   color: var(--red);
+  /* The whole message, under the buttons: an error is the one status worth
+     reading in full, and truncating it to an ellipsis hid what went wrong. */
+  order: 1;
+  flex: 1 0 100%;
+  max-height: 10em;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+  user-select: text;
 }
 
 .cm-run__out {

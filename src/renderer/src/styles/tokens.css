@@ -69,7 +69,6 @@
   --titlebar-h: 45px;
   /* Defaults only: the shell overwrites these from settings as they are dragged. */
   --sidebar-w: 240px;
-  --agenda-w: 300px;
   --inspector-w: 300px;
 
   /*
@@ -258,4 +257,83 @@
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
   --shadow-md: rgb(15 15 15 / 20%) 0 0 0 1px, rgb(15 15 15 / 40%) 0 3px 6px, rgb(15 15 15 / 60%) 0 9px 24px;
   --shadow-lg: rgb(15 15 15 / 20%) 0 0 0 1px, rgb(15 15 15 / 40%) 0 5px 10px, rgb(15 15 15 / 60%) 0 15px 40px;
+}
+
+/* ------------------------------------------------------------ dark: tango */
+
+/*
+ * The Tango palette on its aluminium ground (the `tango` theme) — the terminal scheme, not a
+ * lookalike. Ground and ink are Aluminium 6 (#2e3436) and Aluminium 2 (#d3d7cf);
+ * the accents are the bright end of the Tango ramps, which is what a dark ground
+ * needs: the dim ones (#4e9a06, #cc0000) sink into it.
+ */
+:root[data-theme='tango'] {
+  color-scheme: dark;
+
+  --bg-page: #2e3436;
+  --bg-app: #2e3436;
+  --bg-sidebar: #292e30;
+  --bg-panel: #2e3436;
+  --bg-surface: #353b3d;
+  --bg-raised: #414849;
+  --bg-input: #383f41;
+  --bg-sunken: #232729;
+
+  --bg-hover: rgb(238 238 236 / 6%);
+  --bg-active: rgb(238 238 236 / 11%);
+  --bg-selected: rgb(114 159 207 / 16%);
+  --bg-selected-strong: rgb(114 159 207 / 30%);
+  --bg-scrim: rgb(20 22 23 / 60%);
+  --bg-tooltip: #4a5153;
+  --text-tooltip: rgb(238 238 236 / 94%);
+  --text-tooltip-faint: rgb(238 238 236 / 56%);
+
+  --border-faint: rgb(238 238 236 / 6%);
+  --border-hair: rgb(238 238 236 / 10%);
+  --border: rgb(238 238 236 / 15%);
+  --border-strong: rgb(238 238 236 / 24%);
+
+  --text: #d3d7cf;
+  --text-strong: #eeeeec;
+  --text-muted: rgb(211 215 207 / 66%);
+  --text-faint: rgb(211 215 207 / 50%);
+  --text-ghost: rgb(211 215 207 / 34%);
+
+  --accent: #3465a4;
+  --accent-hover: #4a7bbd;
+  --accent-soft: rgb(114 159 207 / 20%);
+  --accent-ink: #ffffff;
+  --link: #729fcf;
+
+  --green: #8ae234;
+  --green-soft: rgb(138 226 52 / 16%);
+  --red: #ef2929;
+  --red-soft: rgb(239 41 41 / 20%);
+  --yellow: #fce94f;
+  --yellow-soft: rgb(252 233 79 / 16%);
+  --purple: #ad7fa8;
+  --purple-soft: rgb(173 127 168 / 22%);
+  --blue-soft: rgb(114 159 207 / 20%);
+  --gray-soft: rgb(238 238 236 / 10%);
+
+  /* Already translucent in the dark palette, so the washes are the softs. */
+  --wash-gray: var(--gray-soft);
+  --wash-yellow: var(--yellow-soft);
+  --wash-blue: var(--blue-soft);
+  --wash-red: var(--red-soft);
+
+  --code-keyword: #ad7fa8;
+  --code-string: #8ae234;
+  --code-number: #fcaf3e;
+  --code-comment: #888a85;
+  --code-function: #729fcf;
+  --code-type: #34e2e2;
+  --code-variable: #d3d7cf;
+  --code-property: #e9b96e;
+  --code-operator: #babdb6;
+  --code-invalid: #ef2929;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-md: rgb(10 12 12 / 20%) 0 0 0 1px, rgb(10 12 12 / 40%) 0 3px 6px, rgb(10 12 12 / 60%) 0 9px 24px;
+  --shadow-lg: rgb(10 12 12 / 20%) 0 0 0 1px, rgb(10 12 12 / 40%) 0 5px 10px, rgb(10 12 12 / 60%) 0 15px 40px;
 }

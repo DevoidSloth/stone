@@ -1,7 +1,7 @@
 {
   "name": "stone",
   "productName": "Stone",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Notes, tasks, and calendar over plain markdown files.",
   "main": "./out/main/index.js",
   "author": "Stone",
@@ -62,5 +62,10 @@
     "typescript": "^5.7.2",
     "vite": "^6.0.7",
     "zustand": "^5.0.2"
+  },
+  "allowScripts": {
+    "electron@34.5.8": true,
+    "esbuild@0.25.12": true,
+    "fsevents@2.3.3": true
   }
 }

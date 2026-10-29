@@ -7,10 +7,10 @@
  * put together, `hash` for the one structure whose picture has to be computed,
  * `chart` for growth — predicted or measured — `threads` for a schedule that
  * two correct threads should not have been allowed, `grammar` for a syntax
- * drawn as the track it is, and `algo` for the ones that only make sense
- * moving. They share a house style, an error box, and this entry point, which
- * is all the editor, the print window and the exporter need to know about
- * them.
+ * drawn as the track it is, `bitfield` for a word cut into the bits each part
+ * of it owns, and `algo` for the ones that only make sense moving. They share
+ * a house style, an error box, and this entry point, which is all the editor,
+ * the print window and the exporter need to know about them.
  *
  * A figure that will not parse is never silently dropped. It comes back as a
  * dashed box saying which line it could not read, with the source still in it,
@@ -30,6 +30,7 @@ import { drawChart } from './chart'
 import { drawGraph } from './graph'
 import { drawThreads } from './threads'
 import { drawGrammar } from './grammar'
+import { drawBitfield } from './bitfield'
 import { algoWaiting, drawAlgo, drawAlgoStrip, drawAlgoWaiting } from './algo'
 
 export { vizKind, type VizKind }
@@ -63,6 +64,8 @@ function still(kind: Exclude<VizKind, 'algo'>, source: string): Figure {
       return drawThreads(source)
     case 'grammar':
       return drawGrammar(source)
+    case 'bitfield':
+      return drawBitfield(source)
   }
 }
 

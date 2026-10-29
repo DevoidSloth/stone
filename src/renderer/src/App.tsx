@@ -5,24 +5,17 @@ import { chordFromEvent, toAccelerator } from './lib/keys'
 import { TitleBar } from './components/TitleBar'
 import { Sidebar } from './components/Sidebar'
 import { Panes } from './components/Panes'
-import { TodayView } from './components/TodayView'
-import { CalendarView } from './components/CalendarView'
-import { TasksView } from './components/TasksView'
-import { GraphView } from './components/GraphView'
 import { SearchView } from './components/SearchView'
 import { TrashView } from './components/TrashView'
 import { DatabaseView } from './components/DatabaseView'
 import { CanvasView } from './components/CanvasView'
 import { LibraryView } from './components/LibraryView'
 import { SidePanels } from './components/SidePanels'
-import { AgendaPane } from './components/AgendaPane'
 import { CommandPalette } from './components/CommandPalette'
 import { QuickOpen } from './components/QuickOpen'
-import { QuickAdd } from './components/QuickAdd'
 import { SettingsModal } from './components/SettingsModal'
 import { PromptDialog } from './components/PromptDialog'
 import { ClaudeDialog } from './components/ClaudeDialog'
-import { AudioBar } from './components/AudioBar'
 import { Welcome } from './components/Welcome'
 import { Toasts } from './components/Toasts'
 import { ColumnResizer, applyColumnWidths, useColumnResizer } from './components/ColumnResizer'
@@ -51,18 +44,18 @@ function platformClass(): string {
 export function App() {
   const ready = useStone((s) => s.ready)
   const settings = useStone((s) => s.settings)
+  const vaultPath = useStone((s) => s.vaultPath)
   const view = useStone((s) => s.view)
   const boot = useStone((s) => s.boot)
 
   const sidebarResize = useColumnResizer('sidebar', 'Sidebar width')
   const inspectorResize = useColumnResizer('inspector', 'Inspector width')
-  const agendaResize = useColumnResizer('agenda', 'Agenda width')
 
   // Restore the dragged widths once settings have loaded.
   useEffect(() => {
     if (!settings) return
     applyColumnWidths(settings)
-  }, [settings?.sidebarWidth, settings?.inspectorWidth, settings?.agendaWidth, settings])
+  }, [settings?.sidebarWidth, settings?.inspectorWidth, settings])
 
   // Rebuilt only when the user rebinds something, not on every render.
   const keymap = useMemo(() => buildKeymap(settings?.keybindings ?? {}), [settings?.keybindings])
@@ -175,11 +168,9 @@ export function App() {
     )
   }
 
-  if (!settings?.vaultPath) return <Welcome />
+  if (!vaultPath) return <Welcome />
 
-  const showSidebar = view === 'notes' || view === 'today'
-  // Today is the agenda at full size, so the column would only duplicate it.
-  const showAgenda = view === 'calendar'
+  const showSidebar = view === 'notes'
   const showInspector = view === 'notes'
 
   return (
@@ -196,13 +187,7 @@ export function App() {
           )}
 
           <main className="pane">
-            {view === 'calendar' ? (
-              <CalendarView />
-            ) : view === 'tasks' ? (
-              <TasksView />
-            ) : view === 'graph' ? (
-              <GraphView />
-            ) : view === 'search' ? (
+            {view === 'search' ? (
               <SearchView />
             ) : view === 'trash' ? (
               <TrashView />
@@ -212,8 +197,6 @@ export function App() {
               <CanvasView />
             ) : view === 'library' ? (
               <LibraryView />
-            ) : view === 'today' ? (
-              <TodayView />
             ) : (
               <Panes />
             )}
@@ -225,23 +208,11 @@ export function App() {
               <SidePanels />
             </>
           )}
-          {showAgenda && (
-            <>
-              <ColumnResizer side="left" {...agendaResize} />
-              <AgendaPane />
-            </>
-          )}
         </div>
-
-        {/* A row of the layout rather than something floating over it: a bar
-            that covered the last line of a note would hide exactly the line
-            being written while a lecture is recorded. */}
-        <AudioBar />
       </div>
 
       <CommandPalette />
       <QuickOpen />
-      <QuickAdd />
       <SettingsModal />
       <PromptDialog />
       <ClaudeDialog />

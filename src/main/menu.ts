@@ -26,10 +26,11 @@ export interface MenuCommand {
 /** Which commands appear where, and where the separators fall. */
 const LAYOUT: Record<string, (string | null)[]> = {
   File: [
+    'open-folder',
+    'new-window',
+    'open-folder-new-window',
+    null,
     'new-note',
-    'new-task',
-    'new-weekly',
-    'new-monthly',
     null,
     'save',
     'insert-file',
@@ -41,16 +42,11 @@ const LAYOUT: Record<string, (string | null)[]> = {
   ],
   Edit: [],
   View: [
-    'view-today',
     'view-notes',
-    'view-calendar',
-    'view-tasks',
-    'view-graph',
     'view-views',
     'view-canvas',
     'view-library',
     null,
-    'go-today',
     'back',
     'forward',
     null,
@@ -65,18 +61,7 @@ const LAYOUT: Record<string, (string | null)[]> = {
     'theme'
   ],
   Note: ['run-code-block', 'run-code-above', 'run-code-all', 'restart-code-session', null, 'claude'],
-  Tools: [
-    'palette',
-    'go-to-file',
-    'search',
-    null,
-    'record',
-    'record-mark',
-    'record-transcribe',
-    null,
-    'reindex',
-    'vim'
-  ]
+  Tools: ['palette', 'go-to-file', 'search', null, 'reindex', 'vim']
 }
 
 let current: MenuCommand[] = []

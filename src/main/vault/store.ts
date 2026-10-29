@@ -99,115 +99,8 @@ export class Vault extends EventEmitter {
     this.vaultPath = vaultPath
     await ensureDir(vaultPath)
     await this.reindex()
-    // An empty vault renders an empty app, which is the worst possible first
-    // impression. Seed enough real content to show what Stone actually does.
-    if (this.notes.size === 0) await this.seed()
     await this.refreshFolders()
     this.startWatching()
-  }
-
-  private async seed(): Promise<void> {
-    if (!this.vaultPath) return
-    const today = new Date()
-    const iso = (offset: number): string => {
-      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset)
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    }
-
-    const files: { rel: string; body: string }[] = [
-      {
-        rel: 'Start here.md',
-        body: `---
-icon: 📘
-cover: sand
----
-
-Everything in Stone is a markdown file in this folder. Open it in any other
-editor and it reads exactly the same — there is no database and no lock-in.
-
-> [!tip] Give any page an icon and a cover
-> Hover just above the title and the buttons appear. Both are stored as plain
-> \`icon:\` and \`cover:\` lines in the note's frontmatter.
-
-## Three things worth knowing
-
-Tasks are checkboxes. Write one anywhere in any note and it appears in **Tasks**
-and on the **Calendar**:
-
-- [ ] Try editing this line @${iso(0)} !high +30m #stone
-- [ ] Anything with a date shows up on the day it is due @${iso(2)}
-- [x] Finished things fall away
-
-The tokens are plain text on purpose. \`@date\` sets when it is due, \`!high\`
-sets priority, \`+30m\` estimates the work, and \`#tag\` files it.
-
-Notes link with double brackets. This one points at [[Reading list]], and that
-note will show a backlink pointing straight back here.
-
-Any note becomes a calendar event once you give it a date **and a time** in its
-frontmatter — [[Weekly review]] does exactly that. A date on its own just files
-the note under that day.
-
-## Getting around
-
-| Key | Does |
-| --- | --- |
-| \`Ctrl/Cmd K\` | Search everything, or run a command |
-| \`Ctrl/Cmd J\` | Add a task without leaving what you are doing |
-| \`Ctrl/Cmd T\` | Jump to today |
-| \`Ctrl/Cmd 1-4\` | Today, Notes, Calendar, Tasks |
-
-The narrow strip down the left edge is the year, one band per day, shaded by how
-much you wrote and finished. Click any band to travel there.
-
-#stone
-`
-      },
-      {
-        rel: 'Notes/Reading list.md',
-        body: `---
-icon: 📚
-cover: moss
----
-
-- [ ] Structure and Interpretation of Computer Programs @${iso(9)} +6h #reading
-- [ ] The Design of Everyday Things @${iso(21)} !low #reading
-- [x] Thinking, Fast and Slow
-
-Linked from [[Start here]].
-
-#reading
-`
-      },
-      {
-        rel: 'Projects/Weekly review.md',
-        body: `---
-icon: 🗓️
-date: ${iso(3)}
-start: "17:00"
-end: "17:30"
-location: Anywhere quiet
----
-
-Because this note has \`date\`, \`start\`, and \`end\` in its frontmatter, Stone
-treats it as an event and places it on the calendar. Delete those lines and it
-goes back to being an ordinary note.
-
-- [ ] Clear the inbox @${iso(3)} #review
-- [ ] Pick three things that matter next week @${iso(3)} !high #review
-`
-      }
-    ]
-
-    for (const file of files) {
-      const absPath = toAbsPath(this.vaultPath, file.rel)
-      try {
-        await writeNoteAtomic(absPath, file.body)
-      } catch {
-        // A seed file failing to write is not worth blocking the vault over.
-      }
-    }
-    await this.reindex()
   }
 
   async close(): Promise<void> {
@@ -1019,72 +912,26 @@ goes back to being an ordinary note.
     }
   }
 
-  /** Get or create the daily note for `YYYY-MM-DD`. */
-  async dailyNote(
-    date: string,
-    folder: string,
-    template?: string
-  ): Promise<{ relPath: string } | { error: string }> {
-    if (!this.vaultPath) return { error: 'No vault is open.' }
-    const dir = path.join(this.vaultPath, ...folder.split('/').filter(Boolean))
-    await ensureDir(dir)
-    const absPath = path.join(dir, `${date}.md`)
-    const relPath = toRelPath(this.vaultPath, absPath)
-
-    if (this.notes.has(relPath)) return { relPath }
-
-    // No H1: the page title already shows the date, and Stone's Today view
-    // supplies the schedule and task sections above this note. The icon and
-    // cover rotate with the day so consecutive journal pages are instantly
-    // distinguishable in the sidebar rather than an undifferentiated run.
-    const body = template
-      ? Vault.fillTemplate(template, { title: date, date })
-      : `---\n${dressingFor(date)}date: ${date}\n---\n\n${DAY_TEMPLATE}`
-    await writeNoteAtomic(absPath, body)
-    await this.reloadFile(absPath)
-    return { relPath }
-  }
-
-  /** Append a task to the day's note — the quick-add path. */
-  async addTaskToDaily(
-    date: string,
+  /**
+   * Append a task to a single, fixed inbox note — the quick-add and web
+   * clipper "add task" path. Not date-based: there is no daily note to
+   * anchor it to, so every quick-added task lands in the same running list.
+   */
+  async appendTask(
     folder: string,
     taskLine: string
   ): Promise<{ relPath: string } | { error: string }> {
-    const daily = await this.dailyNote(date, folder)
-    if ('error' in daily) return daily
-    const absPath = toAbsPath(this.vaultPath!, daily.relPath)
-    await appendLine(absPath, taskLine)
-    await this.reloadFile(absPath)
-    return { relPath: daily.relPath }
-  }
-
-  // ------------------------------------------------------- periodic notes
-
-  /**
-   * Get or create the note for an ISO week or a month. The same contract as
-   * `dailyNote`: naming is derived from the date so the note is found again
-   * rather than duplicated.
-   */
-  async periodicNote(
-    kind: 'week' | 'month',
-    date: string,
-    folder: string,
-    template?: string
-  ): Promise<{ relPath: string } | { error: string }> {
     if (!this.vaultPath) return { error: 'No vault is open.' }
-    const name = kind === 'week' ? isoWeekName(date) : date.slice(0, 7)
     const dir = path.join(this.vaultPath, ...folder.split('/').filter(Boolean))
-    assertInsideVault(this.vaultPath, dir)
     await ensureDir(dir)
-
-    const absPath = path.join(dir, `${name}.md`)
+    const absPath = path.join(dir, 'Tasks.md')
     const relPath = toRelPath(this.vaultPath, absPath)
-    if (this.notes.has(relPath)) return { relPath }
 
-    const heading = kind === 'week' ? '## Highlights\n\n## Review\n\n' : '## Themes\n\n## Review\n\n'
-    const body = template ?? `---\ndate: ${date}\n---\n\n${heading}`
-    await writeNoteAtomic(absPath, body)
+    if (!this.notes.has(relPath)) {
+      await writeNoteAtomic(absPath, '# Tasks\n\n')
+      await this.reloadFile(absPath)
+    }
+    await appendLine(absPath, taskLine)
     await this.reloadFile(absPath)
     return { relPath }
   }
@@ -1463,18 +1310,6 @@ goes back to being an ordinary note.
   }
 }
 
-/** ISO week label, e.g. `2026-W32`. */
-function isoWeekName(date: string): string {
-  const [y, m, d] = date.split('-').map(Number)
-  const target = new Date(Date.UTC(y, m - 1, d))
-  // Thursday of the current week determines the year the week belongs to.
-  const day = target.getUTCDay() || 7
-  target.setUTCDate(target.getUTCDate() + 4 - day)
-  const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1))
-  const week = Math.ceil(((target.getTime() - yearStart.getTime()) / 86400000 + 1) / 7)
-  return `${target.getUTCFullYear()}-W${String(week).padStart(2, '0')}`
-}
-
 function shiftDay(date: string, days: number): string {
   const [y, m, d] = date.split('-').map(Number)
   const next = new Date(y, m - 1, d + days)
@@ -1530,27 +1365,6 @@ function buildMatcher(
     // An unfinished regex is normal while typing; treat it as no match.
     return null
   }
-}
-
-/**
- * The default look for a day page: an icon and cover chosen from the date, so
- * the choice is stable (reopening a day never changes it) but the journal does
- * not read as a hundred identical rows.
- */
-const DAY_ICONS = ['🌤️', '🌱', '🪵', '🕯️', '🌊', '🍃', '🌙']
-const DAY_COVERS = ['sand', 'moss', 'sky', 'clay', 'sea', 'slate', 'dusk']
-
-const DAY_TEMPLATE = `## Notes
-
-## Log
-
-`
-
-function dressingFor(date: string): string {
-  // Day-of-week index, computed from the date string so it needs no Date parse.
-  const [y, m, d] = date.split('-').map(Number)
-  const index = Math.abs(new Date(y, m - 1, d).getDay()) % DAY_ICONS.length
-  return `icon: ${DAY_ICONS[index]}\ncover: ${DAY_COVERS[index]}\n`
 }
 
 function escapeRegex(input: string): string {

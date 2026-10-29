@@ -22,21 +22,16 @@ import { activeEditor } from './editor/insert'
 import { blockDocsAt } from './editor/block-complete'
 import { insertPickedFiles } from './editor/slash'
 import { noteSessions, notePathFacet, restartSession, runFenceAtCursor, runFences } from './editor/run-code'
-import { markNow } from './editor/stamps'
-import { today } from './lib/dates'
 import { normaliseChord } from './lib/keys'
 import {
   IconBoard,
   IconBook,
   IconBraces,
-  IconCalendar,
   IconDownload,
   IconPrint,
   IconFolder,
-  IconGraph,
   IconImage,
   IconLayers,
-  IconMic,
   IconNote,
   IconOutline,
   IconPlay,
@@ -49,9 +44,7 @@ import {
   IconSplit,
   IconSun,
   IconTable,
-  IconTasks,
   IconTrash,
-  IconWaveform,
   IconX
 } from './ui/icons'
 
@@ -79,11 +72,12 @@ export interface CommandDef {
 
 const s = (): ReturnType<typeof useStone.getState> => useStone.getState()
 
-const THEME_NAME = { system: 'system', light: 'light', dark: 'dark' } as const
+const THEME_NAME = { system: 'system', light: 'light', dark: 'dark', tango: 'Tango' } as const
 
-/** System → light → dark → system. */
+/** System → light → dark → Tango → system. */
 function nextTheme(theme: Settings['theme']): Settings['theme'] {
-  return theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system'
+  const order = ['system', 'light', 'dark', 'tango'] as const
+  return order[(order.indexOf(theme) + 1) % order.length]
 }
 
 export const COMMANDS: CommandDef[] = [
@@ -96,7 +90,9 @@ export const COMMANDS: CommandDef[] = [
     icon: IconSearch,
     defaultKeys: ['Mod+K'],
     paletteHidden: true,
-    run: () => s().setPalette(true)
+    // A second ⌘K closes it — the same key that opens a thing is the
+    // instinctive one to reach for when backing out of it.
+    run: () => s().setPalette(!s().paletteOpen)
   },
   {
     id: 'go-to-file',
@@ -115,59 +111,19 @@ export const COMMANDS: CommandDef[] = [
     run: () => s().setView('search')
   },
   {
-    id: 'go-today',
-    label: "Open today's note",
-    group: 'Navigation',
-    icon: IconLayers,
-    defaultKeys: ['Mod+T'],
-    run: () => void s().openDaily(today()).then(() => s().setView('today'))
-  },
-  {
-    id: 'view-today',
-    label: 'Go to today',
-    group: 'Navigation',
-    icon: IconLayers,
-    defaultKeys: ['Mod+1'],
-    run: () => s().setView('today')
-  },
-  {
     id: 'view-notes',
     label: 'Go to notes',
     group: 'Navigation',
     icon: IconNote,
-    defaultKeys: ['Mod+2'],
+    defaultKeys: ['Mod+1'],
     run: () => s().setView('notes')
-  },
-  {
-    id: 'view-calendar',
-    label: 'Go to calendar',
-    group: 'Navigation',
-    icon: IconCalendar,
-    defaultKeys: ['Mod+3'],
-    run: () => s().setView('calendar')
-  },
-  {
-    id: 'view-tasks',
-    label: 'Go to tasks',
-    group: 'Navigation',
-    icon: IconTasks,
-    defaultKeys: ['Mod+4'],
-    run: () => s().setView('tasks')
-  },
-  {
-    id: 'view-graph',
-    label: 'Go to the graph',
-    group: 'Navigation',
-    icon: IconGraph,
-    defaultKeys: ['Mod+5'],
-    run: () => s().setView('graph')
   },
   {
     id: 'view-views',
     label: 'Go to views',
     group: 'Navigation',
     icon: IconTable,
-    defaultKeys: ['Mod+6'],
+    defaultKeys: ['Mod+2'],
     run: () => s().setView('views')
   },
   {
@@ -175,7 +131,7 @@ export const COMMANDS: CommandDef[] = [
     label: 'Go to canvas',
     group: 'Navigation',
     icon: IconBoard,
-    defaultKeys: ['Mod+7'],
+    defaultKeys: ['Mod+3'],
     run: () => s().setView('canvas')
   },
   {
@@ -185,7 +141,7 @@ export const COMMANDS: CommandDef[] = [
     label: 'Browse all documents',
     group: 'Navigation',
     icon: IconFolder,
-    defaultKeys: ['Mod+8'],
+    defaultKeys: ['Mod+4'],
     run: () => s().setView('library')
   },
   {
@@ -238,14 +194,6 @@ export const COMMANDS: CommandDef[] = [
     run: (ctx) => void s().createNote(ctx.query.trim() || 'Untitled')
   },
   {
-    id: 'new-task',
-    label: 'Add a task',
-    group: 'Create',
-    icon: IconTasks,
-    defaultKeys: ['Mod+J'],
-    run: () => s().setQuickAdd(true)
-  },
-  {
     id: 'claude',
     label: (ctx) =>
       ctx.query.trim() ? `Ask Claude to draw "${ctx.query.trim()}"` : 'Ask Claude for a diagram',
@@ -268,57 +216,6 @@ export const COMMANDS: CommandDef[] = [
     // page, not once a paragraph — and the palette is where it belongs.
     defaultKeys: [],
     run: (ctx) => void askForAnimation(ctx.query.trim())
-  },
-  {
-    id: 'record',
-    label: () => (s().recording ? 'Stop recording' : 'Record a lecture into this note'),
-    group: 'Create',
-    icon: IconMic,
-    // ⌘⇧R, free in both the editor's keymap and the window's. The toggle is one
-    // command rather than two because it is one button on the bar, and because
-    // "stop" is the thing you reach for in a hurry.
-    defaultKeys: ['Mod+Shift+R'],
-    run: () => {
-      const state = s()
-      if (state.recording) void state.stopRecording()
-      else void state.startRecording()
-    }
-  },
-  {
-    id: 'record-mark',
-    label: 'Mark this moment in the recording',
-    group: 'Editor',
-    icon: IconWaveform,
-    // Not ⌘⇧M: the editor already owns that for highlighting.
-    defaultKeys: ['Mod+Shift+L'],
-    run: () => {
-      const result = markNow()
-      if (result === 'not-recording') s().toast('Nothing is recording.', 'info')
-      if (result === 'no-editor') s().toast('Put the caret in a note first.', 'error')
-    }
-  },
-  {
-    id: 'record-transcribe',
-    label: 'Transcribe the recording that is playing',
-    group: 'Note',
-    icon: IconWaveform,
-    defaultKeys: [],
-    run: () => {
-      const playback = s().playback
-      if (!playback) {
-        s().toast('Play a recording first.', 'info')
-        return
-      }
-      void s().transcribe(playback.audio)
-    }
-  },
-  {
-    id: 'record-transcript-panel',
-    label: 'Show the transcript',
-    group: 'Note',
-    icon: IconWaveform,
-    defaultKeys: [],
-    run: () => s().setSidePanel('transcript')
   },
   {
     id: 'run-code-block',
@@ -401,23 +298,6 @@ export const COMMANDS: CommandDef[] = [
       void insertPickedFiles(view)
     }
   },
-  {
-    id: 'new-weekly',
-    label: "Open this week's note",
-    group: 'Create',
-    icon: IconCalendar,
-    defaultKeys: [],
-    run: () => void s().openPeriodic('week')
-  },
-  {
-    id: 'new-monthly',
-    label: "Open this month's note",
-    group: 'Create',
-    icon: IconCalendar,
-    defaultKeys: [],
-    run: () => void s().openPeriodic('month')
-  },
-
   // ------------------------------------------------------------------- note
 
   {
@@ -437,7 +317,7 @@ export const COMMANDS: CommandDef[] = [
     label: 'Close this tab',
     group: 'Note',
     icon: IconX,
-    defaultKeys: ['Mod+W'],
+    defaultKeys: [],
     paletteHidden: true,
     run: () => {
       const state = s()
@@ -445,6 +325,17 @@ export const COMMANDS: CommandDef[] = [
       const tab = pane?.tabs[pane.active]
       if (tab) state.closeTab(state.activePane, tab.id)
     }
+  },
+  {
+    id: 'close-window',
+    label: 'Close window',
+    group: 'App',
+    icon: IconX,
+    // The macOS convention: ⌘W closes the window you're looking at. A tab
+    // closes with the × on the tab itself, same as it always did.
+    defaultKeys: ['Mod+W'],
+    paletteHidden: true,
+    run: () => void window.stone.window.close()
   },
   {
     id: 'outline',
@@ -481,7 +372,7 @@ export const COMMANDS: CommandDef[] = [
   },
   {
     // The manual lives in the inspector, which only the notes view has a column
-    // for — so asking for it from the calendar goes to the note you were on,
+    // for — so asking for it from elsewhere goes to the note you were on,
     // which is also where an example would have been inserted.
     id: 'docs',
     label: 'Open the manual',
@@ -622,6 +513,32 @@ export const COMMANDS: CommandDef[] = [
     // feature, and nothing else was bound to it.
     defaultKeys: ['Mod+,'],
     run: () => s().setSettingsOpen(true)
+  },
+  {
+    id: 'open-folder',
+    label: 'Open folder…',
+    group: 'App',
+    icon: IconFolder,
+    // The VS Code convention: ⌘O opens a folder into the window you're
+    // already looking at, rather than starting a new one.
+    defaultKeys: ['Mod+O'],
+    run: () => void s().openFolderHere()
+  },
+  {
+    id: 'new-window',
+    label: 'New window',
+    group: 'App',
+    icon: IconFolder,
+    defaultKeys: ['Mod+Shift+N'],
+    run: () => void s().openNewWindow(null)
+  },
+  {
+    id: 'open-folder-new-window',
+    label: 'Open folder in new window…',
+    group: 'App',
+    icon: IconFolder,
+    defaultKeys: [],
+    run: () => void s().openFolderInNewWindow()
   }
 ]
 

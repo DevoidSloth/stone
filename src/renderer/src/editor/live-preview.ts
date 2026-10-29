@@ -21,10 +21,10 @@ import {
 import type { TaskStatus } from '@shared/types'
 import { cycleStatus, parseTaskLine, setStatusOnLine } from '@shared/task-syntax'
 import { parseEmbed } from '@shared/attachments'
-import { readStamp, stampInsertPoint } from '@shared/audio'
 import { safeColour } from '@shared/text-colour'
 import { fenceInfo as readFence } from '@shared/code-langs'
 import { toISODate } from '../lib/dates'
+import { collectLatexMacros } from '../lib/latex'
 import {
   TABLE_ROW_RE,
   TABLE_RULE_RE,
@@ -51,7 +51,6 @@ import {
   PropsWidget,
   QueryWidget,
   RuleWidget,
-  StampWidget,
   SvgWidget,
   TableWidget,
   TocWidget,
@@ -477,10 +476,6 @@ export interface LivePreviewHandlers {
   ) => Promise<{ title: string; body: string; missing?: boolean } | null>
   /** Open an embedded file — a PDF, or anything with no viewer here. */
   onOpenAsset: (target: string) => void
-  /** Play a recording from a moment in it: an embed's play button, or a stamp. */
-  onPlayAudio: (target: string, seconds: number) => void
-  /** Show a recording's transcript in the inspector. */
-  onShowTranscript: (target: string) => void
   attachmentsFolder: () => string
   onHoverLink?: (target: string, rect: DOMRect) => void
   onHoverEnd?: () => void
@@ -540,6 +535,38 @@ function scanFences(doc: Text): Map<number, Fence> {
     info.set(n, { lang, start, end: 0 })
   }
   return info
+}
+
+/**
+ * Shift-Enter inside a fenced block: get out of it.
+ *
+ * A code block swallows Tab and Enter, so once the caret is in one there is no
+ * key that leads back to the prose, and the mouse is not always an option — a
+ * block that ends the note has nothing beneath it to click. A drawn block
+ * (a diagram, an equation) shows its source while the caret is in it and the
+ * figure once it is not, so for those this is also what draws them.
+ *
+ * The caret goes to the first line after the closing fence, or to a fresh one
+ * when the block is the last thing in the note. Anywhere else it declines, and
+ * Shift-Enter keeps its ordinary meaning.
+ */
+export function finishFigureAtCursor(view: EditorView): boolean {
+  const { doc, selection } = view.state
+  const line = doc.lineAt(selection.main.head).number
+  const fence = scanFences(doc).get(line)
+  if (!fence || fence.end <= fence.start) return false
+
+  if (fence.end < doc.lines) {
+    view.dispatch({ selection: { anchor: doc.line(fence.end + 1).from }, scrollIntoView: true })
+  } else {
+    const end = doc.line(fence.end).to
+    view.dispatch({
+      changes: { from: end, insert: '\n' },
+      selection: { anchor: end + 1 },
+      scrollIntoView: true
+    })
+  }
+  return true
 }
 
 /**
@@ -628,6 +655,8 @@ function computeBlockRegions(state: EditorState, handlers: LivePreviewHandlers):
   const regions: BlockRegion[] = []
   const attachments = handlers.attachmentsFolder()
   const taken = new Set<number>()
+  const macros = collectLatexMacros(doc.toString())
+  const macrosKey = JSON.stringify(macros)
 
   const liveLines = new Set<number>()
   for (const range of state.selection.ranges) {
@@ -692,7 +721,7 @@ function computeBlockRegions(state: EditorState, handlers: LivePreviewHandlers):
                 ? new QueryWidget(body)
                 : isToc
                   ? new TocWidget(tocEntries(doc, fences, body), tocRange(body))
-                  : new MathWidget(body, true),
+                  : new MathWidget(body, true, macros, macrosKey),
         block: true
       })
     )
@@ -743,7 +772,11 @@ function computeBlockRegions(state: EditorState, handlers: LivePreviewHandlers):
     if (taken.has(line) || fences.has(line) || liveLines.has(line)) continue
     const inline = MATH_ALONE_RE.exec(doc.line(line).text.trim())
     if (inline) {
-      claim(line, line, Decoration.replace({ widget: new MathWidget(inline[1], true), block: true }))
+      claim(
+        line,
+        line,
+        Decoration.replace({ widget: new MathWidget(inline[1], true, macros, macrosKey), block: true })
+      )
     }
   }
 
@@ -808,6 +841,8 @@ function buildDecorations(
   const doc = view.state.doc
   const todayISO = toISODate(new Date())
   const attachments = handlers.attachmentsFolder()
+  const macros = collectLatexMacros(doc.toString())
+  const macrosKey = JSON.stringify(macros)
 
   // Lines holding a cursor show their raw markers so they stay editable.
   const liveLines = new Set<number>()
@@ -872,22 +907,6 @@ function buildDecorations(
         if (line.to >= doc.length) break
         line = doc.lineAt(line.to + 1)
         continue
-      }
-
-      // The recorder's own marker, pulled out of the prose and drawn as a
-      // clock in the gutter. Done before anything else on the line so the
-      // callout, task and link scans below see the text without it in the way.
-      const stampFrom = base + stampInsertPoint(text)
-      const stamp = readStamp(text.slice(stampFrom - base))
-      if (stamp) {
-        pushReplace(
-          state,
-          stampFrom,
-          stampFrom + stamp.length,
-          Decoration.replace({
-            widget: new StampWidget(stamp.clock, stamp.seconds, stamp.target, handlers.onPlayAudio)
-          })
-        )
       }
 
       // `> [!tip] Heading` — hide the marker and bold what follows it. The
@@ -1177,7 +1196,7 @@ function buildDecorations(
             state,
             base + at,
             base + at + math[0].length,
-            Decoration.replace({ widget: new MathWidget(math[1], false) })
+            Decoration.replace({ widget: new MathWidget(math[1], false, macros, macrosKey) })
           )
         }
       }
@@ -1884,7 +1903,8 @@ export function livePreview(handlers: LivePreviewHandlers) {
     Prec.high(
       keymap.of([
         { key: 'ArrowDown', run: blockAwareMove(blockLayer, true) },
-        { key: 'ArrowUp', run: blockAwareMove(blockLayer, false) }
+        { key: 'ArrowUp', run: blockAwareMove(blockLayer, false) },
+        { key: 'Shift-Enter', run: finishFigureAtCursor }
       ])
     )
   ]

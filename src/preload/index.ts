@@ -1,6 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
-  CalEvent,
   CanvasData,
   CanvasFile,
   CaptureAction,
@@ -8,14 +7,10 @@ import type {
   LibraryFolder,
   LoadedPlugin,
   PluginCommand,
-  CalendarAccount,
   ClaudeActivity,
   ClaudeMode,
   ClaudeRunResult,
   ClaudeStatus,
-  Transcript,
-  TranscribeProgress,
-  WhisperStatus,
   Backup,
   CloudTarget,
   CodeRunResult,
@@ -50,15 +45,6 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
   return reply.data
 }
 
-export interface DeviceCodePrompt {
-  deviceCode: string
-  userCode: string
-  verificationUri: string
-  expiresIn: number
-  interval: number
-  message: string
-}
-
 export type CloudTargetWithAdvice = CloudTarget & { advice: string[] }
 
 const api = {
@@ -71,6 +57,8 @@ const api = {
     cloudTargets: () => call<CloudTargetWithAdvice[]>('vault:cloudTargets'),
     choose: () => call<string | null>('vault:choose'),
     open: (vaultPath: string) => call<{ vaultPath: string; stats: VaultStats }>('vault:open', vaultPath),
+    /** What this window has open — there can be more than one now. */
+    currentPath: () => call<{ vaultPath: string | null }>('vault:currentPath'),
     reindex: () => call<VaultStats>('vault:reindex'),
     stats: () => call<VaultStats>('vault:stats'),
     graph: () => call<GraphData>('vault:graph'),
@@ -107,9 +95,6 @@ const api = {
     rename: (relPath: string, title: string) => call<{ relPath: string }>('notes:rename', relPath, title),
     backlinks: (relPath: string) => call<NoteMeta[]>('notes:backlinks', relPath),
     mentions: (relPath: string) => call<Mention[]>('notes:mentions', relPath),
-    daily: (date: string) => call<{ relPath: string }>('notes:daily', date),
-    periodic: (kind: 'week' | 'month', date: string) =>
-      call<{ relPath: string }>('notes:periodic', kind, date),
     move: (relPath: string, folder: string) =>
       call<{ relPath: string }>('notes:move', relPath, folder),
     duplicate: (relPath: string) => call<{ relPath: string }>('notes:duplicate', relPath),
@@ -200,15 +185,7 @@ const api = {
       call<boolean>('tasks:setDue', relPath, line, due),
     setPriority: (relPath: string, line: number, priority: Priority) =>
       call<boolean>('tasks:setPriority', relPath, line, priority),
-    checkReminders: () => call<boolean>('tasks:checkReminders'),
-    quickAdd: (input: {
-      text: string
-      due: string | null
-      priority: Priority
-      tags: string[]
-      estimate: number | null
-      recurrence?: string | null
-    }) => call<{ relPath: string }>('tasks:quickAdd', input)
+    checkReminders: () => call<boolean>('tasks:checkReminders')
   },
 
   search: {
@@ -221,40 +198,6 @@ const api = {
         replacement,
         options
       )
-  },
-
-  calendar: {
-    accounts: () => call<{ accounts: CalendarAccount[]; errors: string[] }>('cal:accounts'),
-    setEnabled: (id: string, enabled: boolean) => call<CalendarAccount[]>('cal:setEnabled', id, enabled),
-    events: (fromISO: string, toISO: string) =>
-      call<{ events: CalEvent[]; errors: string[] }>('cal:events', fromISO, toISO),
-    refresh: () => call<boolean>('cal:refresh'),
-    save: (
-      accountId: string,
-      input: {
-        id?: string
-        title: string
-        start: string
-        end: string
-        allDay: boolean
-        location?: string | null
-        notes?: string | null
-      }
-    ) => call<{ id: string; relPath: string | null }>('cal:save', accountId, input),
-    remove: (id: string) => call<boolean>('cal:delete', id),
-    addSubscription: (name: string, url: string, color: string) =>
-      call<Settings['icsSubscriptions']>('cal:addSubscription', name, url, color),
-    removeSubscription: (id: string) => call<Settings['icsSubscriptions']>('cal:removeSubscription', id),
-    exportIcs: (events: CalEvent[], suggestedName: string) =>
-      call<string | null>('cal:export', events, suggestedName)
-  },
-
-  microsoft: {
-    status: () => call<{ connected: boolean }>('graph:status'),
-    begin: (clientId: string) => call<DeviceCodePrompt>('graph:begin', clientId),
-    complete: (clientId: string, deviceCode: string, interval: number, expiresIn: number) =>
-      call<{ account: string }>('graph:complete', clientId, deviceCode, interval, expiresIn),
-    signOut: () => call<void>('graph:signOut')
   },
 
   library: {
@@ -310,7 +253,7 @@ const api = {
   capture: {
     setShortcut: (chord: string | null) => call<{ ok: boolean }>('capture:setShortcut', chord),
     setTray: (enabled: boolean) => call<boolean>('capture:setTray', enabled),
-    /** Quick-add, open a note, and the rest, arriving from outside the window. */
+    /** Open a note, jump to today's, or start a new one — arriving from outside the window. */
     onAction: (handler: (action: CaptureAction) => void) => {
       const listener = (_e: unknown, payload: CaptureAction): void => handler(payload)
       ipcRenderer.on('stone:action', listener)
@@ -354,49 +297,6 @@ const api = {
       ipcRenderer.on('claude:activity', listener)
       return (): void => {
         ipcRenderer.removeListener('claude:activity', listener)
-      }
-    }
-  },
-
-  /**
-   * Recording, decoding and transcribing.
-   *
-   * Both write paths are streams rather than single calls: an hour of lecture
-   * is tens of megabytes as Opus and over a hundred as the PCM Whisper wants,
-   * and neither should cross the bridge in one piece.
-   */
-  audio: {
-    requestMicrophone: () => call<boolean>('audio:requestMicrophone'),
-    startRecording: (label: string) =>
-      call<{ id: string; relPath: string }>('audio:startRecording', label),
-    appendRecording: (id: string, chunk: Uint8Array) =>
-      call<number>('audio:appendRecording', id, chunk),
-    finishRecording: (id: string) =>
-      call<{ relPath: string; bytes: number }>('audio:finishRecording', id),
-    cancelRecording: (id: string) => call<boolean>('audio:cancelRecording', id),
-
-    openPcm: (id: string) => call<string>('audio:openPcm', id),
-    writePcm: (id: string, chunk: Uint8Array) => call<void>('audio:writePcm', id, chunk),
-    closePcm: (id: string) => call<string | null>('audio:closePcm', id),
-    discardPcm: (id: string) => call<void>('audio:discardPcm', id),
-
-    whisperStatus: () => call<WhisperStatus>('audio:whisperStatus'),
-    transcribe: (request: { id: string; audio: string; durationSeconds: number }) =>
-      call<Transcript>('audio:transcribe', request),
-    cancelTranscribe: (id: string) => call<boolean>('audio:cancelTranscribe', id),
-
-    transcript: (audioRelPath: string) => call<Transcript | null>('audio:transcript', audioRelPath),
-    transcripts: () => call<Transcript[]>('audio:transcripts'),
-    deleteTranscript: (audioRelPath: string) =>
-      call<boolean>('audio:deleteTranscript', audioRelPath),
-    duration: (audioRelPath: string) => call<number | null>('audio:duration', audioRelPath),
-
-    /** Segments as they are decoded, so a long transcript fills in as it runs. */
-    onProgress: (handler: (payload: TranscribeProgress) => void) => {
-      const listener = (_e: unknown, payload: TranscribeProgress): void => handler(payload)
-      ipcRenderer.on('audio:progress', listener)
-      return (): void => {
-        ipcRenderer.removeListener('audio:progress', listener)
       }
     }
   },
@@ -513,7 +413,9 @@ const api = {
       return (): void => {
         ipcRenderer.removeListener('app:flush', listener)
       }
-    }
+    },
+    /** A new window, independent of this one — blank, or straight to a folder. */
+    newWindow: (vaultPath: string | null) => call<boolean>('app:newWindow', vaultPath)
   },
 
   theme: {
@@ -543,9 +445,9 @@ export type StoneApi = typeof api
  * and can ask main synchronously, so it does.
  */
 function applyInitialTheme(): void {
-  let theme: 'dark' | 'light' = 'dark'
+  let theme: 'dark' | 'light' | 'tango' = 'dark'
   try {
-    theme = ipcRenderer.sendSync('theme:resolved') as 'dark' | 'light'
+    theme = ipcRenderer.sendSync('theme:resolved') as 'dark' | 'light' | 'tango'
   } catch {
     // A failed hint is a cosmetic problem; the store corrects it on boot.
   }

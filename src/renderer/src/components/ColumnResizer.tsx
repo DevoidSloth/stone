@@ -107,16 +107,15 @@ export function ColumnResizer({
   )
 }
 
-/** The three shell widths, with the bounds each is clamped to. */
+/** The two shell widths, with the bounds each is clamped to. */
 export const COLUMN_BOUNDS = {
   sidebar: { min: 180, max: 480, reset: 240 },
-  inspector: { min: 220, max: 520, reset: 300 },
-  agenda: { min: 220, max: 520, reset: 300 }
+  inspector: { min: 220, max: 520, reset: 300 }
 } as const
 
 /** Push a live width to CSS during a drag, without a settings write per frame. */
 export function applyColumnWidth(name: keyof typeof COLUMN_BOUNDS, px: number): void {
-  const prop = name === 'sidebar' ? '--sidebar-w' : name === 'agenda' ? '--agenda-w' : '--inspector-w'
+  const prop = name === 'sidebar' ? '--sidebar-w' : '--inspector-w'
   document.documentElement.style.setProperty(prop, `${px}px`)
 }
 
@@ -124,11 +123,9 @@ export function applyColumnWidth(name: keyof typeof COLUMN_BOUNDS, px: number): 
 export function applyColumnWidths(widths: {
   sidebarWidth: number
   inspectorWidth: number
-  agendaWidth: number
 }): void {
   applyColumnWidth('sidebar', widths.sidebarWidth)
   applyColumnWidth('inspector', widths.inspectorWidth)
-  applyColumnWidth('agenda', widths.agendaWidth)
 }
 
 /** Small helper so each column's handle is three lines at the call site. */

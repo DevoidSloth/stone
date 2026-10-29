@@ -2,12 +2,20 @@ import { app, BrowserWindow, ipcMain, nativeTheme, screen, session, shell } from
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
-import { registerIpc, vault } from './ipc'
-import { closeAllRecordings } from './audio'
-import { loadSettings, peekSettings, saveSettings } from './settings'
-import { CHROME_BG, OVERLAY, applyThemeChrome, resolveTheme } from './window-chrome'
+import { createWindowVault, registerIpc, setNewWindowHandler } from './ipc'
+import { activeWindow, allVaults, windowCount } from './windows'
+import { loadSettings, peekSettings } from './settings'
+import { CHROME_BG, OVERLAY, applyThemeChrome, nativeSource, resolveTheme } from './window-chrome'
 import { registerProtocolHandler, registerProtocolScheme } from './protocol'
-import { handleUrl, registerCapture, teardownCapture, urlFromArgv } from './capture'
+import {
+  handleUrl,
+  markdownFromArgv,
+  openMarkdownFile,
+  registerCapture,
+  registerOpenFile,
+  teardownCapture,
+  urlFromArgv
+} from './capture'
 import { stopClipper } from './clipper'
 import { reloadPlugins, shutdownPlugins } from './plugins'
 import { cancelAllRuns } from './run-code'
@@ -20,6 +28,7 @@ const isDev = !app.isPackaged
 
 // Schemes can only be declared before the app is ready, so this runs at import.
 registerProtocolScheme()
+registerOpenFile()
 
 interface WindowState {
   width: number
@@ -120,7 +129,19 @@ function persistWindowStateSync(win: BrowserWindow): void {
   }
 }
 
-async function createWindow(): Promise<BrowserWindow> {
+let windowSeq = 0
+
+/**
+ * A window, its own vault, and — one folder open in each — don't have to be
+ * the same folder.
+ *
+ * Each gets its own in-memory session rather than sharing `defaultSession`,
+ * which is what lets `stone-file://` resolve against the right vault: a
+ * custom scheme's requests carry no reference to the window that made them,
+ * so the only way to answer two windows' asset requests differently is to
+ * answer them on two different sessions in the first place.
+ */
+async function createWindow(vaultPath?: string | null): Promise<BrowserWindow> {
   const settings = await loadSettings()
   const state = await readWindowState()
   const theme = resolveTheme(settings.theme)
@@ -128,6 +149,8 @@ async function createWindow(): Promise<BrowserWindow> {
   // macOS takes its icon from the bundle, so setting it here would be ignored.
   const icon =
     process.platform === 'darwin' || !(await fileExists(iconFile())) ? undefined : iconFile()
+
+  const windowSession = session.fromPartition(`stone-vault-${++windowSeq}`)
 
   const win = new BrowserWindow({
     icon,
@@ -148,12 +171,32 @@ async function createWindow(): Promise<BrowserWindow> {
     visualEffectState: 'active',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
+      session: windowSession,
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
       spellcheck: true
     }
   })
+
+  const winVault = createWindowVault(win)
+  registerProtocolHandler(windowSession, winVault, () => peekSettings().libraryFolders.map((f) => f.path))
+
+  // Only reopen a remembered path that still exists. `Vault.open` creates
+  // whatever directory it's given, which is right when the user just chose
+  // one — but not here: a folder that vanished (moved, deleted, an unmounted
+  // drive) should not come back on next launch as a blank folder standing in
+  // for it. Falling through to Welcome is the honest answer.
+  if (vaultPath && (await fileExists(vaultPath))) {
+    try {
+      await winVault.open(vaultPath)
+      if (settings.enabledPlugins.length > 0) {
+        void reloadPlugins(vaultPath, settings.enabledPlugins).catch(() => undefined)
+      }
+    } catch {
+      // Opened with a bad remembered path — the window still opens, to Welcome.
+    }
+  }
 
   if (state.maximized) win.maximize()
 
@@ -211,36 +254,33 @@ async function createWindow(): Promise<BrowserWindow> {
   return win
 }
 
+/** What `navigator.clipboard.writeText` asks Chromium for. */
+const COPY_PERMISSION = 'clipboard-sanitized-write'
+
 /**
- * Let the renderer reach the microphone, and nothing else.
+ * Deny every permission a renderer asks for, bar writing to the clipboard.
  *
- * Chromium denies every permission a renderer asks for unless the embedder
- * says otherwise, and Electron installs no handler by default — so without
- * this, `getUserMedia` in the recorder fails with NotAllowedError and no
- * prompt ever appears. The handler is deliberately an allowlist of one: this
- * app has no reason to want the camera, the screen, or a notification stream
- * it did not ask for through `Notification` in main.
+ * Chromium denies by default unless the embedder says otherwise, but
+ * Electron installs no handler at all — so without this, the default is
+ * effectively "ask the OS," which is wrong for an app with no reason to want
+ * the camera, the microphone, the screen, or a notification stream it did not
+ * ask for through `Notification` in main.
  *
- * On macOS the OS prompt is a second, separate gate. It is triggered here
- * rather than at launch, because a note-taking app that asks for the
- * microphone the first time it opens has explained nothing about why.
+ * Each window carries its own session rather than the shared default one, so
+ * this is installed on every webContents as it is created — main's own and
+ * any offscreen host's — rather than once on `session.defaultSession`.
  */
-function allowMicrophone(): void {
-  const isMedia = (permission: string): boolean =>
-    permission === 'media' || permission === 'audioCapture'
-
-  session.defaultSession.setPermissionRequestHandler((_contents, permission, callback, details) => {
-    if (!isMedia(permission)) {
-      callback(false)
-      return
-    }
-    // `mediaTypes` is absent on some request shapes; an audio-only request that
-    // does not say so is still audio-only, but a request that names video is not.
-    const types = (details as { mediaTypes?: string[] }).mediaTypes
-    callback(!types || (types.includes('audio') && !types.includes('video')))
+function denyMediaPermissions(): void {
+  // The one exception: writing text to the clipboard. `navigator.clipboard
+  // .writeText` — every Copy button in the app — is gated on this, and a blanket
+  // refusal made them all report "Failed". Reading the clipboard stays denied;
+  // paste arrives through the paste event, which needs no permission.
+  app.on('web-contents-created', (_event, contents) => {
+    contents.session.setPermissionRequestHandler((_c, permission, callback) =>
+      callback(permission === COPY_PERMISSION)
+    )
+    contents.session.setPermissionCheckHandler((_c, permission) => permission === COPY_PERMISSION)
   })
-
-  session.defaultSession.setPermissionCheckHandler((_contents, permission) => isMedia(permission))
 }
 
 /**
@@ -288,12 +328,13 @@ app.whenReady().then(async () => {
   }
 
   const settings = await loadSettings()
-  nativeTheme.themeSource = settings.theme === 'system' ? 'system' : settings.theme
+  nativeTheme.themeSource = nativeSource(settings.theme)
 
-  // The library roots are read live rather than captured, so adding a folder
-  // takes effect without a restart — and removing one revokes access at once.
-  registerProtocolHandler(vault, () => peekSettings().libraryFolders.map((f) => f.path))
+  denyMediaPermissions()
   registerIpc()
+  setNewWindowHandler(async (vaultPath) => {
+    await createWindow(vaultPath)
+  })
   registerThemeHint()
   watchSystemTheme()
 
@@ -308,36 +349,24 @@ app.whenReady().then(async () => {
     return updateState()
   })
   ipcMain.handle('update:state', () => updateState())
-  allowMicrophone()
 
   registerCapture(
     {
       // Capture has to work with the window closed, which on macOS is the
       // normal state of a running app — so this creates one when there is none
-      // rather than dropping the keystroke.
-      ensureWindow: async () => BrowserWindow.getAllWindows()[0] ?? (await createWindow())
+      // rather than dropping the keystroke. It opens blank, same as any other
+      // fresh window — see the note below.
+      ensureWindow: async () => activeWindow() ?? (await createWindow(null))
     },
     { shortcut: settings.captureShortcut, tray: settings.trayEnabled }
   )
 
-  // Reopen the last vault before the window paints, so the UI never flashes empty.
-  if (settings.vaultPath) {
-    try {
-      await vault.open(settings.vaultPath)
-      // Reopening the last vault bypasses the IPC handler, so start its plugins
-      // here too — otherwise they only ever run after an explicit vault change.
-      if (settings.enabledPlugins.length > 0) {
-        void reloadPlugins(settings.vaultPath, settings.enabledPlugins).catch(() => undefined)
-      }
-    } catch {
-      await saveSettings({ vaultPath: null })
-    }
-  }
-
-  await createWindow()
+  // Every window starts blank rather than reopening the last vault — Welcome,
+  // not a silent jump back into whatever was open when the app last quit.
+  await createWindow(null)
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) void createWindow()
+    if (windowCount() === 0) void createWindow(null)
   })
 })
 
@@ -357,22 +386,31 @@ app.on('window-all-closed', () => {
 let flushed = false
 
 app.on('before-quit', (event) => {
-  const [win] = BrowserWindow.getAllWindows()
-  if (!flushed && win && !win.isDestroyed() && !win.webContents.isCrashed()) {
+  const windows = BrowserWindow.getAllWindows().filter(
+    (win) => !win.isDestroyed() && !win.webContents.isCrashed()
+  )
+  if (!flushed && windows.length > 0) {
     event.preventDefault()
     flushed = true
-    const done = new Promise<void>((resolve) => {
-      ipcMain.once('app:flushed', () => resolve())
-      win.webContents.send('app:flush')
-    })
+    const done = Promise.all(
+      windows.map(
+        (win) =>
+          new Promise<void>((resolve) => {
+            const listener = (event: Electron.IpcMainEvent): void => {
+              if (event.sender.id !== win.webContents.id) return
+              ipcMain.removeListener('app:flushed', listener)
+              resolve()
+            }
+            ipcMain.on('app:flushed', listener)
+            win.webContents.send('app:flush')
+          })
+      )
+    )
     void Promise.race([done, new Promise((r) => setTimeout(r, 1500))]).then(() => app.quit())
     return
   }
 
-  void vault.close()
-  // A recording still open is a file handle holding an unflushed tail; closing
-  // it keeps whatever was captured rather than losing the last few seconds.
-  void closeAllRecordings()
+  for (const v of allVaults()) void v.close()
   teardownCapture()
   stopClipper()
   shutdownPlugins()
@@ -393,6 +431,11 @@ if (!app.requestSingleInstanceLock()) {
     const url = urlFromArgv(argv)
     if (url) {
       handleUrl(url)
+      return
+    }
+    const files = markdownFromArgv(argv)
+    if (files.length > 0) {
+      for (const file of files) void openMarkdownFile(path.resolve(file))
       return
     }
     const [win] = BrowserWindow.getAllWindows()

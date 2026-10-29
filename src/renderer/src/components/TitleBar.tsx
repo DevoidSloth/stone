@@ -7,8 +7,6 @@ import { exportNoteToPdf } from '../export-note'
 import { Tip } from '../ui/Tip'
 import {
   IconBoard,
-  IconCalendar,
-  IconGraph,
   IconNote,
   IconSearch,
   IconSettings,
@@ -17,8 +15,6 @@ import {
   IconContrast,
   IconSpinner,
   IconPrint,
-  IconTasks,
-  IconLayers,
   StoneMark
 } from '../ui/icons'
 
@@ -31,11 +27,7 @@ const VIEWS: {
   /** Shown only when switched on — off by default, to keep the bar honest. */
   optional?: boolean
 }[] = [
-  { id: 'today', label: 'Today', icon: IconLayers, command: 'view-today' },
   { id: 'notes', label: 'Notes', icon: IconNote, command: 'view-notes' },
-  { id: 'calendar', label: 'Calendar', icon: IconCalendar, command: 'view-calendar' },
-  { id: 'tasks', label: 'Tasks', icon: IconTasks, command: 'view-tasks' },
-  { id: 'graph', label: 'Graph', icon: IconGraph, command: 'view-graph' },
   // Documents are not here on purpose: they open in the ordinary panes, are
   // listed in the sidebar, and answer to `[[links]]` — a screen of their own
   // would put them back in a box the rest of the app has to reach into.
@@ -66,6 +58,7 @@ export function TitleBar() {
   const view = useStone((s) => s.view)
   const setView = useStone((s) => s.setView)
   const settings = useStone((s) => s.settings)
+  const vaultPath = useStone((s) => s.vaultPath)
   const updateSettings = useStone((s) => s.updateSettings)
   const setPalette = useStone((s) => s.setPalette)
   const setSettingsOpen = useStone((s) => s.setSettingsOpen)
@@ -74,11 +67,17 @@ export function TitleBar() {
 
   const bindings = settings?.keybindings ?? {}
 
-  // System → Limestone → Basalt. A two-way toggle silently destroyed `system`,
+  // System → Limestone → Basalt → Tango. A two-way toggle silently destroyed `system`,
   // which after the first click could only be recovered from Settings.
   const theme = settings?.theme ?? 'system'
-  const nextTheme = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system'
-  const THEME_LABEL = { system: 'Matching the system', light: 'Limestone', dark: 'Basalt' } as const
+  const order = ['system', 'light', 'dark', 'tango'] as const
+  const nextTheme = order[(order.indexOf(theme) + 1) % order.length]
+  const THEME_LABEL = {
+    system: 'Matching the system',
+    light: 'Limestone',
+    dark: 'Basalt',
+    tango: 'Tango'
+  } as const
   const themeIcon =
     theme === 'system' ? <IconContrast /> : theme === 'light' ? <IconSun /> : <IconMoon />
   const canExport = view === 'notes' && Boolean(activeRelPath)
@@ -87,7 +86,7 @@ export function TitleBar() {
     <header className="titlebar">
       <div className="titlebar__mark">
         <StoneMark />
-        <span className="titlebar__vault truncate">{vaultName(settings?.vaultPath ?? null)}</span>
+        <span className="titlebar__vault truncate">{vaultName(vaultPath)}</span>
       </div>
 
       {/*

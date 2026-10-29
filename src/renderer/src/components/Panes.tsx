@@ -432,6 +432,8 @@ export function Panes() {
   const focusPane = useStone((s) => s.focusPane)
   const createNote = useStone((s) => s.createNote)
   const setPalette = useStone((s) => s.setPalette)
+  const isEmptyVault = useStone((s) => s.notes.length === 0)
+  const openFolderHere = useStone((s) => s.openFolderHere)
   const row = useRef<HTMLDivElement>(null)
 
   return (
@@ -457,6 +459,29 @@ export function Panes() {
                   ) : (
                     <NoteView relPath={tab.relPath} paneIndex={index} />
                   )
+                ) : isEmptyVault ? (
+                  <div className="empty">
+                    <div className="empty__inner">
+                      <p className="empty__title">This folder is empty</p>
+                      <p className="empty__body">
+                        Open the folder you actually want to work in, or start writing here.
+                      </p>
+                      <div className="empty__actions">
+                        <button
+                          type="button"
+                          className="btn btn--primary"
+                          onClick={() => void openFolderHere()}
+                        >
+                          <IconFolder size={13} />
+                          Open a folder
+                        </button>
+                        <button type="button" className="btn" onClick={() => void createNote('Untitled')}>
+                          <IconPlus size={13} />
+                          New note
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 ) : (
                   <div className="empty">
                     <div className="empty__inner">

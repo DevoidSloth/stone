@@ -37,6 +37,7 @@ import { cycleStatus, isTaskLine, parseTaskLine, setStatusOnLine } from '@shared
 import { assetPathOf, isExternalUrl } from '@shared/attachments'
 import { fenceInfo } from '@shared/code-langs'
 import { isFoldable, livePreview, toggleFold } from './live-preview'
+import { closeComments } from './close-comments'
 import { blockHandles } from './blocks'
 import { notePathFacet } from './run-code'
 import { slashMenu } from './slash'
@@ -61,8 +62,6 @@ import {
   trackFocus,
   unregisterEditor
 } from './insert'
-import { stamps } from './stamps'
-import { seekPlayer } from '../audio/player'
 import { useStone } from '../store'
 import { describeError } from '../lib/errors'
 import { findEmoji } from '../lib/emoji'
@@ -643,6 +642,7 @@ export function Editor({
       indentOnInput(),
       bracketMatching(),
       closeBrackets(),
+      closeComments(),
       autocompletion({
         override: [
           slashMenu,
@@ -688,32 +688,11 @@ export function Editor({
             .open(assetPathOf(target, folder))
             .catch((err: Error) => console.error('[stone] could not open embed', err))
         },
-        // A recording is played from the bar at the foot of the window, so both
-        // the embed's play button and every timestamp down the note reach the
-        // same element rather than starting a second copy of the lecture.
-        onPlayAudio: (target, seconds) => {
-          const folder = handlers.current.attachmentsFolder ?? 'Attachments'
-          const audio = assetPathOf(target, folder)
-          const store = useStone.getState()
-          // Already loaded: seek the element directly, which is instant and
-          // keeps playing. Otherwise the position rides along with the open and
-          // the player applies it as soon as it knows how long the file is.
-          if (store.playback?.audio === audio && seekPlayer(seconds)) return
-          void store.openPlayer(audio, docKeyRef.current, { at: seconds, play: true })
-        },
-        onShowTranscript: (target) => {
-          const folder = handlers.current.attachmentsFolder ?? 'Attachments'
-          const audio = assetPathOf(target, folder)
-          const store = useStone.getState()
-          void store.openPlayer(audio, docKeyRef.current)
-          store.setSidePanel('transcript')
-        },
         attachmentsFolder: () => handlers.current.attachmentsFolder ?? 'Attachments',
         onHoverLink: (target, rect) => handlers.current.onHoverLink?.(target, rect),
         onHoverEnd: () => handlers.current.onHoverEnd?.()
       }),
       selectionToolbar(),
-      ...stamps(),
       trackFocus,
       widgetHeights,
       fontMetrics,
@@ -864,8 +843,25 @@ export function Editor({
     if (value === emitted.current) return
     const current = instance.state.doc.toString()
     if (current === value) return
+    // Only the span that differs is replaced. Swapping the whole document maps
+    // a caret anywhere inside it to position 0, which is the note jumping to
+    // the top under someone who is typing.
+    let from = 0
+    const shortest = Math.min(current.length, value.length)
+    while (from < shortest && current[from] === value[from]) from++
+    let tail = 0
+    while (
+      tail < shortest - from &&
+      current[current.length - 1 - tail] === value[value.length - 1 - tail]
+    ) {
+      tail++
+    }
     instance.dispatch({
-      changes: { from: 0, to: current.length, insert: value }
+      changes: {
+        from,
+        to: current.length - tail,
+        insert: value.slice(from, value.length - tail)
+      }
     })
     emitted.current = value
   }, [value])

@@ -83,34 +83,6 @@ export interface Note extends NoteMeta {
   content: string
 }
 
-export type CalendarSource = 'stone' | 'macos' | 'graph' | 'ics'
-
-export interface CalendarAccount {
-  id: string
-  source: CalendarSource
-  name: string
-  color: string
-  writable: boolean
-  enabled: boolean
-}
-
-export interface CalEvent {
-  id: string
-  accountId: string
-  source: CalendarSource
-  title: string
-  /** ISO datetime, or `YYYY-MM-DD` when allDay. */
-  start: string
-  end: string
-  allDay: boolean
-  location: string | null
-  notes: string | null
-  /** Set when the event originated from a note in the vault. */
-  relPath: string | null
-  readOnly: boolean
-  color: string | null
-}
-
 export interface CloudTarget {
   kind: 'icloud' | 'gdrive' | 'dropbox' | 'onedrive' | 'local'
   label: string
@@ -397,29 +369,19 @@ export interface Comment {
 // ------------------------------------------------------------------ settings
 
 export interface Settings {
-  vaultPath: string | null
-  theme: 'dark' | 'light' | 'system'
+  theme: 'dark' | 'light' | 'system' | 'tango'
   accentHue: number
-  /** Folder inside the vault where daily notes live. */
-  dailyFolder: string
-  dailyFormat: string
-  /** Folders for the other periodic notes. */
-  weeklyFolder: string
-  monthlyFolder: string
   /** Folder for new notes created from the command palette. */
   inboxFolder: string
   attachmentsFolder: string
   /** Folder holding note templates. */
   templateFolder: string
-  /** Template applied to a freshly created daily note, by relPath. */
-  dailyTemplate: string | null
   editorFont: 'serif' | 'sans' | 'mono'
   /** Editor body size in px. The prose measure scales with it. */
   editorFontSize: number
   /** Shell column widths in px, dragged by the user and remembered. */
   sidebarWidth: number
   inspectorWidth: number
-  agendaWidth: number
   editorWidth: number
   showStrataRail: boolean
   /**
@@ -439,13 +401,13 @@ export interface Settings {
   spellcheck: boolean
   /** Fire an OS notification when a task falls due. */
   remindersEnabled: boolean
-  /** Minutes before an event or due time to notify. */
+  /** Minutes before a due time to notify. */
   reminderLeadMinutes: number
   /** Keep a snapshot of each note on save, for recovery. */
   snapshotsEnabled: boolean
 
   // ------------------------------------------------------------- capture
-  /** System-wide chord that opens quick-add, in Electron accelerator form. */
+  /** System-wide chord that raises Stone, in Electron accelerator form. */
   captureShortcut: string | null
   /** Show a tray icon, so capture survives the window being closed. */
   trayEnabled: boolean
@@ -519,42 +481,11 @@ export interface Settings {
    */
   codeNotebook: boolean
 
-  // --------------------------------------------------------------- audio
-  /**
-   * Path to a Whisper command line, when the usual places are the wrong ones.
-   * Auto-detected exactly the way `claudeCommand` is.
-   */
-  whisperCommand: string | null
-  /**
-   * The model to transcribe with.
-   *
-   * whisper.cpp wants a path to a `ggml-*.bin`; the Python and MLX front ends
-   * want a name like `base.en` or `mlx-community/whisper-small`. Which of the
-   * two it is follows from the binary, so one field covers both.
-   */
-  whisperModel: string
-  /** BCP-47-ish language hint, or `auto` to let the model decide. */
-  whisperLanguage: string
-  /** Folder inside the vault where recordings are written. */
-  audioFolder: string
-  /**
-   * Stamp each new block written while recording with the time it was started.
-   * Off means only the marks the user asks for, from the recorder or its chord.
-   */
-  audioAutoStamp: boolean
-  /** Start transcribing as soon as a recording is stopped. */
-  audioTranscribeOnStop: boolean
-  /** Scroll the note to the line being spoken while a recording plays back. */
-  audioFollow: boolean
-
   /** Folders of documents Stone indexes. */
   libraryFolders: LibraryFolder[]
   /** Notes pinned to the top of the sidebar. */
   favorites: string[]
   savedViews: SavedView[]
-  calendars: CalendarAccount[]
-  icsSubscriptions: { id: string; name: string; url: string; color: string }[]
-  firstRunComplete: boolean
 }
 
 /**
@@ -607,8 +538,7 @@ export interface PrintPayload {
  *
  * The first five are one-shot: a prompt goes out, a block of markdown comes
  * back, and the process dies. `agent` is the odd one — it keeps a session, is
- * allowed tools, and answers over several turns. `lecture` is not offered in
- * the dialog; it is what the transcript panel asks with.
+ * allowed tools, and answers over several turns.
  */
 export type ClaudeMode =
   | 'diagram'
@@ -618,7 +548,6 @@ export type ClaudeMode =
   | 'code'
   | 'text'
   | 'agent'
-  | 'lecture'
 
 /** How much of the note goes out with the prompt. */
 export type ClaudeContext = 'none' | 'selection' | 'note'
@@ -658,72 +587,6 @@ export interface ClaudeRunResult {
    * and null for the one-shot modes, which persist nothing.
    */
   sessionId: string | null
-}
-
-/**
- * One utterance, as Whisper heard it.
- *
- * Seconds rather than milliseconds because that is what every Whisper front
- * end emits and what `<audio>.currentTime` is measured in; converting twice on
- * the way through would only be a chance to be off by a thousand.
- */
-export interface TranscriptSegment {
-  start: number
-  end: number
-  text: string
-}
-
-/** A finished transcript, cached against the recording it came from. */
-export interface Transcript {
-  /** Vault-relative path of the audio, which is also the cache key. */
-  audio: string
-  /** ISO 8601. */
-  createdAt: string
-  /** What the model reported, or what was asked for. */
-  language: string
-  /** The command line that produced it, for a transcript that reads oddly. */
-  engine: string
-  durationSeconds: number
-  segments: TranscriptSegment[]
-}
-
-/** Which Whisper front end the resolved binary is, since their flags differ. */
-export type WhisperFlavor = 'whisper-cpp' | 'openai' | 'mlx' | 'faster'
-
-export interface WhisperStatus {
-  available: boolean
-  binary: string | null
-  flavor: WhisperFlavor | null
-  /**
-   * `ggml-*.bin` files found in the usual whisper.cpp model directories, so the
-   * settings screen can offer them instead of asking for a path.
-   */
-  models: string[]
-}
-
-/** Progress from a transcription in flight, pushed on `audio:progress`. */
-export interface TranscribeProgress {
-  id: string
-  /** What the run is doing now, in words fit to show. */
-  stage: string
-  /** 0–1, or null while the run cannot say. */
-  progress: number | null
-  /** Segments decoded so far, for a transcript that fills in as it goes. */
-  segments: TranscriptSegment[]
-}
-
-/** A recording being written to disk, as the renderer streams it in. */
-export interface AudioSink {
-  id: string
-  relPath: string
-}
-
-/** How the audio bar remembers where a note's player was. */
-export interface AudioSession {
-  /** Vault-relative path of the recording. */
-  audio: string
-  /** The note it was recorded against or last opened from. */
-  note: string
 }
 
 /** How a run of a fenced code block ended. */
@@ -836,9 +699,8 @@ export interface GraphData {
  * rather than acting itself, so the renderer's existing paths stay authoritative.
  */
 export type CaptureAction =
-  | { type: 'quick-add'; text?: string }
   | { type: 'open'; relPath: string }
-  | { type: 'daily' }
+  | { type: 'show' }
   | { type: 'new-note'; title: string; content?: string }
 
 /** Emitted by main whenever the on-disk vault changes. */

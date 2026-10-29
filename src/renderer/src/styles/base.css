@@ -407,6 +407,18 @@ textarea.field {
     --bg-hover: rgb(255 255 255 / 12%);
     --bg-active: rgb(255 255 255 / 20%);
   }
+
+  :root[data-theme='tango'] {
+    --border-faint: rgb(238 238 236 / 20%);
+    --border-hair: rgb(238 238 236 / 32%);
+    --border: rgb(238 238 236 / 46%);
+    --border-strong: rgb(238 238 236 / 64%);
+    --text-muted: rgb(238 238 236 / 84%);
+    --text-faint: rgb(238 238 236 / 74%);
+    --text-ghost: rgb(238 238 236 / 62%);
+    --bg-hover: rgb(238 238 236 / 12%);
+    --bg-active: rgb(238 238 236 / 20%);
+  }
 }
 
 /*

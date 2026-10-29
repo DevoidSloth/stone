@@ -21,6 +21,7 @@ import { markerFor } from '@shared/print-markers'
 import type { PrintPayload } from '@shared/types'
 import { highlight } from './highlight'
 import { sanitizeSvg } from '../lib/svg'
+import { collectLatexMacros } from '../lib/latex'
 import { renderVizStill } from '../viz'
 import { vizKind } from '@shared/viz-langs'
 import '@fontsource-variable/inter/index.css'
@@ -105,7 +106,7 @@ function tocPage(headings: Heading[], pageNumbers?: Record<string, number>): str
 }
 
 /** Math, in place. A failure prints the source rather than vanishing. */
-function renderMath(root: HTMLElement): void {
+function renderMath(root: HTMLElement, macros: Record<string, string>): void {
   for (const node of Array.from(root.querySelectorAll<HTMLElement>('.md-math'))) {
     const tex = node.dataset.tex ?? node.textContent ?? ''
     try {
@@ -113,7 +114,8 @@ function renderMath(root: HTMLElement): void {
         displayMode: node.classList.contains('md-math--block'),
         throwOnError: false,
         output: 'html',
-        strict: 'ignore'
+        strict: 'ignore',
+        macros: { ...macros }
       })
     } catch {
       node.classList.add('md-math--error')
@@ -268,7 +270,7 @@ async function render(payload: PrintPayload): Promise<void> {
     }${html}</article>`
   ].join('')
 
-  renderMath(page)
+  renderMath(page, collectLatexMacros(payload.markdown))
   await highlight(page)
   await renderDiagrams(page)
   renderDrawings(page)

@@ -1,17 +1,13 @@
-import { useEffect, useState, useRef} from 'react'
+import { useRef } from 'react'
 import { useStone } from '../store'
 import { KeybindingSettings } from './KeybindingSettings'
 import { CaptureSettings } from './CaptureSettings'
 import { ExtensionSettings } from './ExtensionSettings'
 import { ClaudeSettings } from './ClaudeSettings'
-import { AudioSettings } from './AudioSettings'
 import { CodeSettings } from './CodeSettings'
 import { PdfSettings } from './PdfSettings'
-import { IconCloud, IconPlus, IconRefresh, IconTrash, IconX } from '../ui/icons'
-import { describeError } from '../lib/errors'
+import { IconPlus, IconTrash, IconX } from '../ui/icons'
 import { useFocusTrap } from '../lib/focus-trap'
-
-const FEED_COLORS = ['#e0a94a', '#45c79a', '#8891ff', '#ee6b6b', '#4fa8d8', '#b07ce0']
 
 /**
  * System first, because that is what a Mac app is expected to do and what the
@@ -20,7 +16,8 @@ const FEED_COLORS = ['#e0a94a', '#45c79a', '#8891ff', '#ee6b6b', '#4fa8d8', '#b0
 const THEMES = [
   { id: 'system', label: 'System' },
   { id: 'light', label: 'Limestone' },
-  { id: 'dark', label: 'Basalt' }
+  { id: 'dark', label: 'Basalt' },
+  { id: 'tango', label: 'Tango' }
 ] as const
 
 /** Below 11 the live-preview widgets stop lining up; above 28 nothing fits. */
@@ -52,89 +49,19 @@ export function SettingsModal() {
   const open = useStone((s) => s.settingsOpen)
   const setOpen = useStone((s) => s.setSettingsOpen)
   const settings = useStone((s) => s.settings)
-  const accounts = useStone((s) => s.accounts)
-  const errors = useStone((s) => s.calendarErrors)
+  const vaultPath = useStone((s) => s.vaultPath)
   const updateSettings = useStone((s) => s.updateSettings)
+  const openFolderHere = useStone((s) => s.openFolderHere)
+  const openFolderInNewWindow = useStone((s) => s.openFolderInNewWindow)
   const addLibraryFolder = useStone((s) => s.addLibraryFolder)
   const removeLibraryFolder = useStone((s) => s.removeLibraryFolder)
-  const refreshAccounts = useStone((s) => s.refreshAccounts)
-  const loadCalendar = useStone((s) => s.loadCalendar)
   const refreshVault = useStone((s) => s.refreshVault)
   const toast = useStone((s) => s.toast)
   const dialog = useRef<HTMLDivElement>(null)
 
   useFocusTrap(dialog, open)
 
-  const [feedName, setFeedName] = useState('')
-  const [feedUrl, setFeedUrl] = useState('')
-  const [clientId, setClientId] = useState('')
-  const [msConnected, setMsConnected] = useState(false)
-  const [devicePrompt, setDevicePrompt] = useState<{ userCode: string; uri: string } | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  useEffect(() => {
-    if (!open) return
-    void window.stone.microsoft.status().then((s) => setMsConnected(s.connected))
-    void refreshAccounts()
-  }, [open, refreshAccounts])
-
   if (!open || !settings) return null
-
-  const chooseVault = async (): Promise<void> => {
-    const picked = await window.stone.vault.choose()
-    if (!picked) return
-    await window.stone.vault.open(picked)
-    await updateSettings({ vaultPath: picked })
-    window.location.reload()
-  }
-
-  const addFeed = async (): Promise<void> => {
-    if (!feedUrl.trim()) return
-    try {
-      const color = FEED_COLORS[settings.icsSubscriptions.length % FEED_COLORS.length]
-      await window.stone.calendar.addSubscription(
-        feedName.trim() || 'Subscribed calendar',
-        feedUrl.trim(),
-        color
-      )
-      setFeedName('')
-      setFeedUrl('')
-      await refreshAccounts()
-      await loadCalendar(true)
-      toast('Calendar subscribed.', 'success')
-    } catch (err) {
-      toast(describeError(err), 'error')
-    }
-  }
-
-  const connectMicrosoft = async (): Promise<void> => {
-    if (!clientId.trim()) {
-      toast('Paste the application (client) ID from your Azure app registration first.', 'error')
-      return
-    }
-    setBusy(true)
-    try {
-      const prompt = await window.stone.microsoft.begin(clientId.trim())
-      setDevicePrompt({ userCode: prompt.userCode, uri: prompt.verificationUri })
-      await window.stone.shell.openExternal(prompt.verificationUri)
-      await window.stone.microsoft.complete(
-        clientId.trim(),
-        prompt.deviceCode,
-        prompt.interval,
-        prompt.expiresIn
-      )
-      setMsConnected(true)
-      setDevicePrompt(null)
-      await refreshAccounts()
-      await loadCalendar(true)
-      toast('Outlook calendar connected.', 'success')
-    } catch (err) {
-      setDevicePrompt(null)
-      toast(describeError(err), 'error')
-    } finally {
-      setBusy(false)
-    }
-  }
 
   return (
     <div className="overlay overlay--center" onMouseDown={() => setOpen(false)} role="presentation">
@@ -168,23 +95,16 @@ export function SettingsModal() {
             <div className="row">
               <div className="row__label">
                 <b>Folder</b>
-                <span className="mono truncate">{settings.vaultPath ?? 'No vault chosen'}</span>
+                <span className="mono truncate">{vaultPath ?? 'No vault chosen'}</span>
               </div>
-              <button type="button" className="btn" onClick={() => void chooseVault()}>
-                Change
-              </button>
-            </div>
-            <div className="row" style={{ marginTop: 'var(--sp-3)' }}>
-              <div className="row__label">
-                <b>Daily notes folder</b>
-                <span>Where day notes are filed, named by date.</span>
+              <div className="chips" style={{ justifyContent: 'flex-end' }}>
+                <button type="button" className="btn btn--ghost btn--sm" onClick={() => void openFolderInNewWindow()}>
+                  Open in new window…
+                </button>
+                <button type="button" className="btn" onClick={() => void openFolderHere()}>
+                  Change
+                </button>
               </div>
-              <input
-                className="field"
-                style={{ width: 160 }}
-                value={settings.dailyFolder}
-                onChange={(e) => void updateSettings({ dailyFolder: e.target.value })}
-              />
             </div>
             <div className="row" style={{ marginTop: 'var(--sp-3)' }}>
               <div className="row__label">
@@ -210,7 +130,7 @@ export function SettingsModal() {
             <div className="row">
               <div className="row__label">
                 <b>Theme</b>
-                <span>Basalt, limestone, or whichever the system is using.</span>
+                <span>Limestone, basalt, Tango, or whichever the system is using.</span>
               </div>
               <div className="segmented">
                 {THEMES.map(({ id, label }) => (
@@ -388,10 +308,6 @@ export function SettingsModal() {
           <div className="divider" />
 
           <ClaudeSettings />
-
-          <div className="divider" />
-
-          <AudioSettings />
 
           <div className="divider" />
 
@@ -623,190 +539,6 @@ export function SettingsModal() {
             )}
           </section>
 
-          <div className="divider" />
-
-          {/* ------------------------------------------------------ calendars */}
-          <section>
-            <div className="eyebrow" style={{ marginBottom: 'var(--sp-3)', display: 'flex', gap: 'var(--sp-2)' }}>
-              Calendars
-              <button
-                type="button"
-                className="btn btn--ghost btn--sm btn--icon"
-                style={{ marginLeft: 'auto' }}
-                aria-label="Refresh calendars"
-                data-tip="Refresh calendars"
-                onClick={() => {
-                  void refreshAccounts()
-                  void loadCalendar(true)
-                }}
-              >
-                <IconRefresh size={13} />
-              </button>
-            </div>
-
-            {errors.length > 0 && (
-              <div className="banner" style={{ marginBottom: 'var(--sp-3)' }}>
-                <span>{errors.join(' · ')}</span>
-              </div>
-            )}
-
-            <div className="callist">
-              {accounts.map((account) => (
-                <div key={account.id} className="calrow">
-                  <span className="calrow__swatch" style={{ background: account.color }} />
-                  <span className="calrow__name truncate">{account.name}</span>
-                  <span className="calrow__src">
-                    {account.source === 'macos'
-                      ? 'Apple'
-                      : account.source === 'graph'
-                        ? 'Outlook'
-                        : account.source === 'ics'
-                          ? 'Feed'
-                          : 'Vault'}
-                  </span>
-                  <Toggle
-                    label={`Show ${account.name}`}
-                    checked={account.enabled}
-                    onChange={(next) => {
-                      void window.stone.calendar
-                        .setEnabled(account.id, next)
-                        .then(() => refreshAccounts())
-                        .then(() => loadCalendar(true))
-                    }}
-                  />
-                  {account.source === 'ics' && (
-                    <button
-                      type="button"
-                      className="btn btn--ghost btn--sm btn--icon"
-                      aria-label={`Remove ${account.name}`}
-                      onClick={() => {
-                        void window.stone.calendar
-                          .removeSubscription(account.id)
-                          .then(() => refreshAccounts())
-                          .then(() => loadCalendar(true))
-                      }}
-                    >
-                      <IconTrash size={13} />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            {window.stone.platform === 'darwin' && (
-              <p className="row__label" style={{ marginTop: 'var(--sp-3)' }}>
-                <span>
-                  Apple Calendar is read and written directly through EventKit. macOS will ask for
-                  permission the first time.
-                </span>
-              </p>
-            )}
-          </section>
-
-          <div className="divider" />
-
-          {/* ---------------------------------------------------- subscribe */}
-          <section>
-            <div className="eyebrow" style={{ marginBottom: 'var(--sp-3)' }}>
-              Subscribe to a calendar
-            </div>
-            <p className="row__label" style={{ marginBottom: 'var(--sp-3)' }}>
-              <span>
-                Paste a secret iCal address. Google Calendar publishes one under Settings › Integrate
-                calendar, and Outlook under Settings › Shared calendars. Works on both platforms with
-                no sign-in.
-              </span>
-            </p>
-            <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
-              <input
-                className="field"
-                style={{ flex: '0 0 150px' }}
-                placeholder="Name"
-                value={feedName}
-                onChange={(e) => setFeedName(e.target.value)}
-              />
-              <input
-                className="field"
-                placeholder="https://calendar.google.com/calendar/ical/…/basic.ics"
-                value={feedUrl}
-                onChange={(e) => setFeedUrl(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void addFeed()
-                }}
-              />
-              <button type="button" className="btn btn--primary" onClick={() => void addFeed()}>
-                <IconPlus size={13} />
-                Add
-              </button>
-            </div>
-          </section>
-
-          <div className="divider" />
-
-          {/* ---------------------------------------------------- microsoft */}
-          <section>
-            <div className="eyebrow" style={{ marginBottom: 'var(--sp-3)' }}>
-              Outlook and Windows Calendar
-            </div>
-
-            {msConnected ? (
-              <div className="row">
-                <div className="row__label">
-                  <b>Connected</b>
-                  <span>Events sync both ways with your Microsoft account.</span>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn--danger"
-                  onClick={() => {
-                    void window.stone.microsoft
-                      .signOut()
-                      .then(() => setMsConnected(false))
-                      .then(() => refreshAccounts())
-                  }}
-                >
-                  Disconnect
-                </button>
-              </div>
-            ) : (
-              <>
-                <p className="row__label" style={{ marginBottom: 'var(--sp-3)' }}>
-                  <span>
-                    Windows Calendar and Outlook are both views onto a Microsoft account, so Stone
-                    talks to it through Microsoft Graph. Register a free public client app in the
-                    Azure portal, allow the <span className="mono">Calendars.ReadWrite</span> scope,
-                    then paste its application ID here. Using your own registration keeps the
-                    connection yours to revoke.
-                  </span>
-                </p>
-                <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
-                  <input
-                    className="field"
-                    placeholder="Application (client) ID"
-                    value={clientId}
-                    onChange={(e) => setClientId(e.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn--primary"
-                    disabled={busy}
-                    onClick={() => void connectMicrosoft()}
-                  >
-                    <IconCloud size={13} />
-                    {busy ? 'Waiting…' : 'Connect'}
-                  </button>
-                </div>
-                {devicePrompt && (
-                  <div className="banner banner--info" style={{ marginTop: 'var(--sp-3)' }}>
-                    <span>
-                      Enter code <b className="mono">{devicePrompt.userCode}</b> at{' '}
-                      {devicePrompt.uri}. This window will finish once you approve.
-                    </span>
-                  </div>
-                )}
-              </>
-            )}
-          </section>
         </div>
 
         <footer className="modal__foot">

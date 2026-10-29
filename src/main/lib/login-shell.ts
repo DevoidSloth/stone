@@ -6,8 +6,8 @@ import path from 'node:path'
  *
  * An app launched from the Finder or the Start menu inherits launchd's PATH,
  * which has none of the places a version manager installs to. That bites twice.
- * Once when looking for a CLI, which is why `claude.ts` and `transcribe.ts` ask
- * a login shell where their binaries are — and again after one is found, because
+ * Once when looking for a CLI, which is why `claude.ts` asks a login shell
+ * where its binary is — and again after one is found, because
  * a CLI installed through npm is not a binary at all but a script starting
  * `#!/usr/bin/env node`. Spawn that with the app's own PATH and the kernel hands
  * it to `env`, which cannot find `node`, and the run dies with
